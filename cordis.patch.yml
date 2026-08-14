@@ -1,0 +1,20 @@
+# Replace the three MCP rows shipped by the Web profile. Removing this bundle
+# restores the in-box rows because profile layers are recomposed from scratch.
+- id: mcp-manager
+  disabled: true
+
+- id: mcp-inventory
+  disabled: true
+
+- id: ui-settings-mcp
+  disabled: true
+
+- insert:
+    - id: dsh-mcp-settings-manager
+      name: dsh-mcp-settings/manager
+
+    - id: dsh-mcp-settings-inventory
+      name: dsh-mcp-settings/inventory
+
+    - id: dsh-mcp-settings-ui
+      name: dsh-mcp-settings
