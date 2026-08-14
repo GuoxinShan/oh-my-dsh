@@ -6,18 +6,11 @@ on:
   pull_request:
 
 jobs:
-  verify:
+  consumer-build:
     runs-on: ubuntu-latest
     steps:
       - name: Check out plugin
         uses: actions/checkout@v4
-        with:
-          path: dsh-mcp-settings
-      - name: Check out DeepSeek Harness
-        uses: actions/checkout@v4
-        with:
-          repository: deepseek-ai/deepseek-harness
-          path: deepseek-harness
       - uses: pnpm/action-setup@v4
         with:
           version: 11.7.0
@@ -25,24 +18,12 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: |
-            deepseek-harness/pnpm-lock.yaml
-            dsh-mcp-settings/pnpm-lock.yaml
-      - name: Install Harness dependencies
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install and run prepare build
         run: pnpm install --frozen-lockfile
-        working-directory: deepseek-harness
-      - name: Install plugin dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: dsh-mcp-settings
-      - name: Typecheck
-        run: pnpm run typecheck
-        working-directory: dsh-mcp-settings
-      - name: Test
-        run: pnpm test
-        working-directory: dsh-mcp-settings
-      - name: Build
+      - name: Build package artifacts
         run: pnpm run bundle
-        working-directory: dsh-mcp-settings
       - name: Smoke-check built JavaScript
         run: pnpm run smoke
-        working-directory: dsh-mcp-settings
+      - name: Pack distribution
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"

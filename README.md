@@ -30,7 +30,7 @@ Git installs run this repository's `prepare` script to create `lib/`. pnpm block
 
 ```yaml
 allowBuilds:
-  dsh-mcp-settings: true
+  "dsh-mcp-settings@https://codeload.github.com/aka-danielZhang/dsh-mcp-settings/tar.gz/<commit-sha>": true
 ```
 
 This permission allows package code to run during installation. Pin a commit when installing code you do not control:
@@ -97,6 +97,8 @@ pnpm run smoke
 ```
 
 `prepare` uses the self-contained `tsdown.config.ts` and `tsconfig.prepare.json`, so a consumer installing from GitHub does not need the sibling Harness checkout. Type checking and tests do require it.
+
+GitHub CI verifies the consumer-side install, bundle, JavaScript syntax, and packed distribution without a Harness checkout. The full typecheck and test suite intentionally runs against a matching sibling Harness development tree because the required `mcp-client/status` event has not yet landed on the public Harness default branch.
 
 ## Compatibility
 

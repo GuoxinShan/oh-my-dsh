@@ -30,7 +30,7 @@ Git 安装会运行仓库的 `prepare` 脚本生成 `lib/`。pnpm 默认阻止�
 
 ```yaml
 allowBuilds:
-  dsh-mcp-settings: true
+  "dsh-mcp-settings@https://codeload.github.com/aka-danielZhang/dsh-mcp-settings/tar.gz/<commit-sha>": true
 ```
 
 这项授权允许安装期间执行包代码。安装不受你控制的源码时应锁定 commit：
@@ -97,6 +97,8 @@ pnpm run smoke
 ```
 
 `prepare` 使用自包含的 `tsdown.config.ts` 与 `tsconfig.prepare.json`，因此 GitHub 安装方不需要相邻 Harness checkout；类型检查与测试需要它。
+
+GitHub CI 会在没有 Harness checkout 的情况下验证消费端安装、bundle、JavaScript 语法和打包产物。完整类型检查与测试会针对匹配的相邻 Harness 开发树运行，因为依赖的 `mcp-client/status` 事件尚未进入公开 Harness 默认分支。
 
 ## 兼容性
 
