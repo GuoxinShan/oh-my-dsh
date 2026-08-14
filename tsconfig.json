@@ -13,7 +13,6 @@
     { "path": "../deepseek-harness/packages/settings/settings" },
     { "path": "../deepseek-harness/packages/util/timeout" },
     { "path": "../deepseek-harness/packages/typert/protocol" },
-    { "path": "../deepseek-harness/packages/api/remotes/tsconfig.client.json" },
     { "path": "../deepseek-harness/packages/client/locale" },
     { "path": "../deepseek-harness/packages/client/runtime" },
     { "path": "../deepseek-harness/packages/client/ui-primitives" },

@@ -19,7 +19,7 @@ import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deeps
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import type { ReconnectConfig } from '@deepseek-ai/dsh-mcp-client'
-import type { McpServerEntry, McpSettings, McpServerStatus } from './manager-types.ts'
+import type { McpClientStatus, McpServerEntry, McpSettings, McpServerStatus } from './manager-types.ts'
 
 export type { McpServerEntry, McpSettings, McpServerStatus } from './manager-types.ts'
 export type { StdioMcpServerEntry, HttpMcpServerEntry } from './manager-types.ts'
@@ -31,6 +31,10 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Settings-driven MCP server manager. */
     mcpManager: McpManagerService
+  }
+  interface Events {
+    /** @mode emit */
+    'mcp-client/status'(serverName: string, status: McpClientStatus, toolCount: number): void
   }
 }
 

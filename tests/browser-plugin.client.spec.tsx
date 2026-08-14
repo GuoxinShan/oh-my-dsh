@@ -19,25 +19,30 @@ type ListResult =
   | { readonly ok: true; readonly value: McpInventorySnapshot }
   | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } }
 
-async function bench() {
+async function bench(provideInventory = true) {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
   const locale = new LocaleRuntime(ctx)
   ctx.provide('locale', locale)
+  const list = vi.fn<() => Promise<ListResult>>()
+    .mockResolvedValue({ ok: true, value: EMPTY })
+  const mount = vi.fn(async () => {
+    ctx.provide('remote.mcpInventory', { list })
+    return async (): Promise<void> => {}
+  })
   class RemoteService extends Service {
+    $mount = mount
     constructor(serviceCtx: Context) {
       super(serviceCtx, 'remote')
     }
   }
   new RemoteService(ctx)
-  const list = vi.fn<() => Promise<ListResult>>()
-    .mockResolvedValue({ ok: true, value: EMPTY })
-  ctx.provide('remote.mcpInventory', { list })
+  if (provideInventory) ctx.provide('remote.mcpInventory', { list })
   ctx.provide('connection', { api: {}, isLoopback: true })
   const stub = stubSettingsScope<{ servers: never[] }>()
   const bind = vi.fn(() => stub.scope)
   ctx.provide('settingsScope', { bind } as never)
-  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, list, bind }
+  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, list, bind, mount }
 }
 
 function declare(slots: SlotRegistry): () => void {
@@ -49,7 +54,16 @@ function declare(slots: SlotRegistry): () => void {
 
 describe('ui-settings-mcp browser plugin', () => {
   it('declares only the services used by the Settings contribution', () => {
-    expect(inject).toEqual(['slots', 'locale', 'connection', 'remote', 'remote.mcpInventory', 'settingsScope'])
+    expect(inject).toEqual(['slots', 'locale', 'connection', 'remote', 'settingsScope'])
+  })
+
+  it('mounts its inventory Remote when the standard assembly has not selected it', async () => {
+    const b = await bench(false)
+    declare(b.slots)
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    expect(b.mount).toHaveBeenCalledOnce()
+    expect(b.ctx.get('remote.mcpInventory')).toBeDefined()
+    await b.ctx.fiber.dispose()
   })
 
   it('registers a localized section below the Models entry without eager reads', async () => {
@@ -63,6 +77,7 @@ describe('ui-settings-mcp browser plugin', () => {
     expect(entry.locale).toBe(NS)
     expect(resolveSlotLabel(entry.options.label)).toBe('MCP')
     expect(b.list).not.toHaveBeenCalled()
+    expect(b.mount).not.toHaveBeenCalled()
 
     const injected = (entry.inject as unknown as () => McpSettingsSectionInjected)()
     await expect(injected.listStatus()).resolves.toEqual(EMPTY)

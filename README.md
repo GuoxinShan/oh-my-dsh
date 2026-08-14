@@ -14,7 +14,8 @@ The bundle disables the equivalent rows shipped by the current Web profile and i
 
 ## Requirements
 
-- DeepSeek Harness with the `web` profile and the current MCP settings/Remote extension points.
+- A matching DeepSeek Harness development build whose `web` profile already supplies the DSH peer packages listed in `package.json`.
+- That Harness build must emit the `mcp-client/status` event; this event is not yet on the public Harness default branch.
 - Node.js `^22.19.0 || >=24`.
 - pnpm 10 or newer when installing directly from GitHub.
 
@@ -25,6 +26,8 @@ DSH plugins are distributed as bundles. `dsh plugin add` installs this package i
 ```sh
 dsh plugin --profile web add github:aka-danielZhang/dsh-mcp-settings
 ```
+
+This command installs the bundle only. It does not install or upgrade the Harness-owned peer packages, so point it at a matching Web profile as described above.
 
 Git installs run this repository's `prepare` script to create `lib/`. pnpm blocks dependency build scripts until the profile grants permission. If the first install reports an ignored build, add the exact package key it prints to `~/.dsh/profiles/web/pnpm-workspace.yaml` and repeat the command:
 

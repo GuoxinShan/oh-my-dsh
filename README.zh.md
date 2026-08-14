@@ -14,7 +14,8 @@ bundle 会停用当前 Web profile 中等价的三个内置行，再以独立 id
 
 ## 环境要求
 
-- 带 `web` profile 且包含当前 MCP 设置/Remote 扩展点的 DeepSeek Harness。
+- 匹配的 DeepSeek Harness 开发版本；它的 `web` profile 必须已经提供 `package.json` 中列出的 DSH peer 包。
+- 该 Harness 版本必须发出 `mcp-client/status` 事件；此事件尚未进入公开 Harness 默认分支。
 - Node.js `^22.19.0 || >=24`。
 - 从 GitHub 直接安装时使用 pnpm 10 或更高版本。
 
@@ -25,6 +26,8 @@ DSH 插件通过 bundle 分发。`dsh plugin add` 会把包安装进 profile，�
 ```sh
 dsh plugin --profile web add github:aka-danielZhang/dsh-mcp-settings
 ```
+
+该命令只安装 bundle，不会安装或升级 Harness 拥有的 peer 包；因此必须按上述要求使用匹配的 Web profile。
 
 Git 安装会运行仓库的 `prepare` 脚本生成 `lib/`。pnpm 默认阻止依赖构建脚本；如果第一次安装提示 build 被忽略，请把提示中的准确包名加入 `~/.dsh/profiles/web/pnpm-workspace.yaml`，然后重试：
 

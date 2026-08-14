@@ -7,12 +7,12 @@ import {
   IconEditOutline16,
   IconLoadingOutline16,
   IconPlusOutline16,
-  IconPlugOutline16,
   IconRefreshOutline16,
   IconSearchOutline16,
   IconTrashOutline16,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPlugOutline16 } from './IconPlug.tsx'
 import type { TranslateSection } from './McpSettingsSection.tsx'
 import type { McpSettingsLocaleKey } from './locales.ts'
 import {

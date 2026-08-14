@@ -76,6 +76,7 @@ const client = {
   deps: {
     neverBundle: CLIENT_EXTERNALS,
     alwaysBundle: (id: string) => CLIENT_EXTERNALS.includes(id) ? undefined : true,
+    onlyBundle: ['zod'],
   },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),

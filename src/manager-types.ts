@@ -7,7 +7,10 @@
  * @module dsh-mcp-settings/manager-types
  */
 
-import type { McpClientStatus, ReconnectConfig } from '@deepseek-ai/dsh-mcp-client'
+import type { ReconnectConfig } from '@deepseek-ai/dsh-mcp-client'
+
+/** Connection phases emitted by the matching mcp-client supervisor. */
+export type McpClientStatus = 'connecting' | 'connected' | 'reconnecting' | 'failed' | 'disposed'
 
 /** One stdio MCP server configured in the `mcp` settings section. */
 export interface StdioMcpServerEntry {
