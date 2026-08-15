@@ -90,6 +90,8 @@ export interface BalanceInfo {
   total: number
   granted?: number
   toppedUp?: number
+  /** Today's spend in the same unit (gateway-reported, e.g. Sub2API). */
+  usedToday?: number
   isAvailable?: boolean
 }
 
@@ -366,6 +368,34 @@ const ADAPTERS: Record<string, ProviderAdapter> = {
   'kimi-coding': kimiAdapter,
   'opencode-go': opencodeAdapter,
   'deepseek-official': deepseekAdapter,
+  /** Sub2API-family gateways (route-config-driven; see detectGateway). */
+  'sub2api-gateway': {
+    credential: '', // per-route; filled by the detection
+    base: '',
+    async read(): Promise<ProviderQuotas> {
+      throw new Error('sub2api-gateway is resolved per-route by detection, never statically')
+    },
+  },
+}
+
+/** Map one Sub2API-style /v1/usage body onto the wire shape. */
+function sub2apiRead(body: {
+  balance?: unknown
+  unit?: unknown
+  planName?: unknown
+  usage?: { today?: { cost?: unknown } } | null
+}): ProviderQuotas {
+  const balance: BalanceInfo = {
+    currency: body.unit === 'CNY' ? 'CNY' : 'USD',
+    total: Number(body.balance),
+  }
+  const usedToday = finite(body.usage?.today?.cost)
+  if (usedToday !== undefined) balance.usedToday = usedToday
+  const out: ProviderQuotas = { balances: [balance] }
+  if (typeof body.planName === 'string' && body.planName.length > 0) {
+    out.plan = { name: body.planName }
+  }
+  return out
 }
 
 /**
@@ -543,7 +573,7 @@ export interface PluginContext {
       }) => void | Promise<void>
     }) => () => void
   }
-  get?: (name: string) => { resolve: (ref: string) => Promise<{ value: string } | undefined> } | undefined
+  get?: (name: string) => unknown
   logger?: { info: (template: string, ...args: unknown[]) => void; warn?: (template: string, ...args: unknown[]) => void }
   effect?: (callback: () => () => void, label?: string) => () => void
 }
@@ -561,7 +591,9 @@ export interface PluginContext {
  */
 export function apply(ctx: PluginContext, rawConfig: unknown): void {
   const config = resolveConfig(rawConfig)
-  const credentials = typeof ctx.get === 'function' ? ctx.get('credentials') : undefined
+  const credentials = typeof ctx.get === 'function'
+    ? ctx.get('credentials') as { resolve: (ref: string) => Promise<{ value: string } | undefined> } | undefined
+    : undefined
   const states = new Map<string, SourceState>()
   for (const source of config.sources) states.set(source.id, {})
 
@@ -587,26 +619,28 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
   }
 
   /** Credential resolution: credentials service → process env → credentials file. */
-  const resolveKey = async (source: ResolvedSource): Promise<string | undefined> => {
+  const resolveKeyByEnv = async (apiKeyEnv: string): Promise<string | undefined> => {
     if (credentials !== undefined) {
       try {
-        const resolved = await credentials.resolve(source.apiKeyEnv)
+        const resolved = await credentials.resolve(apiKeyEnv)
         if (resolved !== undefined && resolved.value.length > 0) return resolved.value
       } catch (error) {
-        ctx.logger?.info('provider-balance: credentials resolve for %s failed: %s', source.apiKeyEnv, String(error))
+        ctx.logger?.info('provider-balance: credentials resolve for %s failed: %s', apiKeyEnv, String(error))
       }
     }
-    const fromEnv = process.env[source.apiKeyEnv]
+    const fromEnv = process.env[apiKeyEnv]
     if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv
-    const fromFile = readCredentialsFile().get(source.apiKeyEnv)
+    const fromFile = readCredentialsFile().get(apiKeyEnv)
     return fromFile !== undefined && fromFile.length > 0 ? fromFile : undefined
   }
 
+  const resolveKey = (source: ResolvedSource): Promise<string | undefined> => resolveKeyByEnv(source.apiKeyEnv)
+
   /** Fetch one source through its adapter; never throws. */
-  const refresh = (source: ResolvedSource): Promise<ProviderBalanceSnapshot> => {
+  const refresh = (source: ResolvedSource, adapterOverride?: ProviderAdapter): Promise<ProviderBalanceSnapshot> => {
     const state = states.get(source.id) as SourceState
     if (state.inFlight !== undefined) return state.inFlight
-    const adapter = ADAPTERS[source.kind]
+    const adapter = adapterOverride ?? ADAPTERS[source.kind]
     const task = (async (): Promise<ProviderBalanceSnapshot> => {
       const apiKey = await resolveKey(source)
       if (apiKey === undefined) {
@@ -640,12 +674,23 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
   }
 
   /** Served snapshot for one source: cache + TTL + in-flight join. */
-  const snapshotFor = (source: ResolvedSource, force: boolean): Promise<ProviderBalanceSnapshot> => {
+  const snapshotFor = (source: ResolvedSource, force: boolean, adapterOverride?: ProviderAdapter): Promise<ProviderBalanceSnapshot> => {
     const state = states.get(source.id) as SourceState
+    if (state === undefined) {
+      // A dynamically detected route has no configured source entry; give it
+      // a transient state so cache/in-flight joining still applies.
+      const transient: SourceState = {}
+      states.set(source.id, transient)
+      return runSnapshot(source, transient, force, adapterOverride)
+    }
+    return runSnapshot(source, state, force, adapterOverride)
+  }
+
+  const runSnapshot = (source: ResolvedSource, state: SourceState, force: boolean, adapterOverride?: ProviderAdapter): Promise<ProviderBalanceSnapshot> => {
     const fresh = state.fetchedAt !== undefined && Date.now() - state.fetchedAt < config.refreshMinIntervalMs
     if (!force && fresh && state.snapshot !== undefined) return Promise.resolve(state.snapshot)
     if (state.inFlight !== undefined) return state.inFlight
-    const task = refresh(source)
+    const task = refresh(source, adapterOverride)
     // Register the outcome (and its timestamp, so a failing upstream is not
     // re-hit on every poll); refresh() already stored the stale fallback.
     task.then(snapshot => {
@@ -655,6 +700,76 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     return task
   }
 
+  /* ---------- Sub2API-style gateway auto-detection ---------- */
+
+  /** Detection result cache (positive AND negative) per provider route. */
+  const detected = new Map<string, { adapter?: ProviderAdapter; at: number }>()
+  const DETECT_TTL_MS = 10 * 60 * 1000
+
+  /** Read one route's llm-pi-ai settings entry: baseURL + apiKeyEnv. */
+  const routeConfigOf = (provider: string): { origin: string; apiKeyEnv: string } | undefined => {
+    const settings = typeof ctx.get === 'function' ? ctx.get('settings') : undefined
+    if (settings === undefined) return undefined
+    try {
+      const section = (settings as { get?: (ns: string) => unknown }).get?.('llm-pi-ai') as
+        | { providers?: Record<string, { baseURL?: unknown; apiKeyEnv?: unknown }> }
+        | undefined
+      const route = section?.providers?.[provider]
+      if (route === null || typeof route !== 'object') return undefined
+      const baseURL = typeof route.baseURL === 'string' ? route.baseURL : undefined
+      const apiKeyEnv = typeof route.apiKeyEnv === 'string' ? route.apiKeyEnv : undefined
+      if (baseURL === undefined || apiKeyEnv === undefined) return undefined
+      return { origin: new URL(baseURL).origin, apiKeyEnv }
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Probe one route for a Sub2API-style /v1/usage endpoint. Recognition is a
+   * SHAPE check on the response (numeric balance + string unit), keyed to the
+   * route's own credential — nothing about the gateway is hardcoded.
+   */
+  const detectGateway = async (provider: string): Promise<ProviderAdapter | undefined> => {
+    const cachedDetection = detected.get(provider)
+    if (cachedDetection !== undefined && Date.now() - cachedDetection.at < DETECT_TTL_MS) {
+      return cachedDetection.adapter
+    }
+    let adapter: ProviderAdapter | undefined
+    const route = routeConfigOf(provider)
+    if (route !== undefined) {
+      const key = await resolveKeyByEnv(route.apiKeyEnv)
+      if (key !== undefined) {
+        try {
+          const body = await getJsonFrom(`${route.origin}/v1/usage`, key, config.requestTimeoutMs) as Parameters<typeof sub2apiRead>[0]
+          if (typeof body?.balance === 'number' && Number.isFinite(body.balance) && typeof body.unit === 'string') {
+            adapter = {
+              credential: route.apiKeyEnv,
+              base: route.origin,
+              read: async getJson => sub2apiRead(await getJson('/v1/usage') as Parameters<typeof sub2apiRead>[0]),
+            }
+          }
+        } catch {
+          // Not a usage-capable gateway — negative cache below.
+        }
+      }
+    }
+    detected.set(provider, { adapter, at: Date.now() })
+    return adapter
+  }
+
+  /** Resolve one provider id into a servable source: configured, or detected. */
+  const resolveProvider = async (provider: string): Promise<{ source: ResolvedSource; adapter?: ProviderAdapter } | undefined> => {
+    const configured = config.sources.find(source => source.id === provider)
+    if (configured !== undefined) return { source: configured }
+    const adapter = await detectGateway(provider)
+    if (adapter === undefined) return undefined
+    return {
+      source: { id: provider, kind: 'sub2api-gateway', apiKeyEnv: adapter.credential, quotaBase: adapter.base },
+      adapter,
+    }
+  }
+
   const handler = async (req: unknown, res: {
     setHeader: (name: string, value: string) => void
     end: (body?: string) => void
@@ -662,13 +777,18 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     const url = new URL((req as { url?: string }).url ?? '/', 'http://local')
     const force = url.searchParams.get('refresh') === '1'
     const provider = url.searchParams.get('provider') ?? undefined
-    const selected = provider !== undefined
-      ? config.sources.filter(source => source.id === provider)
-      : config.sources
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
     try {
-      const sources = await Promise.all(selected.map(source => snapshotFor(source, force)))
+      let sources: ProviderBalanceSnapshot[]
+      if (provider !== undefined) {
+        const resolved = await resolveProvider(provider)
+        sources = resolved === undefined
+          ? []
+          : [await snapshotFor(resolved.source, force, resolved.adapter)]
+      } else {
+        sources = await Promise.all(config.sources.map(source => snapshotFor(source, force)))
+      }
       // Lossless-JSON backstop: JSON round-trip drops any undefined-valued
       // keys before the payload crosses the wire.
       res.end(JSON.stringify({ sources, servedAt: new Date().toISOString() }))

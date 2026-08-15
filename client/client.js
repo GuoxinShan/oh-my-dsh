@@ -257,6 +257,7 @@ window.__ModuleLoader__.load({
       var parts = []
       if (balance.granted != null && isFinite(balance.granted)) parts.push('赠金 ' + symbol + balance.granted.toFixed(2))
       if (balance.toppedUp != null && isFinite(balance.toppedUp)) parts.push('充值 ' + symbol + balance.toppedUp.toFixed(2))
+      if (balance.usedToday != null && isFinite(balance.usedToday)) parts.push('今日已用 ' + symbol + balance.usedToday.toFixed(2))
       return createElement('div', { className: 'dpb-row dpb-c-green' },
         createElement('div', { className: 'dpb-rowhead' },
           createElement('span', { className: 'dpb-rowlabel' },
