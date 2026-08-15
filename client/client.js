@@ -92,6 +92,7 @@ window.__ModuleLoader__.load({
         '.dpb-c-blue { --dpb-row-tint: var(--dsw-static-blue-450); }',
         '.dpb-c-green { --dpb-row-tint: var(--dsw-static-green-500); }',
         '.dpb-c-purple { --dpb-row-tint: rgb(167, 139, 250); }',
+        '.dpb-c-teal { --dpb-row-tint: var(--dsw-alias-brand-primary); }',
         '.dpb-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; background: var(--dpb-row-tint); vertical-align: baseline; }',
         '.dpb-breakdown { margin-top: 2px; color: var(--dsw-alias-label-tertiary); font-size: 11px;',
         '  font-variant-numeric: tabular-nums; }',
@@ -99,6 +100,9 @@ window.__ModuleLoader__.load({
         '.dpb-error { margin-top: 6px; color: var(--dsw-static-red-500); font-size: 11px; }',
         '.dpb-foot { margin-top: 10px; color: var(--dsw-alias-label-tertiary); font-size: 11px;',
         '  display: flex; align-items: center; justify-content: space-between; gap: 8px; }',
+        '.dpb-pricing { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--dsw-alias-border-l2);',
+        '  font-size: 11px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }',
+        '.dpb-pricing-title { color: var(--dsw-alias-label-secondary); }',
       ].join('\n')
       document.head.appendChild(style)
     }
@@ -167,7 +171,7 @@ window.__ModuleLoader__.load({
     var POLL_MS = 5 * 60 * 1000
 
     /** DSH provider route id → short display name. */
-    var SHORT_NAMES = { 'zai-coding-cn': 'GLM', 'kimi-coding': 'Kimi', 'opencode-go': 'OC Go' }
+    var SHORT_NAMES = { 'zai-coding-cn': 'GLM', 'kimi-coding': 'Kimi', 'opencode-go': 'OC Go', 'deepseek-official': 'DS' }
 
     /** Remaining-percent → visual level class. */
     function levelOf(remainingPercent) {
@@ -244,6 +248,42 @@ window.__ModuleLoader__.load({
         countdown
           ? createElement('div', { className: 'dpb-hint' }, countdown + ' ' + t('panel.resetIn') + status)
           : (status ? createElement('div', { className: 'dpb-hint' }, status.slice(3)) : null))
+    }
+
+    /* Prepaid balance row: amount + granted/topped-up breakdown, teal identity. */
+    function BalanceRow(props) {
+      var t = props.t
+      var balance = props.balance
+      if (balance == null) return null
+      var symbol = balance.currency === 'USD' ? '$' : '¥'
+      var parts = []
+      if (balance.granted != null && isFinite(balance.granted)) parts.push('赠金 ' + symbol + balance.granted.toFixed(2))
+      if (balance.toppedUp != null && isFinite(balance.toppedUp)) parts.push('充值 ' + symbol + balance.toppedUp.toFixed(2))
+      var foot = balance.isAvailable === false ? '余额不可用于 API 调用' : '按 token 计费，无窗口重置'
+      return createElement('div', { className: 'dpb-row dpb-c-teal' },
+        createElement('div', { className: 'dpb-rowhead' },
+          createElement('span', { className: 'dpb-rowlabel' },
+            labelWithSwatch(balance.currency === 'USD' ? '余额 (USD)' : '余额 (CNY)')),
+          createElement('span', { className: 'dpb-rowvalue' },
+            symbol + (isFinite(balance.total) ? balance.total.toFixed(2) : '—'))),
+        parts.length > 0
+          ? createElement('div', { className: 'dpb-breakdown' }, parts.join(' · ') + ' · 扣费优先赠金')
+          : null,
+        createElement('div', { className: 'dpb-breakdown' }, foot))
+    }
+
+    /* Peak/off-peak pricing card (static reference data from the provider's
+     * public pricing page). */
+    function PricingCard(props) {
+      var pricing = props.pricing
+      if (pricing == null || !Array.isArray(pricing.models) || pricing.models.length === 0) return null
+      return createElement('div', { className: 'dpb-pricing' },
+        createElement('div', { className: 'dpb-pricing-title' }, '计费（空闲/高峰 · ' + pricing.note + '）'),
+        pricing.models.map(function (model) {
+          return createElement('div', { key: model.id, className: 'dpb-breakdown' },
+            model.id + '：输入 ' + model.offPeak + '/' + model.peak + pricing.unit
+            + (model.cachedHit != null ? ' · 缓存命中 ' + model.cachedHit + pricing.unit : ''))
+        }))
     }
 
     function ToolsRow(props) {
@@ -382,8 +422,17 @@ window.__ModuleLoader__.load({
       var sessionLeft = data.session ? data.session.remainingPercent : undefined
       var weeklyLeft = data.weekly ? data.weekly.remainingPercent : undefined
       var tools = data.tools
+      var balances = Array.isArray(data.balances) ? data.balances : []
 
+      /* Chip segments: balance-type providers show the amount; window-type
+       * providers show the remaining percents. */
       var chipBody = []
+      if (balances.length > 0) {
+        var b = balances[0]
+        var bsym = b.currency === 'USD' ? '$' : '¥'
+        chipBody.push(createElement('span', { key: 'bal', className: 'dpb-num' },
+          bsym + (isFinite(b.total) ? b.total.toFixed(2) : '—')))
+      }
       if (sessionLeft !== undefined) {
         chipBody.push(createElement('span', { key: 's', className: levelOf(sessionLeft) },
           createElement('span', { className: 'dpb-num' }, sessionLeft + '%')))
@@ -398,19 +447,25 @@ window.__ModuleLoader__.load({
       }
       if (chipBody.length === 0) chipBody.push(createElement('span', { key: 'x', className: 'dpb-num' }, '!'))
 
-      var tooltipText = name + ' · ' + t('chip.5h') + ' ' + (sessionLeft !== undefined ? sessionLeft + '%' : '—')
-        + ' · ' + t('chip.week') + ' ' + (weeklyLeft !== undefined ? weeklyLeft + '%' : '—')
-        + (tools !== undefined ? ' · ' + t('chip.tools') + ' ' + tools.remaining : '')
+      var tooltipText = balances.length > 0
+        ? name + ' · 余额 ' + (balances[0].currency === 'USD' ? '$' : '¥') + (isFinite(balances[0].total) ? balances[0].total.toFixed(2) : '—')
+        : name + ' · ' + t('chip.5h') + ' ' + (sessionLeft !== undefined ? sessionLeft + '%' : '—')
+          + ' · ' + t('chip.week') + ' ' + (weeklyLeft !== undefined ? weeklyLeft + '%' : '—')
+          + (tools !== undefined ? ' · ' + t('chip.tools') + ' ' + tools.remaining : '')
 
       var rows = []
       if (data.ok !== true) {
         rows.push(createElement('div', { key: 'err', className: 'dpb-error' }, errorMessage(data.error, t)))
       } else {
+        balances.forEach(function (balance, index) {
+          rows.push(createElement(BalanceRow, { key: 'bal' + index, balance: balance, t: t }))
+        })
         rows.push(createElement(WindowRow, { key: '5h', label: t('panel.5h'), value: data.session, t: t, now: now, colorClass: 'dpb-c-blue' }))
         rows.push(createElement(WindowRow, { key: 'week', label: t('panel.week'), value: data.weekly, t: t, now: now, colorClass: 'dpb-c-green' }))
         /* Monthly window: OpenCode Go reports it; other providers omit it. */
         rows.push(createElement(WindowRow, { key: 'month', label: t('panel.month'), value: data.monthly, t: t, now: now, colorClass: 'dpb-c-purple' }))
         rows.push(createElement(ToolsRow, { key: 'tools', tools: tools, t: t }))
+        rows.push(createElement(PricingCard, { key: 'pricing', pricing: data.pricing }))
         if (data.stale) {
           rows.push(createElement('div', { key: 'stale', className: 'dpb-stale' }, t('panel.stale')))
         }

@@ -1,13 +1,14 @@
 # DSH Provider Balance
 
 在 DeepSeek Harness（DSH）Web 界面中，紧挨输入框的上下文用量圈圈旁显示模型供应商的剩余配额。
-已接入三家供应商：
+已接入四家供应商：
 
 - **zai-coding-cn**（智谱 GLM Coding 套餐，国内 `open.bigmodel.cn`，兼容国际 `api.z.ai`）
 - **kimi-coding**（Kimi Code / 月之暗面 Coding 套餐，`api.kimi.com`，API Key 形态 `sk-kimi-xxx`）
 - **opencode-go**（OpenCode Go 订阅，`opencode.ai/zen/go`，API Key 形态 `sk-opencode-...`）
+- **deepseek-official**（DeepSeek 官方按量付费，`api.deepseek.com`，预付余额型）
 
-**胶囊跟随当前会话选中的模型**：切到哪家供应商就显示哪家的余量；无适配器的供应商不显示。
+**胶囊跟随当前会话选中的模型**：切到哪家供应商就显示哪家的余量（余额型显示金额，窗口型显示百分比）；无适配器的供应商不显示。
 
 ## 官方接口结论（zai / GLM Coding Plan）
 
@@ -62,6 +63,23 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
 - 与 GLM/Kimi 不同：只有百分比，无任何绝对计数；**有月窗口**（紫色进度条）。
 - chat 路由：多数模型走 OpenAI 兼容协议，`baseURL: https://opencode.ai/zen/go/v1`（GLM/Kimi/DeepSeek/MiMo 系），部分走 `/v1/responses`（grok、gpt）或 `/v1/messages`（MiniMax/Qwen 系）。
 
+## 官方接口结论（DeepSeek / api.deepseek.com）
+
+唯一一家**正式写进公开文档**的（[查询余额](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)）：
+
+| 端点 | 作用 |
+|---|---|
+| `GET https://api.deepseek.com/user/balance` | 预付余额（CNY/USD，赠金/充值拆分） |
+
+- 鉴权：`Authorization: Bearer <API Key>`，env 名 `DEEPSEEK_API_KEY`；DSH 自带 `deepseek-official` 路由（llm-deepseek 包）用同一把 key。
+- 响应：`is_available`（余额是否可调用）+ `balance_infos[]`（`currency`/`total_balance`/`granted_balance`/`topped_up_balance`，字符串金额）。
+- **余额型而非窗口型**：没有 5h/周重置，胶囊直接显示金额（如 `¥4.93`）。
+- **计费规则**（面板"计费"卡片展示，[价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 摘要，2026-08-17 生效峰谷定价）：
+  - deepseek-v4-flash：输入（未命中）空闲 ¥1.5 / 高峰 ¥3 每百万 tokens；缓存命中 ¥0.05；输出空闲 ¥4.5 / 高峰 ¥9
+  - deepseek-v4-pro：输入（未命中）空闲 ¥4.5 / 高峰 ¥9；缓存命中 ¥0.15；输出空闲 ¥13.5 / 高峰 ¥27
+  - 高峰时段：北京时间 9:00-12:00、14:00-18:00，其余空闲
+  - 扣费顺序：赠金优先于充值余额
+
 ## 安装
 
 1. 在 DSH web profile 目录建立指向本仓库的包链接（一次性）：
@@ -115,6 +133,9 @@ Key 只在 Host 侧使用，浏览器只收到聚合后的百分比/次数 JSON�
       - id: opencode-go
         kind: opencode-go         # OpenCode Go 适配器
         # 缺省 OPENCODE_GO_API_KEY / https://opencode.ai/zen/go
+      - id: deepseek-official
+        kind: deepseek-official   # DeepSeek 官方余额适配器（文档化接口）
+        # 缺省 DEEPSEEK_API_KEY / https://api.deepseek.com
     refreshMinIntervalMs: 60000   # 上游最小抓取间隔（缓存 TTL）
     requestTimeoutMs: 15000
     route: /provider-balance/quota

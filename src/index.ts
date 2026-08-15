@@ -78,6 +78,36 @@ export interface ProviderQuotas {
   monthly?: QuotaWindow
   /** Monthly tool/web-search allowance, when the upstream has one. */
   tools?: ToolQuota
+  /** Prepaid balances (DeepSeek-style pay-as-you-go; window fields empty). */
+  balances?: BalanceInfo[]
+  /** Static pricing reference (peak/off-peak per model), when meaningful. */
+  pricing?: PricingInfo
+}
+
+/** One prepaid currency balance. */
+export interface BalanceInfo {
+  currency: 'CNY' | 'USD'
+  total: number
+  granted?: number
+  toppedUp?: number
+  isAvailable?: boolean
+}
+
+/** Static billing-rule reference rendered in the panel. */
+export interface PricingInfo {
+  /** Price unit suffix, e.g. '/百万tokens'. */
+  unit: string
+  /** Timing note, e.g. the peak-window schedule. */
+  note: string
+  models: Array<{
+    id: string
+    /** Off-peak price label (input, cache miss). */
+    offPeak: string
+    /** Peak price label (input, cache miss). */
+    peak: string
+    /** Cache-hit price label, when listed. */
+    cachedHit?: string
+  }>
 }
 
 /** Wire snapshot for one provider. */
@@ -313,11 +343,58 @@ const opencodeAdapter: ProviderAdapter = {
   },
 }
 
+/* ---- DeepSeek official (api.deepseek.com; prepaid balance, documented) ---- */
+
+/** Peak/off-peak pricing from the public pricing page (effective 2026-08-17). */
+const DEEPSEEK_PRICING: PricingInfo = {
+  unit: '/百万tokens',
+  note: '8/17 起，高峰 9-12/14-18 点',
+  models: [
+    { id: 'deepseek-v4-flash', offPeak: '1.5元', peak: '3元', cachedHit: '0.05元' },
+    { id: 'deepseek-v4-pro', offPeak: '4.5元', peak: '9元', cachedHit: '0.15元' },
+  ],
+}
+
+const deepseekAdapter: ProviderAdapter = {
+  credential: 'DEEPSEEK_API_KEY',
+  base: 'https://api.deepseek.com',
+  async read(getJson) {
+    const body = await getJson('/user/balance') as {
+      is_available?: boolean
+      balance_infos?: Array<{ currency?: string; total_balance?: string; granted_balance?: string; topped_up_balance?: string }>
+    }
+    const infos = body?.balance_infos ?? []
+    if (infos.length === 0) {
+      throw Object.assign(new Error('deepseek response has no balance_infos'), { code: 'parse' })
+    }
+    const balances: BalanceInfo[] = []
+    for (const info of infos) {
+      const total = Number(info.total_balance)
+      if (!Number.isFinite(total)) continue
+      const granted = Number(info.granted_balance)
+      const toppedUp = Number(info.topped_up_balance)
+      balances.push({
+        currency: info.currency === 'USD' ? 'USD' : 'CNY',
+        total,
+        ...(Number.isFinite(granted) ? { granted } : {}),
+        ...(Number.isFinite(toppedUp) ? { toppedUp } : {}),
+        ...(body?.is_available !== undefined ? { isAvailable: body.is_available === true } : {}),
+      })
+    }
+    return {
+      plan: { name: 'DeepSeek 官方' },
+      balances,
+      pricing: DEEPSEEK_PRICING,
+    }
+  },
+}
+
 /** Installed adapters by kind; the vocabulary a source config may name. */
 const ADAPTERS: Record<string, ProviderAdapter> = {
   'zai-coding': zaiAdapter,
   'kimi-coding': kimiAdapter,
   'opencode-go': opencodeAdapter,
+  'deepseek-official': deepseekAdapter,
 }
 
 /**
@@ -329,6 +406,7 @@ const DEFAULT_SOURCES: Array<{ id: string; kind: string }> = [
   { id: 'zai-coding-cn', kind: 'zai-coding' },
   { id: 'kimi-coding', kind: 'kimi-coding' },
   { id: 'opencode-go', kind: 'opencode-go' },
+  { id: 'deepseek-official', kind: 'deepseek-official' },
 ]
 
 /* ------------------------------------------------------------------ */
@@ -375,6 +453,7 @@ const CHAT_PATH_SUFFIXES: Record<string, readonly string[]> = {
   /* OpenCode's quota path lives UNDER the base (/zen/go/v1/usage), so a
    * copied chat baseURL keeps its path — nothing to strip. */
   'opencode-go': [],
+  'deepseek-official': [],
 }
 
 /** Hand-rolled config validation: loud and early, no schemastery dependency. */
