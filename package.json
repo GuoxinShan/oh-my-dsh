@@ -1,0 +1,22 @@
+{
+  "name": "dsh-provider-balance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH out-of-tree plugin: provider quota readout beside the composer context meter (zai GLM coding plans first)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

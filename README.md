@@ -1,0 +1,169 @@
+# DSH Provider Balance
+
+在 DeepSeek Harness（DSH）Web 界面中，紧挨输入框的上下文用量圈圈旁显示模型供应商的剩余配额。
+已接入三家供应商：
+
+- **zai-coding-cn**（智谱 GLM Coding 套餐，国内 `open.bigmodel.cn`，兼容国际 `api.z.ai`）
+- **kimi-coding**（Kimi Code / 月之暗面 Coding 套餐，`api.kimi.com`，API Key 形态 `sk-kimi-xxx`）
+- **opencode-go**（OpenCode Go 订阅，`opencode.ai/zen/go`，API Key 形态 `sk-opencode-...`）
+
+**胶囊跟随当前会话选中的模型**：切到哪家供应商就显示哪家的余量；无适配器的供应商不显示。
+
+## 官方接口结论（zai / GLM Coding Plan）
+
+智谱没有在公开 API 文档里写这两个端点，但它们就是官方订阅管理页在用的接口，社区
+（[OpenTokenUsage](https://github.com/PowerUserZ/OpenTokenUsage/blob/main/docs/providers/zai.md)、
+[CodexBar](https://github.com/steipete/CodexBar/blob/main/docs/zai.md)、
+[glm-quota-line](https://www.npmjs.com/package/glm-quota-line)）均采用，且实测可用（2026-08 验证）：
+
+| 端点 | 作用 |
+|---|---|
+| `GET {base}/api/monitor/usage/quota/limit` | 三种窗口的用量百分比与重置时间 |
+| `GET {base}/api/biz/subscription/list` | 套餐名（如 "GLM Coding Max"）、续费日期 |
+
+- `base`：国内 `https://open.bigmodel.cn`（`bigmodel.cn` 裸域同样响应）；国际 `https://api.z.ai`。
+- 鉴权：`Authorization: Bearer <API Key>`（裸 key 也可）；key 即调用 `/api/paas/v4` 用的同一把。
+- 响应 `data.limits[]`：
+  - `type: "TOKENS_LIMIT", unit: 3, number: 5` → **5 小时窗口**，`percentage` 为已用百分比，`nextResetTime` 为 epoch 毫秒；
+  - `type: "TOKENS_LIMIT", unit: 6, number: 1` → **周窗口**（同上字段）；
+  - `type: "TIME_LIMIT"` → **工具/网页搜索月额度**（`usage` 总量、`currentValue` 已用、`remaining` 剩余、`usageDetails[]` 按 search-prime/web-reader/zread 细分）。
+- `data.level` 为套餐档位（lite/pro/max）。
+
+> 注意：`TOKENS_LIMIT` 只给百分比，不给 token 绝对值；`TIME_LIMIT` 给绝对次数。
+
+## 官方接口结论（Kimi Code / api.kimi.com）
+
+同样是官方控制台在用、未公开文档化的接口（社区参考：[OpenTokenUsage kimi.md](https://github.com/PowerUserZ/OpenTokenUsage/blob/main/docs/providers/kimi.md)、
+[kimi-code-usage](https://github.com/Golden0Voyager/kimi-code-usage)；2026-08 实测可用）：
+
+| 端点 | 作用 |
+|---|---|
+| `GET https://api.kimi.com/coding/v1/usages` | 周额度 + 5 小时窗口额度 + 套餐档位 |
+
+- 鉴权：`Authorization: Bearer <API Key>`；key 是 **Kimi Code 控制台**（非 platform.kimi.com 开放平台）创建的 `sk-kimi-xxx`，两种 key 不互通。
+- 响应结构（配额值为字符串数字）：
+  - `usage` = **周窗口**（`limit`/`remaining` 配额点数 + `resetTime` ISO 时间）；
+  - `limits[]` 中 `window.duration=300, timeUnit=TIME_UNIT_MINUTE` 的一项 = **5 小时窗口**；
+  - `user.membership.level` = 档位（`LEVEL_BASIC`/`LEVEL_INTERMEDIATE`/`LEVEL_ADVANCED`，映射 basic/pro/max）；
+  - `parallel.limit` = 并发上限。
+- 注意：Kimi 给的是**配额点数**（quota points），不是 token 数也不是百分比；插件换算成剩余百分比展示。
+- key 引用环境变量 `KIMI_CODING_API_KEY`。
+
+## 官方接口结论（OpenCode Go / opencode.ai）
+
+OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口（社区参考：[cc-switch #6433](https://github.com/farion1231/cc-switch/issues/6433)、[dsh-opencode-go-usage](https://github.com/xiaoqi20/dsh-opencode-go-usage)）：
+
+| 端点 | 作用 |
+|---|---|
+| `GET https://opencode.ai/zen/go/v1/usage` | 5h 滚动 / 周 / 月三窗口用量 |
+
+- 鉴权：`Authorization: Bearer <API Key>`；key 是 OpenCode Go 的 Anthropic 兼容 key（`sk-opencode-...`），env 名 `OPENCODE_GO_API_KEY`。
+- 响应 `usage.{rolling, weekly, monthly}`，每项 `{status, percent, resetsAt}` —— `percent` 为**已用**百分比（0-100），`resetsAt` 为 ISO 时间；`status != "ok"` 时面板行尾提示。
+- 与 GLM/Kimi 不同：只有百分比，无任何绝对计数；**有月窗口**（紫色进度条）。
+- chat 路由：多数模型走 OpenAI 兼容协议，`baseURL: https://opencode.ai/zen/go/v1`（GLM/Kimi/DeepSeek/MiMo 系），部分走 `/v1/responses`（grok、gpt）或 `/v1/messages`（MiniMax/Qwen 系）。
+
+## 安装
+
+1. 在 DSH web profile 目录建立指向本仓库的包链接（一次性）：
+
+   ```sh
+   mkdir -p ~/.dsh/profiles/web/node_modules
+   ln -sfn /Users/danielwei_zhang/workspace/dsh-provider-balance \
+     ~/.dsh/profiles/web/node_modules/dsh-provider-balance
+   ```
+
+2. 从 harness checkout 启动（`--patch` 必须放在 web 应用自有 flag 如 `--port` 之前）：
+
+   ```sh
+   cd ~/workspace/coding-study/deepseek-harness
+   pnpm dsh web --patch ~/workspace/dsh-provider-balance/cordis.yml
+   ```
+
+3. 刷新 `http://127.0.0.1:3080`，输入框工具行右侧（模型选择器左边）会出现余量胶囊。
+   **胶囊跟随当前会话选中的模型**：切到 GLM 显示 `94% · 73% · 4000`（GLM 5h / 周 / 工具），
+   切到 Kimi 显示 `100% · 100%`（Kimi 5h / 周）；切到没有适配器的供应商（如 openai）时胶囊消失。
+   点击展开该供应商的详情面板：进度条（蓝 5h / 绿周 / 紫工具）、重置倒计时、套餐档位、手动刷新。
+
+### 持久挂载（可选）
+
+把 overlay 内容并入 `~/.dsh/profiles/web/cordis.patch.yml`（同样的 insert 行），之后裸
+`pnpm dsh web` 即生效，无需 `--patch`。
+
+## 凭据解析顺序
+
+1. DSH `credentials` 服务（`ctx.get('credentials').resolve(apiKeyEnv)`）；
+2. 进程环境变量（默认 `ZAI_CODING_CN_API_KEY`）；
+3. `$DSH_HOME/.credentials.yaml` 文件直读（credentials-local 的托管层）。
+
+Key 只在 Host 侧使用，浏览器只收到聚合后的百分比/次数 JSON，永远不会看到密钥。
+
+## 配置（cordis.yml `config`，全部可选）
+
+```yaml
+- id: dsh-provider-balance
+  name: dsh-provider-balance
+  inject: [webServer]
+  config:
+    sources:
+      - id: zai-coding-cn        # 必须等于 DSH provider 路由 id（胶囊按它匹配当前模型）
+        kind: zai-coding          # GLM Coding 适配器
+        apiKeyEnv: ZAI_CODING_CN_API_KEY      # 缺省用适配器默认
+        quotaBase: https://open.bigmodel.cn   # 国际版填 https://api.z.ai
+      - id: kimi-coding
+        kind: kimi-coding         # Kimi Code 适配器
+        # apiKeyEnv / quotaBase 缺省用适配器默认（KIMI_CODING_API_KEY / api.kimi.com）
+      - id: opencode-go
+        kind: opencode-go         # OpenCode Go 适配器
+        # 缺省 OPENCODE_GO_API_KEY / https://opencode.ai/zen/go
+    refreshMinIntervalMs: 60000   # 上游最小抓取间隔（缓存 TTL）
+    requestTimeoutMs: 15000
+    route: /provider-balance/quota
+```
+
+HTTP 接口：`GET /provider-balance/quota?provider=<路由id>[&refresh=1]` 返回该供应商的
+单条快照（`sources` 数组一个元素）；不带 `provider` 返回全部源。
+
+## 添加新供应商
+
+Host 侧是适配器注册表，新增一家供应商只需要：
+
+1. 在 `src/index.ts` 写一个适配器对象：`{ credential, base, async read(getJson) }` ——
+   `read` 里用 `getJson(path)`（已带鉴权与超时）拉上游接口，把响应映射到
+   `{ plan?, session?, weekly?, tools? }` 的统一窗口形状；
+2. 在 `ADAPTERS` 注册 kind，在 `DEFAULT_SOURCES` 加一行 `id（路由 id）→ kind`。
+
+凭据解析、传输、按源缓存/TTL/并发合并/stale 降级、HTTP 路由全部是共享管道，不需要动。
+Client 侧零改动 —— 胶囊按当前模型的路由 id 自动匹配新源。
+
+## 架构
+
+```
+src/index.ts        Host 半：适配器注册表（ADAPTERS：每上游一个 {credential, base, read}）
+                    + 共享管道（配置校验、凭据三层解析、鉴权传输、按源缓存/TTL/
+                    并发合并/stale 降级）→ webServer 挂 /provider-balance/quota JSON 路由，
+                    支持 ?provider=<路由id> 过滤。key 不进日志/响应。
+client/client.js    浏览器半：手写 __ModuleLoader__ bundle（react 与 dsh-client-ui-primitives
+                    从冻结模块表 require）。胶囊跟随会话当前模型：订阅共享的
+                    modelDirectories directory（ModelSelect 的同一 store）拿当前
+                    provider，只拉该源数据；无适配器的供应商不渲染。注册
+                    conversation.input.right 槽位条目 + zh/en 词典；5 分钟轮询。
+package.json        dsh.client 声明（platform: web + inject 面向 locale/ui-conversation）
+                    与 exports["./client"]。
+cordis.yml          本地开发 overlay。
+```
+
+槽位选择说明：上下文圈圈（ContextMeter）是 `ui-conversation` 内部组件、无独立槽位；
+扩展点中离它最近的是工具行右端列表槽 `conversation.input.right`（渲染于模型选择器之前、
+圈圈之后）。配色复用 `--dsw-alias-*` / `--dsw-static-amber/red` 主题令牌，暗色模式自动适配。
+
+## 已知边界
+
+- 三家的配额接口都未在公开文档中承诺；上游变更时只需改对应适配器的 `read`，其余不动。
+- 百分比来自上游（GLM/OpenCode 直接给已用百分比；Kimi 由配额点数换算）。
+- 每个浏览器标签页各自轮询（5 分钟），Host 侧 TTL 保证上游压力恒定。
+- OpenCode Go 的 key 尚未存入 DSH 凭据库时，切到该供应商的模型会显示 `missing-key` 提示；
+  在 Web 设置 → Models 页录入 `OPENCODE_GO_API_KEY`（或加入 `~/.dsh/.credentials.yaml`）后即恢复。
+
+## License
+
+MIT
