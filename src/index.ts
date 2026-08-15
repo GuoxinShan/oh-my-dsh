@@ -114,13 +114,17 @@ function finite(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-/** Clamp a used-percentage into a wire window. */
-function percentWindow(usedPercent: number, resetAt?: number): QuotaWindow {
+/** Clamp a used-percentage into a wire window, OMITTING absent optionals.
+ * An explicit `resetAt: undefined` key fails the JSON wire (lossless-JSON
+ * guards treat undefined as non-transportable), so optional fields spread in
+ * only when defined. */
+function percentWindow(usedPercent: number, resetAt?: number, status?: string): QuotaWindow {
   const used = Math.min(100, Math.max(0, Math.round(usedPercent)))
   return {
     usedPercent: used,
     remainingPercent: 100 - used,
     ...(resetAt !== undefined ? { resetAt } : {}),
+    ...(typeof status === 'string' && status !== 'ok' ? { status } : {}),
   }
 }
 
@@ -283,9 +287,7 @@ function opencodeWindow(window: { status?: string; percent?: number; resetsAt?: 
   const percent = finite(window.percent)
   if (percent === undefined) return undefined
   const resetAt = typeof window.resetsAt === 'string' ? Date.parse(window.resetsAt) : Number.NaN
-  const mapped = percentWindow(percent, Number.isFinite(resetAt) ? resetAt : undefined)
-  if (typeof window.status === 'string' && window.status !== 'ok') mapped.status = window.status
-  return mapped
+  return percentWindow(percent, Number.isFinite(resetAt) ? resetAt : undefined, window.status)
 }
 
 const opencodeAdapter: ProviderAdapter = {
@@ -617,6 +619,8 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     res.setHeader('Cache-Control', 'no-store')
     try {
       const sources = await Promise.all(selected.map(source => snapshotFor(source, force)))
+      // Lossless-JSON backstop: JSON round-trip drops any undefined-valued
+      // keys before the payload crosses the wire.
       res.end(JSON.stringify({ sources, servedAt: new Date().toISOString() }))
     } catch (error) {
       res.end(JSON.stringify({ sources: [], error: describeUpstreamError(error), servedAt: new Date().toISOString() }))
