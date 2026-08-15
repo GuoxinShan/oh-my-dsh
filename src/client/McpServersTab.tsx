@@ -169,7 +169,7 @@ export function McpServersTab(props: {
   const [inventory, setInventory] = useState<McpInventorySnapshot | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusFailed, setStatusFailed] = useState(false)
-  const [connectionPollsRemaining, setConnectionPollsRemaining] = useState(0)
+  const [connectionPollsRemaining, setConnectionPollsRemaining] = useState(CONNECTION_POLL_LIMIT)
 
   const refreshStatus = useCallback((): void => {
     setStatusLoading(true)
@@ -366,19 +366,24 @@ export function McpServersTab(props: {
           {filtered.map((server) => {
             const index = servers.indexOf(server)
             const live = inventory?.servers.find(item => item.serverName === server.serverName)
-            const connection = server.enabled ? live?.connection ?? 'connecting' : 'disabled'
+            const connection = server.enabled
+              ? statusFailed ? 'failed' : live?.connection ?? 'connecting'
+              : 'disabled'
             const connectionPending = connection === 'connecting' || connection === 'reconnecting'
+            const connectionText = statusFailed && server.enabled
+              ? t('connectionFailed')
+              : connectionLabel(server, live, t)
             return (
               <li className={css.serverRow} key={server.serverName} data-enabled={server.enabled} data-connection={connection}>
                 <div className={css.serverGlyph}><IconPlugOutline16 size={17} /></div>
                 <div className={css.serverMain}>
                   <div className={css.serverTitle}>
                     {connectionPending
-                      ? <span className={css.connectionSpinner} role="status" aria-label={connectionLabel(server, live, t)}><IconLoadingOutline16 size={13} /></span>
-                      : <span className={css.connectionDot} role="status" aria-label={connectionLabel(server, live, t)} />}
+                      ? <span className={css.connectionSpinner} role="status" aria-label={connectionText}><IconLoadingOutline16 size={13} /></span>
+                      : <span className={css.connectionDot} role="status" aria-label={connectionText} />}
                     <strong>{server.serverName}</strong>
                     <span className={css.transportTag}>{server.transport === 'stdio' ? t('transportStdio') : t('transportHttp')}</span>
-                    {!connectionPending && connection !== 'connected' ? <span className={css.connectionLabel}>{connectionLabel(server, live, t)}</span> : null}
+                    {!connectionPending && connection !== 'connected' ? <span className={css.connectionLabel}>{connectionText}</span> : null}
                     {server.enabled && live?.connection === 'connected' ? <span className={css.toolTag}>{t('toolCount', { count: String(live.toolCount) })}</span> : null}
                   </div>
                   <code>{summary(server)}</code>

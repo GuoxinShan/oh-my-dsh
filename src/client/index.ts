@@ -35,6 +35,11 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
   const disposeRemote = ctx.get('remote.mcpInventory') === undefined
     ? await ctx.remote.$mount(TYPERT_REMOTE)
     : async (): Promise<void> => {}
+  const inventoryRemote = ctx.get('remote.mcpInventory')
+  if (inventoryRemote === undefined) {
+    await disposeRemote()
+    throw new Error('ui-settings-mcp: mcpInventory Remote did not mount')
+  }
 
   try {
     ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-settings-mcp: dictionaries')
@@ -46,7 +51,7 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
     const injected = (): McpSettingsSectionInjected => ({
       scope,
       listStatus: async () => {
-        const result = await ctx.remote.mcpInventory.list()
+        const result = await inventoryRemote.list()
         if (!result.ok) {
           throw new Error(`mcpInventory.list failed: ${result.error.code}: ${result.error.message}`)
         }

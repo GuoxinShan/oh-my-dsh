@@ -1,14 +1,5 @@
-# Replace the three MCP rows shipped by the Web profile. Removing this bundle
-# restores the in-box rows because profile layers are recomposed from scratch.
-- id: mcp-manager
-  disabled: true
-
-- id: mcp-inventory
-  disabled: true
-
-- id: ui-settings-mcp
-  disabled: true
-
+# Add the three MCP settings rows to a Web profile that supplies the required
+# Harness-owned peer services and mcp-client status event.
 - insert:
     - id: dsh-mcp-settings-manager
       name: dsh-mcp-settings/manager

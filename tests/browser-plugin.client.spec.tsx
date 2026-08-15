@@ -63,6 +63,9 @@ describe('ui-settings-mcp browser plugin', () => {
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     expect(b.mount).toHaveBeenCalledOnce()
     expect(b.ctx.get('remote.mcpInventory')).toBeDefined()
+    const entry = b.slots.entries('settings.section').find(item => item.options.id === 'mcp')!
+    const injected = (entry.inject as unknown as () => McpSettingsSectionInjected)()
+    await expect(injected.listStatus()).resolves.toEqual(EMPTY)
     await b.ctx.fiber.dispose()
   })
 

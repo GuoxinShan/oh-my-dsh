@@ -10,7 +10,7 @@ An installable DeepSeek Harness bundle containing the three plugins that manage 
 | `dsh-mcp-settings-inventory` | `dsh-mcp-settings/inventory` | Exposes the read-only `mcpInventory/list` Remote. |
 | `dsh-mcp-settings-ui` | `dsh-mcp-settings` + `./client` | Adds the MCP Settings page, Form/JSON editing, enable toggles, status polling, and tool counts. |
 
-The bundle disables the equivalent rows shipped by the current Web profile and inserts these rows under distinct ids. Removing the bundle restores the in-box rows on the next profile boot. Existing `mcp.servers` user settings are not removed.
+The bundle inserts these rows into a compatible Web profile. The profile must not already mount another settings-driven MCP manager or MCP Settings UI. Existing `mcp.servers` user settings are not removed.
 
 ## Requirements
 
@@ -82,7 +82,7 @@ The UI supports stdio and Streamable HTTP servers, Form and JSON editing, direct
 dsh plugin --profile web remove dsh-mcp-settings
 ```
 
-Restart the Web profile. The profile layer disappears and the shipped MCP rows become active again. User settings remain intact.
+Restart the Web profile. The bundle rows disappear while user settings remain intact.
 
 ## Develop
 

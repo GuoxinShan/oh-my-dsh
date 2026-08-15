@@ -10,7 +10,7 @@
 | `dsh-mcp-settings-inventory` | `dsh-mcp-settings/inventory` | 提供只读 `mcpInventory/list` Remote。 |
 | `dsh-mcp-settings-ui` | `dsh-mcp-settings` + `./client` | 提供 MCP 设置页、表单/JSON 编辑、启停开关、状态轮询和工具数量。 |
 
-bundle 会停用当前 Web profile 中等价的三个内置行，再以独立 id 插入这些行。移除 bundle 后，下次启动 profile 时内置行会恢复。已有 `mcp.servers` 用户设置不会被删除。
+bundle 会把这三个插件行插入兼容的 Web profile。该 profile 不能同时挂载另一套由设置驱动的 MCP manager 或 MCP 设置 UI。已有 `mcp.servers` 用户设置不会被删除。
 
 ## 环境要求
 
@@ -82,7 +82,7 @@ UI 支持 stdio 与 Streamable HTTP、表单与 JSON 编辑、直接启停以及
 dsh plugin --profile web remove dsh-mcp-settings
 ```
 
-重启 Web profile。该 bundle 层消失后，随 DSH 发布的 MCP 行重新生效，用户设置保持不变。
+重启 Web profile。bundle 插入的插件行会消失，用户设置保持不变。
 
 ## 开发
 

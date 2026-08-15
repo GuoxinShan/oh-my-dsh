@@ -163,6 +163,7 @@ describe('McpServersTab', () => {
     const { scope } = fakeScope({ servers: entries })
     render(<McpServersTab scope={scope} listStatus={status} t={t} />)
     await waitFor(() => { expect(screen.getByRole('alert').textContent).toBe(en.statusLoadFailed) })
+    expect(screen.getAllByRole('status', { name: en.connectionFailed })).toHaveLength(5)
     fireEvent.click(screen.getByRole('button', { name: en.refresh }))
     await waitFor(() => { expect(screen.getByRole('status', { name: en.connectionReconnecting })).toBeTruthy() })
     expect(screen.getByText(en.connectionFailed)).toBeTruthy()
@@ -283,6 +284,31 @@ describe('McpServersTab', () => {
     expect(screen.getByRole('tab', { name: en.jsonMode, selected: true })).toBeTruthy()
     expect(screen.getByRole('button', { name: en.save })).toHaveProperty('disabled', false)
     expect(set).not.toHaveBeenCalled()
+  })
+
+  it('polls an initially connecting server and stops when it connects', async () => {
+    vi.useFakeTimers()
+    const connecting: McpInventorySnapshot = {
+      servers: [
+        { serverName: 'alpha', transport: 'stdio', enabled: true, connection: 'connecting', toolCount: 0 },
+        STATUS_SNAPSHOT.servers[1]!,
+      ],
+    }
+    const status = vi.fn()
+      .mockResolvedValueOnce(connecting)
+      .mockResolvedValue(STATUS_SNAPSHOT)
+    const { scope } = fakeScope({ servers: STORED })
+    render(<McpServersTab scope={scope} listStatus={status} t={t} />)
+    await act(async () => { await Promise.resolve() })
+
+    expect(status).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('status', { name: en.connectionConnecting })).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(status).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('status', { name: en.connectionConnected })).toBeTruthy()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000) })
+    expect(status).toHaveBeenCalledTimes(2)
   })
 
   it('polls after enabling and stops when the server connects', async () => {
