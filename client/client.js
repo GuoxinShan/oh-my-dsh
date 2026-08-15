@@ -59,9 +59,6 @@ window.__ModuleLoader__.load({
         '.dpb-level-ok { --dpb-tint: var(--dsw-alias-label-primary); }',
         '.dpb-level-warn { --dpb-tint: var(--dsw-static-amber-500); }',
         '.dpb-level-low { --dpb-tint: var(--dsw-static-red-500); }',
-        /* Balance amount tint: green-400 (lighter than the weekly bar's
-         * green-500 so the two greens read as family, not duplicates). */
-        '.dpb-bal-ok { --dpb-tint: var(--dsw-static-green-400); }',
         '.dpb-panel {',
         '  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 100;',
         '  box-sizing: border-box; width: 288px; padding: 12px;',
@@ -250,8 +247,9 @@ window.__ModuleLoader__.load({
           : (status ? createElement('div', { className: 'dpb-hint' }, status.slice(3)) : null))
     }
 
-    /* Prepaid balance row: amount + granted/topped-up breakdown. The row's
-     * swatch and amount value share the green identity tint. */
+    /* Prepaid balance row. Text colors stay the panel defaults (same as every
+     * other row); only the identity SWATCH is green, like the window rows'
+     * blue/green/purple swatches. */
     function BalanceRow(props) {
       var balance = props.balance
       if (balance == null) return null
@@ -259,11 +257,11 @@ window.__ModuleLoader__.load({
       var parts = []
       if (balance.granted != null && isFinite(balance.granted)) parts.push('赠金 ' + symbol + balance.granted.toFixed(2))
       if (balance.toppedUp != null && isFinite(balance.toppedUp)) parts.push('充值 ' + symbol + balance.toppedUp.toFixed(2))
-      return createElement('div', { className: 'dpb-row dpb-bal-ok' },
+      return createElement('div', { className: 'dpb-row dpb-c-green' },
         createElement('div', { className: 'dpb-rowhead' },
           createElement('span', { className: 'dpb-rowlabel' },
             labelWithSwatch(balance.currency === 'USD' ? '余额 (USD)' : '余额 (CNY)')),
-          createElement('span', { className: 'dpb-rowvalue dpb-bal-ok' },
+          createElement('span', { className: 'dpb-rowvalue' },
             symbol + (isFinite(balance.total) ? balance.total.toFixed(2) : '—'))),
         parts.length > 0
           ? createElement('div', { className: 'dpb-breakdown' }, parts.join(' · '))
@@ -417,8 +415,8 @@ window.__ModuleLoader__.load({
       if (balances.length > 0) {
         var b = balances[0]
         var bsym = b.currency === 'USD' ? '$' : '¥'
-        chipBody.push(createElement('span', { key: 'bal', className: 'dpb-bal-ok' },
-          createElement('span', { className: 'dpb-num' }, bsym + (isFinite(b.total) ? b.total.toFixed(2) : '—'))))
+        chipBody.push(createElement('span', { key: 'bal', className: 'dpb-num' },
+          bsym + (isFinite(b.total) ? b.total.toFixed(2) : '—')))
       }
       if (sessionLeft !== undefined) {
         chipBody.push(createElement('span', { key: 's', className: levelOf(sessionLeft) },
