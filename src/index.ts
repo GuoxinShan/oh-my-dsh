@@ -60,9 +60,11 @@ export interface ToolQuota {
   breakdown: Array<{ code: string; used: number }>
 }
 
-/** Plan identity, best-effort decoration from a subscription endpoint. */
+/** Plan identity, best-effort decoration from a subscription endpoint.
+ * Every field is upstream-provided; adapters never invent names — when the
+ * API returns no product name the client falls back to the route label. */
 export interface PlanInfo {
-  name: string
+  name?: string
   level?: string
   renewDate?: string
 }
@@ -278,8 +280,9 @@ const kimiAdapter: ProviderAdapter = {
     const level = typeof levelRaw === 'string'
       ? KIMI_LEVELS[levelRaw] ?? levelRaw.replace(/^LEVEL_/, '').toLowerCase()
       : undefined
+    /* The usages API carries no product name — only the membership level. */
     return {
-      plan: { name: 'Kimi Code', ...(level !== undefined ? { level } : {}) },
+      ...(level !== undefined ? { plan: { level } } : {}),
       ...(session !== undefined ? { session } : {}),
       ...(weekly !== undefined ? { weekly } : {}),
     }
@@ -315,8 +318,8 @@ const opencodeAdapter: ProviderAdapter = {
     const session = opencodeWindow(usage.rolling)
     const weekly = opencodeWindow(usage.weekly)
     const monthly = opencodeWindow(usage.monthly)
+    /* The usage API returns windows only — no product name or tier. */
     return {
-      plan: { name: 'OpenCode Go' },
       ...(session !== undefined ? { session } : {}),
       ...(weekly !== undefined ? { weekly } : {}),
       ...(monthly !== undefined ? { monthly } : {}),
@@ -352,10 +355,8 @@ const deepseekAdapter: ProviderAdapter = {
         ...(body?.is_available !== undefined ? { isAvailable: body.is_available === true } : {}),
       })
     }
-    return {
-      plan: { name: 'DeepSeek 官方' },
-      balances,
-    }
+    /* The balance API returns amounts only — no product name or tier. */
+    return { balances }
   },
 }
 

@@ -167,8 +167,9 @@ window.__ModuleLoader__.load({
     var QUOTA_URL = '/provider-balance/quota'
     var POLL_MS = 5 * 60 * 1000
 
-    /** DSH provider route id → short display name. */
-    var SHORT_NAMES = { 'zai-coding-cn': 'GLM', 'kimi-coding': 'Kimi', 'opencode-go': 'OC Go', 'deepseek-official': 'DS' }
+    /** DSH provider route id → display label. Route identity, not business
+     * data: shown only when the upstream API returns no product name. */
+    var SHORT_NAMES = { 'zai-coding-cn': 'GLM', 'kimi-coding': 'Kimi Code', 'opencode-go': 'OpenCode Go', 'deepseek-official': 'DeepSeek' }
 
     /** Remaining-percent → visual level class. */
     function levelOf(remainingPercent) {
