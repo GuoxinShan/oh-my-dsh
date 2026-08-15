@@ -447,7 +447,12 @@ function fail(code: string, message: string): never {
   throw Object.assign(new Error(message), { code })
 }
 
-/** Chat-endpoint path suffixes stripped from a copied baseURL, per kind. */
+/** Extract `scheme://host[:port]` from a URL string without the URL global
+ * (kept URL-free so the same source runs inside the dynamic sandbox). */
+function originOf(baseURL: string): string | undefined {
+  const match = /^(https?:\/\/[^/]+)/.exec(baseURL)
+  return match === null ? undefined : match[1]
+}
 const CHAT_PATH_SUFFIXES: Record<string, readonly string[]> = {
   'zai-coding': ['/api/coding/paas/v4', '/api/paas/v4'],
   'kimi-coding': ['/coding/v1', '/v1'],
@@ -496,11 +501,11 @@ function resolveConfig(raw: unknown): {
         break
       }
     }
-    try {
-      quotaBase = new URL(quotaBase).origin
-    } catch {
-      fail(`config.sources[${index}].quotaBase`, `quotaBase "${quotaBase}" is not a valid URL`)
+    const quotaOrigin = originOf(quotaBase)
+    if (quotaOrigin === undefined) {
+      fail(`config.sources[${index}].quotaBase`, `quotaBase "${quotaBase}" is not a valid http(s) URL`)
     }
+    quotaBase = quotaOrigin as string
     return { id: source.id, kind: kind as string, apiKeyEnv, quotaBase }
   })
 
@@ -719,7 +724,9 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
       const baseURL = typeof route.baseURL === 'string' ? route.baseURL : undefined
       const apiKeyEnv = typeof route.apiKeyEnv === 'string' ? route.apiKeyEnv : undefined
       if (baseURL === undefined || apiKeyEnv === undefined) return undefined
-      return { origin: new URL(baseURL).origin, apiKeyEnv }
+      const origin = originOf(baseURL)
+      if (origin === undefined) return undefined
+      return { origin, apiKeyEnv }
     } catch {
       return undefined
     }
