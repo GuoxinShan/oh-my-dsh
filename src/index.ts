@@ -80,8 +80,6 @@ export interface ProviderQuotas {
   tools?: ToolQuota
   /** Prepaid balances (DeepSeek-style pay-as-you-go; window fields empty). */
   balances?: BalanceInfo[]
-  /** Static pricing reference (peak/off-peak per model), when meaningful. */
-  pricing?: PricingInfo
 }
 
 /** One prepaid currency balance. */
@@ -91,23 +89,6 @@ export interface BalanceInfo {
   granted?: number
   toppedUp?: number
   isAvailable?: boolean
-}
-
-/** Static billing-rule reference rendered in the panel. */
-export interface PricingInfo {
-  /** Price unit suffix, e.g. '/百万tokens'. */
-  unit: string
-  /** Timing note, e.g. the peak-window schedule. */
-  note: string
-  models: Array<{
-    id: string
-    /** Off-peak price label (input, cache miss). */
-    offPeak: string
-    /** Peak price label (input, cache miss). */
-    peak: string
-    /** Cache-hit price label, when listed. */
-    cachedHit?: string
-  }>
 }
 
 /** Wire snapshot for one provider. */
@@ -345,16 +326,6 @@ const opencodeAdapter: ProviderAdapter = {
 
 /* ---- DeepSeek official (api.deepseek.com; prepaid balance, documented) ---- */
 
-/** Peak/off-peak pricing from the public pricing page (effective 2026-08-17). */
-const DEEPSEEK_PRICING: PricingInfo = {
-  unit: '/百万tokens',
-  note: '8/17 起，高峰 9-12/14-18 点',
-  models: [
-    { id: 'deepseek-v4-flash', offPeak: '1.5元', peak: '3元', cachedHit: '0.05元' },
-    { id: 'deepseek-v4-pro', offPeak: '4.5元', peak: '9元', cachedHit: '0.15元' },
-  ],
-}
-
 const deepseekAdapter: ProviderAdapter = {
   credential: 'DEEPSEEK_API_KEY',
   base: 'https://api.deepseek.com',
@@ -384,7 +355,6 @@ const deepseekAdapter: ProviderAdapter = {
     return {
       plan: { name: 'DeepSeek 官方' },
       balances,
-      pricing: DEEPSEEK_PRICING,
     }
   },
 }

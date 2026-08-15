@@ -100,9 +100,6 @@ window.__ModuleLoader__.load({
         '.dpb-error { margin-top: 6px; color: var(--dsw-static-red-500); font-size: 11px; }',
         '.dpb-foot { margin-top: 10px; color: var(--dsw-alias-label-tertiary); font-size: 11px;',
         '  display: flex; align-items: center; justify-content: space-between; gap: 8px; }',
-        '.dpb-pricing { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--dsw-alias-border-l2);',
-        '  font-size: 11px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }',
-        '.dpb-pricing-title { color: var(--dsw-alias-label-secondary); }',
       ].join('\n')
       document.head.appendChild(style)
     }
@@ -252,14 +249,12 @@ window.__ModuleLoader__.load({
 
     /* Prepaid balance row: amount + granted/topped-up breakdown, teal identity. */
     function BalanceRow(props) {
-      var t = props.t
       var balance = props.balance
       if (balance == null) return null
       var symbol = balance.currency === 'USD' ? '$' : '¥'
       var parts = []
       if (balance.granted != null && isFinite(balance.granted)) parts.push('赠金 ' + symbol + balance.granted.toFixed(2))
       if (balance.toppedUp != null && isFinite(balance.toppedUp)) parts.push('充值 ' + symbol + balance.toppedUp.toFixed(2))
-      var foot = balance.isAvailable === false ? '余额不可用于 API 调用' : '按 token 计费，无窗口重置'
       return createElement('div', { className: 'dpb-row dpb-c-teal' },
         createElement('div', { className: 'dpb-rowhead' },
           createElement('span', { className: 'dpb-rowlabel' },
@@ -267,23 +262,11 @@ window.__ModuleLoader__.load({
           createElement('span', { className: 'dpb-rowvalue' },
             symbol + (isFinite(balance.total) ? balance.total.toFixed(2) : '—'))),
         parts.length > 0
-          ? createElement('div', { className: 'dpb-breakdown' }, parts.join(' · ') + ' · 扣费优先赠金')
+          ? createElement('div', { className: 'dpb-breakdown' }, parts.join(' · '))
           : null,
-        createElement('div', { className: 'dpb-breakdown' }, foot))
-    }
-
-    /* Peak/off-peak pricing card (static reference data from the provider's
-     * public pricing page). */
-    function PricingCard(props) {
-      var pricing = props.pricing
-      if (pricing == null || !Array.isArray(pricing.models) || pricing.models.length === 0) return null
-      return createElement('div', { className: 'dpb-pricing' },
-        createElement('div', { className: 'dpb-pricing-title' }, '计费（空闲/高峰 · ' + pricing.note + '）'),
-        pricing.models.map(function (model) {
-          return createElement('div', { key: model.id, className: 'dpb-breakdown' },
-            model.id + '：输入 ' + model.offPeak + '/' + model.peak + pricing.unit
-            + (model.cachedHit != null ? ' · 缓存命中 ' + model.cachedHit + pricing.unit : ''))
-        }))
+        balance.isAvailable === false
+          ? createElement('div', { className: 'dpb-breakdown' }, '余额不可用于 API 调用')
+          : null)
     }
 
     function ToolsRow(props) {
@@ -465,7 +448,6 @@ window.__ModuleLoader__.load({
         /* Monthly window: OpenCode Go reports it; other providers omit it. */
         rows.push(createElement(WindowRow, { key: 'month', label: t('panel.month'), value: data.monthly, t: t, now: now, colorClass: 'dpb-c-purple' }))
         rows.push(createElement(ToolsRow, { key: 'tools', tools: tools, t: t }))
-        rows.push(createElement(PricingCard, { key: 'pricing', pricing: data.pricing }))
         if (data.stale) {
           rows.push(createElement('div', { key: 'stale', className: 'dpb-stale' }, t('panel.stale')))
         }

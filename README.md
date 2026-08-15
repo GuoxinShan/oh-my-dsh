@@ -73,12 +73,8 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
 
 - 鉴权：`Authorization: Bearer <API Key>`，env 名 `DEEPSEEK_API_KEY`；DSH 自带 `deepseek-official` 路由（llm-deepseek 包）用同一把 key。
 - 响应：`is_available`（余额是否可调用）+ `balance_infos[]`（`currency`/`total_balance`/`granted_balance`/`topped_up_balance`，字符串金额）。
-- **余额型而非窗口型**：没有 5h/周重置，胶囊直接显示金额（如 `¥4.93`）。
-- **计费规则**（面板"计费"卡片展示，[价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) 摘要，2026-08-17 生效峰谷定价）：
-  - deepseek-v4-flash：输入（未命中）空闲 ¥1.5 / 高峰 ¥3 每百万 tokens；缓存命中 ¥0.05；输出空闲 ¥4.5 / 高峰 ¥9
-  - deepseek-v4-pro：输入（未命中）空闲 ¥4.5 / 高峰 ¥9；缓存命中 ¥0.15；输出空闲 ¥13.5 / 高峰 ¥27
-  - 高峰时段：北京时间 9:00-12:00、14:00-18:00，其余空闲
-  - 扣费顺序：赠金优先于充值余额
+- **余额型而非窗口型**：没有 5h/周重置，胶囊直接显示金额（如 `¥4.93`），面板余额行展示总额与赠金/充值拆分。
+- 计费规则不进面板（会随官方调价过期），以[价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)为准。
 
 ## 安装
 
