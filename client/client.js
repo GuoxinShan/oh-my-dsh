@@ -49,7 +49,10 @@ window.__ModuleLoader__.load({
         '  height: 28px; padding: 0 8px; margin-right: 2px;',
         '  border: none; border-radius: 999px; background: transparent;',
         '  color: var(--dsw-alias-label-secondary); cursor: pointer;',
-        '  font-size: 12px; line-height: 1; font-variant-numeric: tabular-nums;',
+        /* Typography identical to the sibling ModelSelect trigger: 13/20
+         * medium, so the chip's text reads on the same baseline as the model
+         * name beside it. */
+        '  font-size: 13px; line-height: 20px; font-weight: 500; font-variant-numeric: tabular-nums;',
         '  white-space: nowrap;',
         '}',
         '.dpb-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }',
