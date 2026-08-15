@@ -362,12 +362,84 @@ const deepseekAdapter: ProviderAdapter = {
   },
 }
 
+/* ---- Moonshot Open Platform (api.moonshot.cn; prepaid balance, documented) ----
+ * Distinct from the Kimi Code subscription: this is the pay-as-you-go
+ * platform key (sk-...), not the sk-kimi-... coding-plan key. */
+
+const moonshotAdapter: ProviderAdapter = {
+  credential: 'MOONSHOT_API_KEY',
+  base: 'https://api.moonshot.cn',
+  async read(getJson) {
+    const body = await getJson('/v1/users/me/balance') as {
+      code?: number
+      data?: { available_balance?: string; balance?: string; granted_balance?: string; topped_up_balance?: string; currency?: string }
+    }
+    const data = body?.data
+    if (data === null || typeof data !== 'object') {
+      throw Object.assign(new Error('moonshot response lacks the data field'), { code: 'parse' })
+    }
+    const total = Number(data.available_balance ?? data.balance)
+    if (!Number.isFinite(total)) {
+      throw Object.assign(new Error('moonshot balance fields missing'), { code: 'parse' })
+    }
+    const granted = Number(data.granted_balance)
+    const toppedUp = Number(data.topped_up_balance)
+    const balance: BalanceInfo = {
+      currency: data.currency === 'USD' ? 'USD' : 'CNY',
+      total,
+      ...(Number.isFinite(granted) ? { granted } : {}),
+      ...(Number.isFinite(toppedUp) ? { toppedUp } : {}),
+    }
+    return { balances: [balance] }
+  },
+}
+
+/* ---- xAI (management-api.x.ai; prepaid credits, documented) ----
+ * Requires a MANAGEMENT key (console.x.ai → Settings → Management Keys),
+ * separate from the inference xai-... key; team_id "default" addresses the
+ * default team. Amounts arrive in USD cents; prepaidCredits is an
+ * accounting-style negative for remaining credit. */
+
+const xaiAdapter: ProviderAdapter = {
+  credential: 'XAI_MANAGEMENT_KEY',
+  base: 'https://management-api.x.ai',
+  async read(getJson) {
+    const team = process.env.XAI_TEAM_ID ?? 'default'
+    const body = await getJson(`/v1/billing/teams/${team}/postpaid/invoice/preview`) as {
+      coreInvoice?: { prepaidCredits?: { val?: string }; prepaidCreditsUsed?: { val?: string } }
+      billingCycle?: { year?: number; month?: number }
+    }
+    const raw = body?.coreInvoice?.prepaidCredits?.val
+    if (raw === undefined) {
+      throw Object.assign(new Error('xai response lacks prepaidCredits'), { code: 'parse' })
+    }
+    const cents = Number(raw)
+    if (!Number.isFinite(cents)) {
+      throw Object.assign(new Error('xai prepaidCredits is not numeric'), { code: 'parse' })
+    }
+    const usedCents = Number(body?.coreInvoice?.prepaidCreditsUsed?.val)
+    const balance: BalanceInfo = {
+      currency: 'USD',
+      // Accounting-style negative credit: -4500 cents = $45.00 remaining.
+      total: Math.abs(cents) / 100,
+      ...(Number.isFinite(usedCents) ? { usedToday: usedCents / 100 } : {}),
+    }
+    const cycle = body?.billingCycle
+    const plan: PlanInfo = cycle !== undefined && typeof cycle.year === 'number' && typeof cycle.month === 'number'
+      ? { name: 'xAI', level: `${cycle.year}-${String(cycle.month).padStart(2, '0')}` }
+      : { name: 'xAI' }
+    return { plan, balances: [balance] }
+  },
+}
+
 /** Installed adapters by kind; the vocabulary a source config may name. */
 const ADAPTERS: Record<string, ProviderAdapter> = {
   'zai-coding': zaiAdapter,
   'kimi-coding': kimiAdapter,
   'opencode-go': opencodeAdapter,
   'deepseek-official': deepseekAdapter,
+  'moonshot-platform': moonshotAdapter,
+  'xai': xaiAdapter,
   /** Sub2API-family gateways (route-config-driven; see detectGateway). */
   'sub2api-gateway': {
     credential: '', // per-route; filled by the detection
@@ -408,6 +480,8 @@ const DEFAULT_SOURCES: Array<{ id: string; kind: string }> = [
   { id: 'kimi-coding', kind: 'kimi-coding' },
   { id: 'opencode-go', kind: 'opencode-go' },
   { id: 'deepseek-official', kind: 'deepseek-official' },
+  { id: 'moonshot-platform', kind: 'moonshot-platform' },
+  { id: 'xai', kind: 'xai' },
 ]
 
 /* ------------------------------------------------------------------ */

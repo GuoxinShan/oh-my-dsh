@@ -1,12 +1,15 @@
 # DSH Provider Balance
 
 在 DeepSeek Harness（DSH）Web 界面中，紧挨输入框的上下文用量圈圈旁显示模型供应商的剩余配额。
-已接入四家供应商：
+已接入六家供应商 + 一类自动判别网关：
 
 - **zai-coding-cn**（智谱 GLM Coding 套餐，国内 `open.bigmodel.cn`，兼容国际 `api.z.ai`）
 - **kimi-coding**（Kimi Code / 月之暗面 Coding 套餐，`api.kimi.com`，API Key 形态 `sk-kimi-xxx`）
 - **opencode-go**（OpenCode Go 订阅，`opencode.ai/zen/go`，API Key 形态 `sk-opencode-...`）
 - **deepseek-official**（DeepSeek 官方按量付费，`api.deepseek.com`，预付余额型）
+- **moonshot-platform**（Moonshot 开放平台按量付费，`api.moonshot.cn`，预付余额型）
+- **xai**（xAI Management API，`management-api.x.ai`，预付额度型）
+- **Sub2API 系网关**（自动判别：路由 baseURL + 该路由 apiKeyEnv 探测 `/v1/usage`）
 
 **胶囊跟随当前会话选中的模型**：切到哪家供应商就显示哪家的余量（余额型显示金额，窗口型显示百分比）；无适配器的供应商不显示。
 
@@ -76,6 +79,29 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
 - **余额型而非窗口型**：没有 5h/周重置，胶囊直接显示金额（如 `¥4.93`），面板余额行展示总额与赠金/充值拆分。
 - 计费规则不进面板（会随官方调价过期），以[价格页](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)为准。
 
+## 官方接口结论（Moonshot 开放平台 / api.moonshot.cn）
+
+| 端点 | 作用 |
+|---|---|
+| `GET https://api.moonshot.cn/v1/users/me/balance` | 预付余额（赠金/充值拆分，CNY） |
+
+- 鉴权：`Authorization: Bearer <开放平台 API Key>`（`sk-...`，platform.moonshot.cn 申请），env 名 `MOONSHOT_API_KEY`。
+- ⚠️ 与 Kimi Code 订阅是**两个产品、两把 key**：`sk-kimi-...`（api.kimi.com）在 moonshot.cn 无效（实测 `Invalid Authentication`）。
+- 响应：`{code:0, data:{available_balance, granted_balance, topped_up_balance, currency}}` —— 与 DeepSeek 同构。
+- 属文档化接口（Moonshot 平台 API 文档"查询余额"）；响应形状按文档实现。
+
+## 官方接口结论（xAI / management-api.x.ai）
+
+| 端点 | 作用 |
+|---|---|
+| `GET https://management-api.x.ai/v1/billing/teams/{team_id}/postpaid/invoice/preview` | 预付额度 + 本周期已用（USD 分） |
+
+- ⚠️ 需要 **Management Key**（console.x.ai → Settings → Management Keys，需 Management Keys Read 权限）——与推理用的 `xai-...` key **不是同一把**；env 名 `XAI_MANAGEMENT_KEY`。
+- team_id：默认团队用 `"default"`（控制台 URL 即 `/team/default/`）；非默认团队设 `XAI_TEAM_ID`。
+- 响应：`coreInvoice.prepaidCredits.val`（USD 分，记账负数表示剩余，如 `-4500` = $45.00）、`prepaidCreditsUsed.val`（本周期已用）、`billingCycle`。
+- 官方文档：[Management API / Billing](https://docs.x.ai/developers/rest-api-reference/management/billing)；推理 API 本身无余额端点。
+- 另注：`cli-chat-proxy.grok.com/v1/billing` 是 Grok CLI 订阅额度（Grok Build），与 API 预付余额是两回事，不适用。
+
 ## 安装
 
 1. 在 DSH web profile 目录建立指向本仓库的包链接（一次性）：
@@ -132,6 +158,12 @@ Key 只在 Host 侧使用，浏览器只收到聚合后的百分比/次数 JSON�
       - id: deepseek-official
         kind: deepseek-official   # DeepSeek 官方余额适配器（文档化接口）
         # 缺省 DEEPSEEK_API_KEY / https://api.deepseek.com
+      - id: moonshot-platform
+        kind: moonshot-platform    # Moonshot 开放平台余额（注意：与 Kimi Code 是两把 key）
+        # 缺省 MOONSHOT_API_KEY / https://api.moonshot.cn
+      - id: xai
+        kind: xai                  # xAI Management API 预付额度（需 Management Key）
+        # 缺省 XAI_MANAGEMENT_KEY / https://management-api.x.ai（team 用 default 或 XAI_TEAM_ID）
     refreshMinIntervalMs: 60000   # 上游最小抓取间隔（缓存 TTL）
     requestTimeoutMs: 15000
     route: /provider-balance/quota

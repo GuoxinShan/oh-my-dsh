@@ -171,7 +171,7 @@ window.__ModuleLoader__.load({
 
     /** DSH provider route id → display label. Route identity, not business
      * data: shown only when the upstream API returns no product name. */
-    var SHORT_NAMES = { 'zai-coding-cn': 'GLM', 'kimi-coding': 'Kimi Code', 'opencode-go': 'OpenCode Go', 'deepseek-official': 'DeepSeek' }
+    var SHORT_NAMES = { 'zai-coding-cn': 'GLM', 'kimi-coding': 'Kimi Code', 'opencode-go': 'OpenCode Go', 'deepseek-official': 'DeepSeek', 'moonshot-platform': 'Moonshot', 'xai': 'xAI' }
 
     /** Remaining-percent → visual level class. */
     function levelOf(remainingPercent) {
