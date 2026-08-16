@@ -1,0 +1,9 @@
+# Bundle patch for dsh-provider-balance: mounted when the profile lists
+# this package among its dsh.profile.bundles. The row resolves the package
+# from the profile directory; the entry id doubles as the browser
+# client-bundle id (served at /plugins/dsh-provider-balance/client.js).
+- insert:
+    - id: dsh-provider-balance
+      name: dsh-provider-balance
+      inject:
+        - webServer

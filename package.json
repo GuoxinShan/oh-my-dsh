@@ -1,8 +1,8 @@
 {
   "name": "dsh-provider-balance",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "DSH out-of-tree plugin: provider quota readout beside the composer context meter (zai GLM coding plans first)",
+  "description": "DSH web plugin: provider quota/balance chip beside the composer context meter (GLM/Kimi/OpenCode/DeepSeek/Moonshot/xAI + Sub2API gateway auto-detect)",
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
@@ -11,6 +11,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.bundle.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
