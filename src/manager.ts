@@ -15,6 +15,7 @@
 import { Service } from '@deepseek-ai/cordis'
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
@@ -40,6 +41,8 @@ declare module '@deepseek-ai/cordis' {
 
 /** Matches mcp-client's per-tool-call default; its Config schema is the final gate at spawn. */
 const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000
+/** Mirrors the credential service's POSIX-portable reference-name contract. */
+const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 const Reconnect: z<ReconnectConfig> = z.object({
   enabled: z.boolean().default(McpClient.RECONNECT_DEFAULTS.enabled),
@@ -64,6 +67,7 @@ export const Config: z<McpSettings> = z.object({
       command: z.string().required(),
       args: z.array(String).default([]),
       env: z.dict(String).default({}),
+      envCredentialRefs: z.dict(z.string().pattern(CREDENTIAL_REF_PATTERN).role('credential-ref')).default({}),
       cwd: z.string().default(''),
       toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
       reconnect: Reconnect,
@@ -74,6 +78,7 @@ export const Config: z<McpSettings> = z.object({
       enabled: z.boolean().default(true),
       url: z.string().required(),
       headers: z.dict(String).default({}),
+      authorizationCredentialRef: z.string().pattern(CREDENTIAL_REF_PATTERN).role('credential-ref'),
       toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
       reconnect: Reconnect,
     }),
@@ -101,8 +106,21 @@ function optionalReconnect(reconnect: ReconnectConfig | undefined): { reconnect?
   return {}
 }
 
-/** Map one settings entry to the mcp-client plugin config, dropping manager-only fields. */
-function toClientConfig(entry: McpServerEntry): McpClient.Config {
+/** Resolve one configured credential reference without exposing its value in diagnostics. */
+async function resolveCredential(ctx: Context, ref: string, serverName: string): Promise<string> {
+  const credentials = ctx.get('credentials')
+  if (credentials === undefined) {
+    throw new Error(`mcp-manager: mcp-client(${serverName}) requires credential "${ref}", but no credentials service is mounted`)
+  }
+  const resolved = await credentials.resolve(credentialRef(ref))
+  if (resolved === undefined) {
+    throw new Error(`mcp-manager: mcp-client(${serverName}) credential "${ref}" is not configured`)
+  }
+  return resolved.value
+}
+
+/** Map one settings entry to the mcp-client plugin config and resolve credential projections. */
+async function toClientConfig(ctx: Context, entry: McpServerEntry): Promise<McpClient.Config> {
   const shared = {
     serverName: entry.serverName,
     toolCallTimeoutMs: entry.toolCallTimeoutMs,
@@ -111,21 +129,35 @@ function toClientConfig(entry: McpServerEntry): McpClient.Config {
     failOnStartupError: false,
     ...optionalReconnect(entry.reconnect),
   }
-  return entry.transport === 'stdio'
-    ? {
+  if (entry.transport === 'stdio') {
+    const env = { ...entry.env }
+    for (const [name, ref] of Object.entries(entry.envCredentialRefs ?? {})) {
+      env[name] = await resolveCredential(ctx, ref, entry.serverName)
+    }
+    return {
       transport: 'stdio',
       ...shared,
       command: entry.command,
       args: [...entry.args],
-      env: { ...entry.env },
+      env,
       cwd: entry.cwd,
     }
-    : {
-      transport: 'streamable-http',
-      ...shared,
-      url: entry.url,
-      headers: { ...entry.headers },
+  }
+  const headers = { ...entry.headers }
+  if (entry.authorizationCredentialRef !== undefined) {
+    // HTTP field names are case-insensitive. A credential reference is the
+    // authoritative Authorization source, so remove every literal variant.
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === 'authorization') delete headers[name]
     }
+    headers.Authorization = `Bearer ${await resolveCredential(ctx, entry.authorizationCredentialRef, entry.serverName)}`
+  }
+  return {
+    transport: 'streamable-http',
+    ...shared,
+    url: entry.url,
+    headers,
+  }
 }
 
 /**
@@ -142,6 +174,10 @@ export class McpManagerService extends Service {
   private configured: readonly McpServerEntry[] = EMPTY_SETTINGS.servers
   /** Serializes resyncs so rapid settings changes cannot interleave. */
   private syncTail: Promise<void> = Promise.resolve()
+  /** Server names whose projected credentials changed and require a fresh client. */
+  private readonly credentialInvalidations = new Set<string>()
+  /** Set synchronously when this service starts unloading. */
+  private disposing = false
   /** Reads the resolved settings section; installSettingsSection initializes it synchronously. */
   private readSettings!: () => McpSettings
 
@@ -159,6 +195,18 @@ export class McpManagerService extends Service {
       managed.toolCount = toolCount
     })
 
+    // Projected credentials are resolved at process/connect time. Restart only
+    // clients that reference the changed value so rotations take effect.
+    ctx.on('credentials/updated', (ref) => {
+      for (const entry of this.configured) {
+        const usesRef = entry.transport === 'stdio'
+          ? Object.values(entry.envCredentialRefs ?? {}).includes(ref)
+          : entry.authorizationCredentialRef === ref
+        if (usesRef) this.credentialInvalidations.add(entry.serverName)
+      }
+      if (this.credentialInvalidations.size > 0) this.enqueueResync()
+    })
+
     installSettingsSection(ctx, MCP_SETTINGS_NAMESPACE, Config, config, {
       // The helper injects the settings service and already guards onChange
       // against an unloading consumer; every resync re-reads the scope.
@@ -166,9 +214,12 @@ export class McpManagerService extends Service {
       onChange: () => {  this.enqueueResync() },
     })
 
-    // Child fibers ride this service's fiber as effects; the explicit sweep
-    // makes the unload contract awaited and observable for HMR diagnostics.
-    ctx.effect(() => async () => { await this.disposeAll() }, 'mcpManager.fibers()')
+    // Child fibers ride this service's fiber as effects; mark disposal before
+    // the first await so in-flight credential resolution cannot spawn later.
+    ctx.effect(() => async () => {
+      this.disposing = true
+      await this.disposeAll()
+    }, 'mcpManager.fibers()')
   }
 
   /**
@@ -191,6 +242,7 @@ export class McpManagerService extends Service {
 
   /** Queue one resync; a resync failure is logged and never escapes the caller. */
   private enqueueResync(): void {
+    if (this.disposing) return
     this.syncTail = this.syncTail.then(() => this.resync()).catch((error: unknown) => {
       this.ctx.logger.error(`mcp-manager: resync failed: ${String(error)}`)
     })
@@ -203,8 +255,11 @@ export class McpManagerService extends Service {
    * off the replacement that may reuse its name.
    */
   private async resync(): Promise<void> {
+    if (this.disposing) return
     const next = this.readSettings().servers
     const previous = this.configured
+    const credentialInvalidations = new Set(this.credentialInvalidations)
+    this.credentialInvalidations.clear()
     const previousByName = new Map(previous.map(entry => [entry.serverName, entry] as const))
 
     // A duplicated serverName is an ambiguous document: refuse both copies
@@ -229,6 +284,7 @@ export class McpManagerService extends Service {
       // Only a live fiber with identical config carries over; a disabled,
       // refused, or failed composition re-decides so the new document wins.
       const unchanged = !duplicated
+        && !credentialInvalidations.has(serverName)
         && previousEntry !== undefined
         && managed?.fiber !== undefined
         && deepEqualJson(previousEntry, entry)
@@ -266,18 +322,20 @@ export class McpManagerService extends Service {
     }
 
     await Promise.all(toDispose.map(fiber => fiber.dispose()))
+    if (this.disposing) return
 
     this.runtime.clear()
     for (const [name, managed] of nextRuntime) this.runtime.set(name, managed)
     this.configured = next
 
     // Spawn after the swap: the new fibers' status events must find the new
-    // entries, never a same-named predecessor mid-disposal.
-    for (const entry of toSpawn) {
+    // entries, never a same-named predecessor mid-disposal. Credential stores
+    // are independent, so one slow resolution must not block other servers.
+    await Promise.all(toSpawn.map(async (entry) => {
       const managed = this.runtime.get(entry.serverName)
       /* v8 ignore next -- toSpawn is filled only after nextRuntime claims this exact serverName. */
-      if (managed !== undefined) this.spawnInto(entry, managed)
-    }
+      if (managed !== undefined) await this.spawnInto(entry, managed)
+    }))
   }
 
   /**
@@ -286,26 +344,34 @@ export class McpManagerService extends Service {
    * @param entry - the enabled settings entry to compose.
    * @param managed - the placeholder record claimed for this entry.
    */
-  private spawnInto(entry: McpServerEntry, managed: ManagedServer): void {
+  private async spawnInto(entry: McpServerEntry, managed: ManagedServer): Promise<void> {
     try {
+      const config = await toClientConfig(this.ctx, entry)
+      if (this.disposing || this.runtime.get(entry.serverName) !== managed) return
       const fiber = this.ctx.plugin({
         name: McpClient.name,
         inject: McpClient.inject,
         apply: McpClient.apply,
         Config: McpClient.Config,
-      }, toClientConfig(entry))
+      }, config)
+      if (this.disposing || this.runtime.get(entry.serverName) !== managed) {
+        await fiber.dispose()
+        return
+      }
       managed.fiber = fiber
       // Config validation and startup failures settle the fiber without ever
       // running the supervisor, so surface them through the fiber itself.
       void fiber.await().then(
         () => {},
         (error: unknown) => {
+          if (this.disposing || this.runtime.get(entry.serverName) !== managed) return
           managed.connection = 'failed'
           managed.toolCount = 0
           this.ctx.logger.error(`mcp-manager: mcp-client(${entry.serverName}) failed to load: ${String(error)}`)
         },
       )
     } catch (error) {
+      if (this.disposing || this.runtime.get(entry.serverName) !== managed) return
       managed.connection = 'failed'
       this.ctx.logger.error(`mcp-manager: spawn mcp-client(${entry.serverName}) failed: ${String(error)}`)
     }
@@ -319,6 +385,7 @@ export class McpManagerService extends Service {
     }
     this.runtime.clear()
     this.configured = EMPTY_SETTINGS.servers
+    this.credentialInvalidations.clear()
     await Promise.all(fibers.map(fiber => fiber.dispose()))
   }
 }

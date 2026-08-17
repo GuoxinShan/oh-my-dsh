@@ -1,6 +1,6 @@
 {
   "name": "dsh-mcp-settings",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Settings-driven MCP server manager, inventory Remote, and Web settings UI for DeepSeek Harness",
   "private": true,
   "type": "module",
@@ -11,6 +11,7 @@
   "scripts": {
     "build": "pnpm run typecheck && pnpm run bundle",
     "bundle": "tsdown",
+    "dev:web": "tsdown --watch",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
     "prepare": "tsdown",
@@ -76,6 +77,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "keywords": [
@@ -100,6 +102,7 @@
     "@deepseek-ai/dsh-client-ui-primitives": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc.1 <1",
+    "@deepseek-ai/dsh-credentials": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-invariants": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-mcp-client": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-settings": ">=0.0.1-rc.1 <1",

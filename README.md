@@ -72,9 +72,11 @@ The documented DSH CLI remains the authoritative installation path; the scripts 
 
 ## Configure MCP servers
 
-Use Settings > MCP. The manager reads the same `mcp.servers` settings namespace as the in-box implementation. Credentials stay in user settings or environment variables and must not be committed to this repository.
+Use Settings > MCP. The manager reads the same `mcp.servers` settings namespace as the in-box implementation. Credentials stay in the Harness credential service: HTTP entries use `authorizationCredentialRef` to build a Bearer authorization header, while stdio entries use `envCredentialRefs` to map target environment names to credential references, so keys never enter the MCP settings document. Reference names follow the portable environment-variable form `[A-Za-z_][A-Za-z0-9_]*`.
 
-The UI supports stdio and Streamable HTTP servers, Form and JSON editing, direct enable/disable, and live status/tool counts. An enabled server is queried immediately after save and every two seconds until connected or 60 seconds elapse.
+When `authorizationCredentialRef` is present, its resolved Bearer value is authoritative and replaces any case variant of an `Authorization` entry in `headers`. A `credentials/updated` event restarts only servers that use the changed reference, so rotations reach the next process or connection without editing MCP settings.
+
+The UI supports stdio and Streamable HTTP servers, Form and JSON editing, credential references, direct enable/disable, and live status/tool counts. An enabled server is queried immediately after save and every two seconds until connected or 60 seconds elapse.
 
 ## Remove
 
@@ -98,6 +100,15 @@ pnpm test
 pnpm run bundle
 pnpm run smoke
 ```
+
+For live development, install the local checkout into the Web profile once, keep `dsh web` running, and run the bundle watcher in another terminal:
+
+```sh
+pnpm run plugin:add
+pnpm run dev:web
+```
+
+`dsh web` always mounts the client HMR receiver. The watcher rebuilds this out-of-tree package's Host and Client bundles; the running Host observes the changed bundle revision and reloads the browser plugin without a page refresh. Harness's root `pnpm run dev:web` only watches in-tree `packages/*/*` client plugins and does not replace this package-local watcher.
 
 `prepare` uses the self-contained `tsdown.config.ts` and `tsconfig.prepare.json`, so a consumer installing from GitHub does not need the sibling Harness checkout. Type checking and tests do require it.
 

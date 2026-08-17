@@ -11,6 +11,10 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { CredentialProvider, credentialRef } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 // ---- Mock MCP SDK ----
 
@@ -75,6 +79,32 @@ class MemorySettings extends SettingsProvider {
   }
 }
 
+/** Minimal writable credential provider for projection tests. */
+class MemoryCredentials extends CredentialProvider {
+  private readonly values = new Map<CredentialRef, string>()
+
+  resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
+    const value = this.values.get(ref)
+    return Promise.resolve(value === undefined ? undefined : { value, source: 'memory' })
+  }
+
+  describe(ref: CredentialRef): Promise<CredentialInfo> {
+    return Promise.resolve({ configured: this.values.has(ref), source: 'memory', writable: true })
+  }
+
+  set(ref: CredentialRef, value: string): Promise<void> {
+    this.values.set(ref, value)
+    this.notifyUpdated(ref)
+    return Promise.resolve()
+  }
+
+  unset(ref: CredentialRef): Promise<void> {
+    this.values.delete(ref)
+    this.notifyUpdated(ref)
+    return Promise.resolve()
+  }
+}
+
 /** The tool list the mock server advertises after a successful connect. */
 function listing(...names: string[]): { tools: { name: string; inputSchema: { type: string } }[]; nextCursor: undefined } {
   return {
@@ -91,6 +121,7 @@ async function boot(config?: McpSettings): Promise<{ ctx: Context; managerFiber:
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(MemoryCredentials)
   const settingsFiber = ctx.plugin(MemorySettings)
   await settingsFiber.await()
   const managerFiber = ctx.plugin(McpManagerService, config)
@@ -272,6 +303,92 @@ describe('mcp-manager composition', () => {
       ])
     })
     expect(ctx.tools.get('mcp__http__remote')).toBeDefined()
+    await ctx.fiber.dispose()
+  })
+
+  it('resolves a credential reference into the HTTP Authorization header', async () => {
+    await ctx.credentials.set(credentialRef('TEST_KEY'), 'secret-value')
+    await writeServers(ctx, [{
+      transport: 'streamable-http', serverName: 'http-auth', url: 'https://example.test/mcp',
+      headers: { 'X-Test': 'present', authorization: 'Bearer stale' }, authorizationCredentialRef: 'TEST_KEY',
+    }])
+
+    await vi.waitFor(() => { expect(ctx.mcpManager.snapshot()[0]?.connection).toBe('connected') })
+    expect(vi.mocked(StreamableHTTPClientTransport)).toHaveBeenCalledWith(
+      new URL('https://example.test/mcp'),
+      { requestInit: { headers: { 'X-Test': 'present', Authorization: 'Bearer secret-value' } } },
+    )
+    await ctx.fiber.dispose()
+  })
+
+  it('resolves credential references into the stdio child environment', async () => {
+    await ctx.credentials.set(credentialRef('TEST_KEY'), 'secret-value')
+    await writeServers(ctx, [stdioEntry('stdio-auth', {
+      env: { STATIC: 'present' }, envCredentialRefs: { Z_AI_API_KEY: 'TEST_KEY' },
+    })])
+
+    await vi.waitFor(() => { expect(ctx.mcpManager.snapshot()[0]?.connection).toBe('connected') })
+    expect(vi.mocked(StdioClientTransport)).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({ STATIC: 'present', Z_AI_API_KEY: 'secret-value' }),
+    }))
+    await ctx.fiber.dispose()
+  })
+
+  it('marks a server failed when its credential reference is missing', async () => {
+    const errors = captureErrors(ctx)
+    await writeServers(ctx, [{
+      transport: 'streamable-http', serverName: 'missing-auth', url: 'https://example.test/mcp',
+      authorizationCredentialRef: 'MISSING_KEY',
+    }])
+
+    await vi.waitFor(() => { expect(ctx.mcpManager.snapshot()[0]?.connection).toBe('failed') })
+    expect(errors.some(line => line.includes('credential "MISSING_KEY" is not configured'))).toBe(true)
+    expect(String(errors)).not.toContain('secret-value')
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects malformed credential references before composition', async () => {
+    await expect(writeServers(ctx, [{
+      transport: 'streamable-http', serverName: 'bad-auth', url: 'https://example.test/mcp',
+      authorizationCredentialRef: 'bad-ref',
+    }])).rejects.toThrow()
+    expect(ctx.mcpManager.snapshot()).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
+  it('restarts only a referencing server when its credential rotates', async () => {
+    const ref = credentialRef('TEST_KEY')
+    await ctx.credentials.set(ref, 'first-value')
+    await writeServers(ctx, [{
+      transport: 'streamable-http', serverName: 'http-auth', url: 'https://example.test/mcp',
+      authorizationCredentialRef: 'TEST_KEY',
+    }])
+    await vi.waitFor(() => { expect(ctx.mcpManager.snapshot()[0]?.connection).toBe('connected') })
+
+    await ctx.credentials.set(ref, 'second-value')
+
+    await vi.waitFor(() => { expect(vi.mocked(StreamableHTTPClientTransport)).toHaveBeenCalledTimes(2) })
+    expect(vi.mocked(StreamableHTTPClientTransport)).toHaveBeenLastCalledWith(
+      new URL('https://example.test/mcp'),
+      { requestInit: { headers: { Authorization: 'Bearer second-value' } } },
+    )
+    await ctx.fiber.dispose()
+  })
+
+  it('does not spawn after disposal while credential resolution is pending', async () => {
+    let resolveCredential!: (value: ResolvedCredential) => void
+    const pendingCredential = new Promise<ResolvedCredential>((resolve) => { resolveCredential = resolve })
+    const resolve = vi.spyOn(ctx.credentials, 'resolve').mockReturnValueOnce(pendingCredential)
+    await writeServers(ctx, [stdioEntry('delayed', { envCredentialRefs: { API_KEY: 'TEST_KEY' } })])
+    await vi.waitFor(() => { expect(resolve).toHaveBeenCalledWith(credentialRef('TEST_KEY')) })
+
+    await managerFiber.dispose()
+    resolveCredential({ value: 'late-value', source: 'memory' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(vi.mocked(StdioClientTransport)).not.toHaveBeenCalled()
+    expect(ctx.get('mcpManager')).toBeUndefined()
     await ctx.fiber.dispose()
   })
 

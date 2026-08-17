@@ -72,9 +72,11 @@ DSH CLI 是权威安装路径；这些脚本不会直接修改 profile 文件。
 
 ## 配置 MCP 服务器
 
-使用“设置 > MCP”。manager 读取与内置实现相同的 `mcp.servers` 设置命名空间。凭据应保存在用户设置或环境变量中，不能提交到本仓库。
+使用“设置 > MCP”。manager 读取与内置实现相同的 `mcp.servers` 设置命名空间。凭据保存在 Harness 凭据服务中；HTTP 条目通过 `authorizationCredentialRef` 生成 Bearer 认证头，stdio 条目通过 `envCredentialRefs` 把目标环境变量映射到凭据引用，因此密钥无需进入 MCP 设置文档。引用名必须符合可移植环境变量格式 `[A-Za-z_][A-Za-z0-9_]*`。
 
-UI 支持 stdio 与 Streamable HTTP、表单与 JSON 编辑、直接启停以及实时状态/工具数量。保存已启用服务器后立即查询一次，随后每两秒查询，直到连接成功或经过 60 秒。
+配置 `authorizationCredentialRef` 后，解析得到的 Bearer 值是权威来源，会替换 `headers` 中任意大小写形式的 `Authorization` 项。收到 `credentials/updated` 事件时，仅重启使用该引用的服务器，因此轮换凭据无需修改 MCP 设置即可作用于下一次进程启动或连接。
+
+UI 支持 stdio 与 Streamable HTTP、表单与 JSON 编辑、凭据引用、直接启停以及实时状态/工具数量。保存已启用服务器后立即查询一次，随后每两秒查询，直到连接成功或经过 60 秒。
 
 ## 移除
 
@@ -98,6 +100,15 @@ pnpm test
 pnpm run bundle
 pnpm run smoke
 ```
+
+实时开发时，先把本地 checkout 安装到 Web profile，保持 `dsh web` 运行，再在另一个终端启动本插件的 bundle watcher：
+
+```sh
+pnpm run plugin:add
+pnpm run dev:web
+```
+
+`dsh web` 始终挂载 Client HMR 接收端。watcher 会重建这个仓库外插件的 Host 和 Client bundle；运行中的 Host 发现 bundle revision 变化后，会让浏览器插件自动热替换，无需刷新页面。Harness 根目录的 `pnpm run dev:web` 只监视仓库内 `packages/*/*` 的 Client 插件，不能替代本插件自己的 watcher。
 
 `prepare` 使用自包含的 `tsdown.config.ts` 与 `tsconfig.prepare.json`，因此 GitHub 安装方不需要相邻 Harness checkout；类型检查与测试需要它。
 

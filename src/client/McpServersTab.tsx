@@ -3,13 +3,17 @@ import type { McpInventorySnapshot, McpServerStatus } from '../inventory-types.t
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   Button,
+  IconChevronDownOutline14,
   IconChevronLeftOutline14,
+  IconCodeOutline16,
   IconEditOutline16,
+  IconGlobeOutline14,
   IconLoadingOutline16,
   IconPlusOutline16,
   IconRefreshOutline16,
   IconSearchOutline16,
   IconTrashOutline16,
+  Menu,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { IconPlugOutline16 } from './IconPlug.tsx'
@@ -20,6 +24,7 @@ import {
   type McpServerEntry,
   blankDraft,
   draftFromEntry,
+  isCredentialRef,
   mapFromText,
   type McpServerDraft,
   validateDrafts,
@@ -59,6 +64,13 @@ function validMap(text: string): Record<string, string> {
   return 'value' in parsed ? parsed.value : {}
 }
 
+function mapIssue(text: string, credentialRefs = false): McpSettingsLocaleKey | undefined {
+  const parsed = mapFromText(text)
+  if ('error' in parsed) return parsed.error === 'invalidJson' ? 'invalidJson' : 'invalidShape'
+  if (credentialRefs && Object.values(parsed.value).some(ref => !isCredentialRef(ref))) return 'invalidCredentialRef'
+  return undefined
+}
+
 function entryFromDraft(draft: McpServerDraft): McpServerEntry {
   const shared = { serverName: draft.serverName.trim(), enabled: draft.enabled, toolCallTimeoutMs: 60_000 }
   return draft.transport === 'stdio'
@@ -68,6 +80,7 @@ function entryFromDraft(draft: McpServerDraft): McpServerEntry {
       command: draft.command.trim(),
       args: argsFromText(draft.args),
       env: validMap(draft.env),
+      envCredentialRefs: validMap(draft.envCredentialRefs),
       cwd: draft.cwd.trim(),
     }
     : {
@@ -75,6 +88,9 @@ function entryFromDraft(draft: McpServerDraft): McpServerEntry {
       ...shared,
       url: draft.url.trim(),
       headers: validMap(draft.headers),
+      ...draft.authorizationCredentialRef.trim() === ''
+        ? {}
+        : { authorizationCredentialRef: draft.authorizationCredentialRef.trim() },
     }
 }
 
@@ -86,6 +102,7 @@ function jsonFromDraft(draft: McpServerDraft): string {
       command: draft.command,
       args: argsFromText(draft.args),
       env: validMap(draft.env),
+      envCredentialRefs: validMap(draft.envCredentialRefs),
       cwd: draft.cwd,
       enabled: draft.enabled,
     }
@@ -93,6 +110,9 @@ function jsonFromDraft(draft: McpServerDraft): string {
       type: 'streamable-http',
       url: draft.url,
       headers: validMap(draft.headers),
+      ...draft.authorizationCredentialRef.trim() === ''
+        ? {}
+        : { authorizationCredentialRef: draft.authorizationCredentialRef.trim() },
       enabled: draft.enabled,
     }
   return JSON.stringify({ [name]: config }, null, 2)
@@ -118,22 +138,32 @@ export function draftFromJson(text: string, key: string): McpServerDraft | null 
       if (typeof config.command !== 'string') return null
       if (config.args !== undefined && (!Array.isArray(config.args) || config.args.some(value => typeof value !== 'string'))) return null
       if (config.env !== undefined && !isStringMap(config.env)) return null
+      if (config.envCredentialRefs !== undefined && (
+        !isStringMap(config.envCredentialRefs)
+        || Object.values(config.envCredentialRefs).some(ref => !isCredentialRef(ref))
+      )) return null
       if (config.cwd !== undefined && typeof config.cwd !== 'string') return null
       return {
         ...blankDraft(), key, serverName, transport: 'stdio', enabled,
         command: config.command,
         args: Array.isArray(config.args) ? config.args.join(' ') : '',
         env: config.env === undefined ? '' : JSON.stringify(config.env, null, 2),
+        envCredentialRefs: config.envCredentialRefs === undefined ? '' : JSON.stringify(config.envCredentialRefs, null, 2),
         cwd: typeof config.cwd === 'string' ? config.cwd : '',
       }
     }
     if (type === 'streamable-http') {
       if (typeof config.url !== 'string') return null
       if (config.headers !== undefined && !isStringMap(config.headers)) return null
+      if (config.authorizationCredentialRef !== undefined && (
+        typeof config.authorizationCredentialRef !== 'string'
+        || !isCredentialRef(config.authorizationCredentialRef)
+      )) return null
       return {
         ...blankDraft(), key, serverName, transport: 'streamable-http', enabled,
         url: config.url,
         headers: config.headers === undefined ? '' : JSON.stringify(config.headers, null, 2),
+        authorizationCredentialRef: typeof config.authorizationCredentialRef === 'string' ? config.authorizationCredentialRef : '',
       }
     }
     return null
@@ -170,6 +200,7 @@ export function McpServersTab(props: {
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusFailed, setStatusFailed] = useState(false)
   const [connectionPollsRemaining, setConnectionPollsRemaining] = useState(CONNECTION_POLL_LIMIT)
+  const [transportMenuOpen, setTransportMenuOpen] = useState(false)
 
   const refreshStatus = useCallback((): void => {
     setStatusLoading(true)
@@ -239,8 +270,10 @@ export function McpServersTab(props: {
       .map((entry, index) => draftFromEntry(entry, `existing-${index}`))
     validationRows.push(draft)
     const issues = validateDrafts(validationRows).get(draft.key)
-    const mapText = draft.transport === 'stdio' ? draft.env : draft.headers
-    const mapInvalid = mapText.trim() !== '' && 'error' in mapFromText(mapText)
+    const envIssue = draft.transport === 'stdio' ? mapIssue(draft.env) : undefined
+    const envCredentialRefsIssue = draft.transport === 'stdio' ? mapIssue(draft.envCredentialRefs, true) : undefined
+    const headersIssue = draft.transport === 'streamable-http' ? mapIssue(draft.headers) : undefined
+    const mapInvalid = envIssue !== undefined || envCredentialRefsIssue !== undefined || headersIssue !== undefined
     const invalid = parsedJson === null || issues !== undefined || mapInvalid
     const update = (patch: Partial<McpServerDraft>): void => {
       const nextDraft = { ...editor.draft, ...patch }
@@ -301,25 +334,62 @@ export function McpServersTab(props: {
                 <input required aria-label={t('serverName')} value={editor.draft.serverName} aria-invalid={editor.attempted && issues?.fields.serverName !== undefined} onChange={(event) => { update({ serverName: event.currentTarget.value }) }} />
                 {editor.attempted && issues?.fields.serverName === 'duplicate' ? <em>{t('duplicate')}</em> : null}
               </label>
-              <label className={css.field}>
+              <div className={css.field}>
                 <span>{t('transport')}</span>
-                <select value={editor.draft.transport} onChange={(event) => { update({ transport: event.currentTarget.value as McpServerDraft['transport'] }) }}>
-                  <option value="stdio">{t('transportStdio')}</option>
-                  <option value="streamable-http">{t('transportHttp')}</option>
-                </select>
-              </label>
+                <Menu
+                  open={transportMenuOpen}
+                  portal
+                  compact
+                  className={css.transportMenu!}
+                  selectedId={editor.draft.transport}
+                  items={[
+                    { id: 'stdio', label: t('transportStdio'), icon: <IconCodeOutline16 size={14} /> },
+                    { id: 'streamable-http', label: t('transportHttp'), icon: <IconGlobeOutline14 size={14} /> },
+                  ]}
+                  onClose={() => { setTransportMenuOpen(false) }}
+                  onSelect={(id) => {
+                    update({ transport: id as McpServerDraft['transport'] })
+                    setTransportMenuOpen(false)
+                  }}
+                  anchor={(
+                    <button
+                      type="button"
+                      className={css.transportTrigger}
+                      aria-label={t('transport')}
+                      aria-haspopup="menu"
+                      aria-expanded={transportMenuOpen}
+                      onClick={() => { setTransportMenuOpen(open => !open) }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+                        event.preventDefault()
+                        setTransportMenuOpen(true)
+                      }}
+                    >
+                      <span className={css.transportIcon} aria-hidden="true">
+                        {editor.draft.transport === 'stdio' ? <IconCodeOutline16 size={14} /> : <IconGlobeOutline14 size={14} />}
+                      </span>
+                      <span className={css.transportValue}>
+                        {editor.draft.transport === 'stdio' ? t('transportStdio') : t('transportHttp')}
+                      </span>
+                      <IconChevronDownOutline14 className={css.transportChevron} size={14} />
+                    </button>
+                  )}
+                />
+              </div>
             </div>
             {editor.draft.transport === 'stdio' ? (
               <>
                 <label className={css.field}><span>{t('command')}<b className={css.requiredMark} aria-hidden="true">*</b></span><input required aria-label={t('command')} value={editor.draft.command} aria-invalid={editor.attempted && issues?.fields.command !== undefined} onChange={(event) => { update({ command: event.currentTarget.value }) }} /></label>
                 <label className={css.field}><span>{t('args')}</span><input value={editor.draft.args} onChange={(event) => { update({ args: event.currentTarget.value }) }} /></label>
                 <label className={css.field}><span>{t('cwd')}</span><input value={editor.draft.cwd} onChange={(event) => { update({ cwd: event.currentTarget.value }) }} /></label>
-                <label className={css.field}><span>{t('env')}</span><textarea rows={7} value={editor.draft.env} aria-invalid={mapInvalid} onChange={(event) => { update({ env: event.currentTarget.value }) }} />{mapInvalid ? <em>{t('invalidJson')}</em> : null}</label>
+                <label className={css.field}><span>{t('env')}</span><textarea rows={7} value={editor.draft.env} aria-invalid={envIssue !== undefined} onChange={(event) => { update({ env: event.currentTarget.value }) }} />{envIssue !== undefined ? <em>{t(envIssue)}</em> : null}</label>
+                <label className={css.field}><span>{t('envCredentialRefs')}</span><textarea rows={4} value={editor.draft.envCredentialRefs} aria-invalid={envCredentialRefsIssue !== undefined} onChange={(event) => { update({ envCredentialRefs: event.currentTarget.value }) }} />{envCredentialRefsIssue !== undefined ? <em>{t(envCredentialRefsIssue)}</em> : null}</label>
               </>
             ) : (
               <>
                 <label className={css.field}><span>{t('url')}<b className={css.requiredMark} aria-hidden="true">*</b></span><input required aria-label={t('url')} value={editor.draft.url} aria-invalid={editor.attempted && issues?.fields.url !== undefined} onChange={(event) => { update({ url: event.currentTarget.value }) }} /></label>
-                <label className={css.field}><span>{t('headers')}</span><textarea rows={7} value={editor.draft.headers} aria-invalid={mapInvalid} onChange={(event) => { update({ headers: event.currentTarget.value }) }} />{mapInvalid ? <em>{t('invalidJson')}</em> : null}</label>
+                <label className={css.field}><span>{t('headers')}</span><textarea rows={7} value={editor.draft.headers} aria-invalid={headersIssue !== undefined} onChange={(event) => { update({ headers: event.currentTarget.value }) }} />{headersIssue !== undefined ? <em>{t(headersIssue)}</em> : null}</label>
+                <label className={css.field}><span>{t('authorizationCredentialRef')}</span><input value={editor.draft.authorizationCredentialRef} aria-invalid={issues?.fields.authorizationCredentialRef !== undefined} onChange={(event) => { update({ authorizationCredentialRef: event.currentTarget.value }) }} />{issues?.fields.authorizationCredentialRef !== undefined ? <em>{t('invalidCredentialRef')}</em> : null}</label>
               </>
             )}
           </div>
@@ -337,6 +407,7 @@ export function McpServersTab(props: {
   const filtered = servers.filter(server => `${server.serverName} ${summary(server)}`.toLocaleLowerCase().includes(normalizedQuery))
   const openEditor = (index: number | null): void => {
     const draft = index === null ? blankDraft() : draftFromEntry(servers[index]!, `edit-${servers[index]!.serverName}`)
+    setTransportMenuOpen(false)
     setEditor({ index, draft, mode: 'form', json: jsonFromDraft(draft), attempted: false })
   }
 

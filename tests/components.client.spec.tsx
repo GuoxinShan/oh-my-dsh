@@ -72,6 +72,7 @@ const STORED: McpServerEntry[] = [
     command: 'npx',
     args: ['-y', 'server-alpha'],
     env: { TOKEN: 'x' },
+    envCredentialRefs: { API_TOKEN: 'ALPHA_KEY' },
     cwd: '/tmp',
     toolCallTimeoutMs: 60_000,
   },
@@ -81,6 +82,7 @@ const STORED: McpServerEntry[] = [
     enabled: false,
     url: 'http://localhost/mcp',
     headers: {},
+    authorizationCredentialRef: 'BETA_KEY',
     toolCallTimeoutMs: 60_000,
   },
 ]
@@ -189,12 +191,16 @@ describe('McpServersTab', () => {
     fireEvent.change(screen.getByLabelText(en.command), { target: { value: 'node' } })
     fireEvent.change(screen.getByLabelText(en.args), { target: { value: 'server.js --quiet' } })
     fireEvent.change(screen.getByLabelText(en.env), { target: { value: '{"MODE":"test"}' } })
+    fireEvent.change(screen.getByLabelText(en.envCredentialRefs), { target: { value: '{"API_TOKEN":"UPDATED_KEY"}' } })
     fireEvent.change(screen.getByLabelText(en.cwd), { target: { value: '/workspace' } })
     fireEvent.click(screen.getByRole('button', { name: en.save }))
 
     await waitFor(() => {
       expect(set).toHaveBeenCalledWith('servers', [
-        expect.objectContaining({ serverName: 'alpha', command: 'node', args: ['server.js', '--quiet'], env: { MODE: 'test' }, cwd: '/workspace' }),
+        expect.objectContaining({
+          serverName: 'alpha', command: 'node', args: ['server.js', '--quiet'], env: { MODE: 'test' },
+          envCredentialRefs: { API_TOKEN: 'UPDATED_KEY' }, cwd: '/workspace',
+        }),
         STORED[1],
       ])
     })
@@ -206,15 +212,22 @@ describe('McpServersTab', () => {
     render(<McpServersTab scope={scope} listStatus={listStatus} t={t} />)
     fireEvent.click(screen.getByRole('button', { name: en.addServer }))
     fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'http-one' } })
-    fireEvent.change(screen.getByLabelText(en.transport), { target: { value: 'streamable-http' } })
+    const transport = screen.getByRole('button', { name: en.transport })
+    expect(transport.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(transport)
+    expect(transport.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('menuitem', { name: en.transportHttp }))
+    expect(transport.textContent).toContain(en.transportHttp)
+    expect(transport.getAttribute('aria-expanded')).toBe('false')
     fireEvent.change(screen.getByLabelText(/^URL/), { target: { value: 'http://one/mcp' } })
-    fireEvent.change(screen.getByLabelText(en.headers), { target: { value: '{"Authorization":"Bearer x"}' } })
+    fireEvent.change(screen.getByLabelText(en.headers), { target: { value: '{"X-Test":"present"}' } })
+    fireEvent.change(screen.getByLabelText(en.authorizationCredentialRef), { target: { value: 'HTTP_KEY' } })
     fireEvent.click(screen.getByRole('button', { name: en.save }))
 
     await waitFor(() => {
       expect(set).toHaveBeenCalledWith('servers', [expect.objectContaining({
         transport: 'streamable-http', serverName: 'http-one', url: 'http://one/mcp',
-        headers: { Authorization: 'Bearer x' },
+        headers: { 'X-Test': 'present' }, authorizationCredentialRef: 'HTTP_KEY',
       })])
     })
   })
@@ -388,13 +401,23 @@ describe('McpServersTab', () => {
     await waitFor(() => { expect(set).toHaveBeenLastCalledWith('servers', [STORED[1]]) })
   })
 
-  it('validates a stdio environment map', async () => {
+  it('validates stdio environment and credential-reference maps independently', async () => {
     const { scope } = fakeScope({ servers: STORED })
     render(<McpServersTab scope={scope} listStatus={listStatus} t={t} />)
     await waitFor(() => { expect(screen.getAllByRole('button', { name: en.editServer })).toHaveLength(2) })
     fireEvent.click(screen.getAllByRole('button', { name: en.editServer })[0]!)
-    fireEvent.change(screen.getByLabelText(en.env), { target: { value: '{bad' } })
+    const env = screen.getByLabelText(en.env)
+    const refs = screen.getByLabelText(en.envCredentialRefs)
+    fireEvent.change(env, { target: { value: '{bad' } })
     expect(screen.getByText(en.invalidJson)).toBeTruthy()
+    expect(env.getAttribute('aria-invalid')).toBe('true')
+    expect(refs.getAttribute('aria-invalid')).toBe('false')
+
+    fireEvent.change(env, { target: { value: '{}' } })
+    fireEvent.change(refs, { target: { value: '{"API_KEY":"bad-ref"}' } })
+    expect(screen.getByText(en.invalidCredentialRef)).toBeTruthy()
+    expect(env.getAttribute('aria-invalid')).toBe('false')
+    expect(refs.getAttribute('aria-invalid')).toBe('true')
   })
 
   it('shows the saving label while a write is pending', async () => {
@@ -455,16 +478,21 @@ describe('JSON editor parser', () => {
   const parse = (value: unknown) => draftFromJson(typeof value === 'string' ? value : JSON.stringify(value) ?? '', 'draft-key')
 
   it('accepts both transports and applies optional-field defaults', () => {
-    expect(parse({ stdio: { type: 'stdio', command: 'node' } })).toMatchObject({
+    expect(parse({ stdio: { type: 'stdio', command: 'node', envCredentialRefs: { API_KEY: 'TEST_KEY' } } })).toMatchObject({
       key: 'draft-key', serverName: 'stdio', transport: 'stdio', enabled: true,
-      command: 'node', args: '', env: '', cwd: '',
+      command: 'node', args: '', env: '',
+      envCredentialRefs: JSON.stringify({ API_KEY: 'TEST_KEY' }, null, 2), cwd: '',
     })
     expect(parse({ http: { type: null, transport: 'streamable-http', url: 'https://example.test/mcp' } })).toMatchObject({
       serverName: 'http', transport: 'streamable-http', enabled: true,
       url: 'https://example.test/mcp', headers: '',
     })
-    expect(parse({ http: { type: 'streamable-http', url: 'x', headers: { Authorization: 'token' }, enabled: false } })).toMatchObject({
-      enabled: false, headers: JSON.stringify({ Authorization: 'token' }, null, 2),
+    expect(parse({ http: {
+      type: 'streamable-http', url: 'x', headers: { 'X-Test': 'present' },
+      authorizationCredentialRef: 'HTTP_KEY', enabled: false,
+    } })).toMatchObject({
+      enabled: false, headers: JSON.stringify({ 'X-Test': 'present' }, null, 2),
+      authorizationCredentialRef: 'HTTP_KEY',
     })
   })
 
@@ -483,6 +511,8 @@ describe('JSON editor parser', () => {
       { type: 'stdio', command: 'x', env: [] },
       { type: 'stdio', command: 'x', env: 'bad' },
       { type: 'stdio', command: 'x', env: { KEY: 1 } },
+      { type: 'stdio', command: 'x', envCredentialRefs: { API_KEY: 'bad-ref' } },
+      { type: 'stdio', command: 'x', envCredentialRefs: { API_KEY: 1 } },
       { type: 'stdio', command: 'x', cwd: 1 },
     ]
     for (const config of invalid) expect(parse({ one: config })).toBeNull()
@@ -491,6 +521,8 @@ describe('JSON editor parser', () => {
   it('rejects invalid HTTP fields and unknown transports', () => {
     expect(parse({ one: { type: 'streamable-http' } })).toBeNull()
     expect(parse({ one: { type: 'streamable-http', url: 'x', headers: { KEY: 1 } } })).toBeNull()
+    expect(parse({ one: { type: 'streamable-http', url: 'x', authorizationCredentialRef: 'bad-ref' } })).toBeNull()
+    expect(parse({ one: { type: 'streamable-http', url: 'x', authorizationCredentialRef: 1 } })).toBeNull()
     expect(parse({ one: { type: 'unknown', url: 'x' } })).toBeNull()
   })
 })
@@ -518,16 +550,21 @@ describe('drafts helpers', () => {
     const draft = draftFromEntry(STORED[0]!, 'k1')
     expect(draft.command).toBe('npx')
     expect(draft.args).toBe('-y server-alpha')
+    expect(draft.envCredentialRefs).toBe(JSON.stringify({ API_TOKEN: 'ALPHA_KEY' }, null, 2))
     const http = draftFromEntry(STORED[1]!, 'k2')
     expect(http.url).toBe('http://localhost/mcp')
+    expect(http.authorizationCredentialRef).toBe('BETA_KEY')
     expect(blankDraft().transport).toBe('stdio')
   })
 
   it('validates required fields and transport-specific gaps', () => {
     const issues = validateDrafts([{ ...blankDraft(), serverName: '', transport: 'stdio', command: '' }])
     expect([...issues.values()][0]!.fields).toEqual({ serverName: 'required', command: 'required' })
-    const http = validateDrafts([{ ...blankDraft(), serverName: 'x', transport: 'streamable-http', url: '' }])
-    expect([...http.values()][0]!.fields).toEqual({ url: 'required' })
+    const http = validateDrafts([{
+      ...blankDraft(), serverName: 'x', transport: 'streamable-http', url: '',
+      authorizationCredentialRef: 'bad-ref',
+    }])
+    expect([...http.values()][0]!.fields).toEqual({ url: 'required', authorizationCredentialRef: 'invalidCredentialRef' })
     const first = { ...blankDraft(), key: 'first', serverName: 'same', command: '' }
     const duplicate = { ...blankDraft(), key: 'second', serverName: 'same', transport: 'streamable-http' as const, url: '' }
     const duplicateIssues = validateDrafts([first, duplicate])

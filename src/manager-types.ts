@@ -26,6 +26,8 @@ export interface StdioMcpServerEntry {
   readonly args: readonly string[]
   /** Extra env vars merged on top of scrubbed ambient env. */
   readonly env: Readonly<Record<string, string>>
+  /** Child environment names mapped to credential references resolved at spawn. */
+  readonly envCredentialRefs?: Readonly<Record<string, string>>
   /** Working directory for the child process. */
   readonly cwd: string
   /** Per-tool-call timeout in milliseconds. */
@@ -46,6 +48,8 @@ export interface HttpMcpServerEntry {
   readonly url: string
   /** Additional headers attached to MCP requests. */
   readonly headers: Readonly<Record<string, string>>
+  /** Credential reference resolved into an Authorization Bearer header at connect time. */
+  readonly authorizationCredentialRef?: string
   /** Per-tool-call timeout in milliseconds. */
   readonly toolCallTimeoutMs: number
   /** Automatic reconnect policy; omission uses the mcp-client defaults. */

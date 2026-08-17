@@ -16,6 +16,7 @@ export interface StdioMcpEntry {
   readonly command: string
   readonly args: readonly string[]
   readonly env: Readonly<Record<string, string>>
+  readonly envCredentialRefs?: Readonly<Record<string, string>>
   readonly cwd: string
   readonly toolCallTimeoutMs: number
 }
@@ -27,6 +28,7 @@ export interface HttpMcpEntry {
   readonly enabled: boolean
   readonly url: string
   readonly headers: Readonly<Record<string, string>>
+  readonly authorizationCredentialRef?: string
   readonly toolCallTimeoutMs: number
 }
 
@@ -35,6 +37,14 @@ export type McpServerEntry = StdioMcpEntry | HttpMcpEntry
 
 /** Editable transport selector values. */
 export type McpTransport = 'stdio' | 'streamable-http'
+
+/** Mirrors the DSH credential service's reference-name contract. */
+export const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Whether a string is a valid DSH credential reference name. */
+export function isCredentialRef(value: string): boolean {
+  return CREDENTIAL_REF_PATTERN.test(value)
+}
 
 /**
  * One server row under edit. Numeric and map fields stay textual while the
@@ -49,9 +59,11 @@ export interface McpServerDraft {
   command: string
   args: string
   env: string
+  envCredentialRefs: string
   cwd: string
   url: string
   headers: string
+  authorizationCredentialRef: string
 }
 
 /** Default blank draft with a stable identity for React keys.
@@ -66,9 +78,11 @@ export function blankDraft(): McpServerDraft {
     command: '',
     args: '',
     env: '',
+    envCredentialRefs: '',
     cwd: '',
     url: '',
     headers: '',
+    authorizationCredentialRef: '',
   }
 }
 
@@ -127,9 +141,11 @@ export function draftFromEntry(entry: McpServerEntry, key: string): McpServerDra
     command: '',
     args: '',
     env: '',
+    envCredentialRefs: '',
     cwd: '',
     url: '',
     headers: '',
+    authorizationCredentialRef: '',
   }
   return entry.transport === 'stdio'
     ? {
@@ -137,12 +153,14 @@ export function draftFromEntry(entry: McpServerEntry, key: string): McpServerDra
       command: entry.command,
       args: entry.args.join(' '),
       env: mapToText(entry.env),
+      envCredentialRefs: mapToText(entry.envCredentialRefs),
       cwd: entry.cwd,
     }
     : {
       ...base,
       url: entry.url,
       headers: mapToText(entry.headers),
+      authorizationCredentialRef: entry.authorizationCredentialRef ?? '',
     }
 }
 
@@ -178,7 +196,11 @@ export function validateDrafts(drafts: readonly McpServerDraft[]): Map<string, D
       }
     }
     if (draft.transport === 'stdio' && draft.command.trim() === '') fields.command = 'required'
-    if (draft.transport === 'streamable-http' && draft.url.trim() === '') fields.url = 'required'
+    if (draft.transport === 'streamable-http') {
+      if (draft.url.trim() === '') fields.url = 'required'
+      const ref = draft.authorizationCredentialRef.trim()
+      if (ref !== '' && !isCredentialRef(ref)) fields.authorizationCredentialRef = 'invalidCredentialRef'
+    }
     if (Object.keys(fields).length > 0) issues.set(draft.key, { fields })
   }
   return issues
