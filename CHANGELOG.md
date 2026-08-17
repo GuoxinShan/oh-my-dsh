@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1] - 2026-08-18
+
+### Changed
+
+- Restyled the MCP server list to match the DSH settings-panel design language shared with the Models and Plugins sections: separate outlined row cards (radius 12, `border-l2`, hover highlight) instead of one filled container with hairline dividers.
+- Server rows now lead with the 8px status dot beside the name, use outlined transport/tool tags matching the Models `rowTag`, and dim disabled rows.
+- Aligned section typography and controls with the settings panel: 16/24 title, 14/22 intro, 32px search and form fields, caption-sized status text, and a danger hover on the delete action.
+- The editor surface now uses the filled module card (`bg-module-platform`, radius 12) like the Models provider editor.
+
+### Removed
+
+- Dropped the per-row plug glyph and the unused `IconPlug` component and legacy `.table` styles.
+
+### Verification
+
+- TypeScript project typecheck.
+- 56 Vitest tests.
+- Production bundle and JavaScript smoke checks.
+- Live verification of the server list and editor in DSH Web, and `git diff --check`.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added

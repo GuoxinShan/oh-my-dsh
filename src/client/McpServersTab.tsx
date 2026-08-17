@@ -16,7 +16,6 @@ import {
   Menu,
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { IconPlugOutline16 } from './IconPlug.tsx'
 import type { TranslateSection } from './McpSettingsSection.tsx'
 import type { McpSettingsLocaleKey } from './locales.ts'
 import {
@@ -446,7 +445,6 @@ export function McpServersTab(props: {
               : connectionLabel(server, live, t)
             return (
               <li className={css.serverRow} key={server.serverName} data-enabled={server.enabled} data-connection={connection}>
-                <div className={css.serverGlyph}><IconPlugOutline16 size={17} /></div>
                 <div className={css.serverMain}>
                   <div className={css.serverTitle}>
                     {connectionPending
@@ -465,7 +463,7 @@ export function McpServersTab(props: {
                     <span />
                   </label>
                   <Tooltip label={t('editServer')} side="top"><button type="button" className={css.iconButton} aria-label={t('editServer')} onClick={() => { openEditor(index) }}><IconEditOutline16 size={15} /></button></Tooltip>
-                  <Tooltip label={t('removeServer')} side="top"><button type="button" className={css.iconButton} aria-label={t('removeServer')} onClick={() => { persist(servers.filter((_item, itemIndex) => itemIndex !== index)) }}><IconTrashOutline16 size={15} /></button></Tooltip>
+                  <Tooltip label={t('removeServer')} side="top"><button type="button" className={`${css.iconButton} ${css.iconButtonDanger}`} aria-label={t('removeServer')} onClick={() => { persist(servers.filter((_item, itemIndex) => itemIndex !== index)) }}><IconTrashOutline16 size={15} /></button></Tooltip>
                 </div>
               </li>
             )
