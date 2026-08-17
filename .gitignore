@@ -1,0 +1,23 @@
+# Rust
+/target/
+src-tauri/target/
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+out/
+
+# Tauri
+src-tauri/gen/
+
+# Logs & local
+*.log
+.DS_Store
+.env
+.env.*
+
+# Editor
+.idea/
+.vscode/
+*.swp
