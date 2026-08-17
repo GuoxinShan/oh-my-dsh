@@ -8,6 +8,10 @@ node_modules/
 dist/
 out/
 
+# dsh-desktop-bridge：类型解析锚（指向 DSH checkout 的符号链接）与构建产物
+plugin/dsh-desktop-bridge/dsh
+plugin/dsh-desktop-bridge/lib/
+
 # Tauri
 src-tauri/gen/
 

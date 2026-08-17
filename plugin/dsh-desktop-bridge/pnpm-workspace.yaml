@@ -1,0 +1,5 @@
+allowBuilds:
+  # tsdown 0.22 bundles through rolldown; esbuild's native binary is never
+  # executed by this package's build. Declared false so the prompt stops
+  # appearing and no unneeded install-time script runs.
+  esbuild: false
