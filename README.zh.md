@@ -116,6 +116,8 @@ GitHub CI 会在没有 Harness checkout 的情况下验证消费端安装、bund
 
 ## 兼容性
 
+当前兼容的 DeepSeek Harness 版本：**0.1.0-rc.7**（`@deepseek-ai/dsh-root` 与内置 `@deepseek-ai/dsh-mcp-client`，均为 0.1.0-rc.7）。自 v0.2.2 起，manager 在本地镜像重连默认值与服务器名 pattern，不再导入 `dsh-mcp-client` 未发布的导出，因此可以在干净的 rc.7 harness 上加载。Harness 版本必须发出 `mcp-client/status` 事件。
+
 该 bundle 替换当前 DeepSeek Harness RC 版本线提供的扩展点，并复用内置 `@deepseek-ai/dsh-mcp-client`。DSH 仍处于预发布阶段；这些扩展点变化时，需要一起更新 peer 范围、Typert descriptor 和 bundle patch。
 
 ## 来源与许可

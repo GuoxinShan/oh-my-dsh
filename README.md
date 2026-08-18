@@ -116,6 +116,8 @@ GitHub CI verifies the consumer-side install, bundle, JavaScript syntax, and pac
 
 ## Compatibility
 
+Current compatible DeepSeek Harness version: **0.1.0-rc.7** (`@deepseek-ai/dsh-root` and the in-box `@deepseek-ai/dsh-mcp-client`, both `0.1.0-rc.7`). Since v0.2.2 the manager mirrors the reconnect defaults and server-name pattern locally instead of importing unpublished `dsh-mcp-client` exports, so it loads on a clean rc.7 harness. The harness build must emit the `mcp-client/status` event.
+
 This bundle replaces extension points present in the current DeepSeek Harness release-candidate line and deliberately reuses the in-box `@deepseek-ai/dsh-mcp-client`. DSH is pre-release software; update the peer ranges, Typert descriptor, and bundle patch together when those extension points change.
 
 ## Origin and license

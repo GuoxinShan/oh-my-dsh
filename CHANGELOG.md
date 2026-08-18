@@ -2,11 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [0.2.2] - 2026-08-18
 
 ### Fixed
 
 - Mirrored `RECONNECT_DEFAULTS` and `SERVER_NAME_PATTERN` locally instead of reading `McpClient.RECONNECT_DEFAULTS` / `McpClient.SERVER_NAME_PATTERN` at module load: neither is exported by any published `@deepseek-ai/dsh-mcp-client` build, so the manager threw during evaluation against a clean harness and took down every settings-composed MCP server with it. The spawned plugin's own Config schema stays the final gate at spawn.
+
+### Compatibility
+
+- Verified against DeepSeek Harness `0.1.0-rc.7` (`@deepseek-ai/dsh-root` and the in-box `@deepseek-ai/dsh-mcp-client`, both `0.1.0-rc.7`). Since the mirrored constants no longer touch `dsh-mcp-client` exports at import time, the manager loads on clean rc.7 harnesses that removed those exports. The harness must still emit the `mcp-client/status` event.
 
 ### Verification
 
