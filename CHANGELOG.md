@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Mirrored `RECONNECT_DEFAULTS` and `SERVER_NAME_PATTERN` locally instead of reading `McpClient.RECONNECT_DEFAULTS` / `McpClient.SERVER_NAME_PATTERN` at module load: neither is exported by any published `@deepseek-ai/dsh-mcp-client` build, so the manager threw during evaluation against a clean harness and took down every settings-composed MCP server with it. The spawned plugin's own Config schema stays the final gate at spawn.
+
+### Verification
+
+- TypeScript project typecheck and 56 Vitest tests against a harness tree without the unpublished exports.
+
 ## [0.2.1] - 2026-08-18
 
 ### Changed
