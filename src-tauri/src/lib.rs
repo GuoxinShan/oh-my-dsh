@@ -174,7 +174,22 @@ fn dsh_home() -> Result<PathBuf, String> {
 }
 
 /// Idempotently ensure the bridge row is installed in the web profile.
+/// pnpm versions flap between machines (store v10 vs v11): when the install
+/// fails on the store-mismatch error, relink the profile with a plain
+/// `pnpm install` through the dsh CLI's own recovery and retry once.
 fn run_plugin_install(node: &str, checkout: &Path, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+    match plugin_install_once(node, checkout, bridge, dsh_home, logs) {
+        Ok(()) => Ok(()),
+        Err(first) => {
+            eprintln!("dsh-desktop: plugin install failed once ({first}); relinking the profile and retrying");
+            relink_profile(node, checkout, dsh_home, logs)?;
+            plugin_install_once(node, checkout, bridge, dsh_home, logs)
+        }
+    }
+}
+
+/// One plugin-install attempt.
+fn plugin_install_once(node: &str, checkout: &Path, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -197,6 +212,36 @@ fn run_plugin_install(node: &str, checkout: &Path, bridge: &Path, dsh_home: &Pat
         .map_err(|e| format!("run plugin add: {e}"))?;
     if !status.success() {
         return Err(format!("plugin --profile web add failed with {status}"));
+    }
+    Ok(())
+}
+
+/// Relink the profile's node_modules with a plain install (recovers from a
+/// pnpm store-version mismatch: node_modules linked from a store built by a
+/// different pnpm major). Runs the same dsh CLI the plugin command uses.
+fn relink_profile(node: &str, checkout: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+    let log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs.join("logs/install.log"))
+        .map_err(|e| format!("open install log: {e}"))?;
+    let status = Command::new(node)
+        .arg("--import")
+        .arg("tsx/esm")
+        .arg("apps/cli/src/bin.ts")
+        .arg("plugin")
+        .arg("--profile")
+        .arg("web")
+        .arg("install")
+        .current_dir(checkout)
+        .env("DSH_HOME", dsh_home)
+        .env("CI", "true")
+        .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone log: {e}"))?))
+        .stderr(Stdio::from(log))
+        .status()
+        .map_err(|e| format!("run profile relink: {e}"))?;
+    if !status.success() {
+        return Err(format!("profile relink failed with {status}"));
     }
     Ok(())
 }
