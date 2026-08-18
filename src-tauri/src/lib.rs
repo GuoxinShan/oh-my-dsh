@@ -490,6 +490,8 @@ fn watch_e2e_title(app: tauri::AppHandle, window: tauri::WebviewWindow) {
             }
             let Some(verdict) = ipc_verdict() else { continue };
             println!("dsh-desktop e2e: DSH_E2E_{verdict}");
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
             if exit_when_done {
                 app.exit(if verdict.starts_with("OK") { 0 } else { 2 });
             }
