@@ -43,12 +43,25 @@ declare module '@deepseek-ai/cordis' {
 const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000
 /** Mirrors the credential service's POSIX-portable reference-name contract. */
 const CREDENTIAL_REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+/**
+ * Mirrors mcp-client's reconnect defaults. Mirrored (not imported) so the
+ * manager loads against any published mcp-client build; the spawned plugin's
+ * own Config schema stays the final gate at spawn.
+ */
+const RECONNECT_DEFAULTS: Required<ReconnectConfig> = {
+  enabled: true,
+  initialDelayMs: 500,
+  maxDelayMs: 30_000,
+  maxAttempts: 10,
+}
+/** Mirrors mcp-client's `serverName` contract (kept below the public tool-name budget). */
+const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
 
 const Reconnect: z<ReconnectConfig> = z.object({
-  enabled: z.boolean().default(McpClient.RECONNECT_DEFAULTS.enabled),
-  initialDelayMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(McpClient.RECONNECT_DEFAULTS.initialDelayMs),
-  maxDelayMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(McpClient.RECONNECT_DEFAULTS.maxDelayMs),
-  maxAttempts: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(McpClient.RECONNECT_DEFAULTS.maxAttempts),
+  enabled: z.boolean().default(RECONNECT_DEFAULTS.enabled),
+  initialDelayMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(RECONNECT_DEFAULTS.initialDelayMs),
+  maxDelayMs: z.number().min(1).max(MAX_TIMER_DELAY_MS).default(RECONNECT_DEFAULTS.maxDelayMs),
+  maxAttempts: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(RECONNECT_DEFAULTS.maxAttempts),
 })
 
 /**
@@ -62,7 +75,7 @@ export const Config: z<McpSettings> = z.object({
   servers: z.array(z.union([
     z.object({
       transport: z.const('stdio'),
-      serverName: z.string().required().pattern(McpClient.SERVER_NAME_PATTERN),
+      serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
       enabled: z.boolean().default(true),
       command: z.string().required(),
       args: z.array(String).default([]),
@@ -74,7 +87,7 @@ export const Config: z<McpSettings> = z.object({
     }),
     z.object({
       transport: z.const('streamable-http'),
-      serverName: z.string().required().pattern(McpClient.SERVER_NAME_PATTERN),
+      serverName: z.string().required().pattern(SERVER_NAME_PATTERN),
       enabled: z.boolean().default(true),
       url: z.string().required(),
       headers: z.dict(String).default({}),
