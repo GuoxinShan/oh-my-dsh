@@ -25,3 +25,7 @@ src-tauri/gen/
 .idea/
 .vscode/
 *.swp
+
+# 运行时组装缓存（fork 克隆与构建产物，机器本地再生）
+runtime/src/
+runtime/build/

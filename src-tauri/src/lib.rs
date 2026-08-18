@@ -74,18 +74,17 @@ fn kill_sidecar() {
 
 /// Boot to a ready window: sidecar spawn, readiness, window creation.
 fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
-    let checkout = find_checkout()?;
-    let node = find_node()?;
+    let runtime = find_runtime()?;
     let bridge = find_bridge()?;
     let logs = shell_root()?;
     let dsh_home = dsh_home()?;
 
     // The bridge row must be in the profile before the server scans it.
-    run_plugin_install(&node, &checkout, &bridge, &dsh_home, &logs)?;
+    run_plugin_install(&runtime, &bridge, &dsh_home, &logs)?;
 
     let port = free_port()?;
     let url = format!("http://127.0.0.1:{port}");
-    spawn_sidecar(&node, &checkout, &dsh_home, &logs, port)?;
+    spawn_sidecar(&runtime, &dsh_home, &logs, port)?;
 
     if !wait_ready(port) {
         return Err(format!(
@@ -120,12 +119,88 @@ fn find_checkout() -> Result<PathBuf, String> {
     ))
 }
 
-/// Node binary: $DSH_NODE, then PATH.
-fn find_node() -> Result<String, String> {
-    if let Ok(from_env) = std::env::var("DSH_NODE") {
-        return Ok(from_env);
+/// How the sidecar is launched: a prebuilt runtime tree, or the source checkout.
+struct Runtime {
+    /// Node binary (bundled tools or PATH).
+    node: PathBuf,
+    /// Extra args before the CLI entry (source mode: ["--import", "tsx/esm"]).
+    args_prefix: Vec<String>,
+    /// The dsh CLI entry (bundled: lib/bin.js; source: apps/cli/src/bin.ts).
+    cli: PathBuf,
+    /// Working directory for the CLI.
+    cwd: PathBuf,
+    /// Directories prepended to PATH so the CLI finds pnpm and tools.
+    path_prepend: Vec<PathBuf>,
+}
+
+/// Build a CLI invocation for the resolved runtime (prefix args, cwd, PATH).
+fn cli_command(runtime: &Runtime) -> Command {
+    let mut command = Command::new(&runtime.node);
+    for arg in &runtime.args_prefix {
+        command.arg(arg);
     }
-    Ok("node".to_string())
+    command.arg(&runtime.cli);
+    command.current_dir(&runtime.cwd);
+    if !runtime.path_prepend.is_empty() {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let prepend = runtime.path_prepend.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(":");
+        command.env("PATH", format!("{prepend}:{existing}"));
+    }
+    command
+}
+
+/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the assembled
+/// runtime/build/<sha> from runtime/revision.json, then the source checkout.
+fn find_runtime() -> Result<Runtime, String> {
+    if let Ok(dir) = std::env::var("DSH_DESKTOP_RUNTIME") {
+        return bundled_runtime(PathBuf::from(dir));
+    }
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let revision_path = repo_root.join("runtime/revision.json");
+    if revision_path.is_file() {
+        let text = fs::read_to_string(&revision_path).map_err(|e| format!("read {}: {e}", revision_path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", revision_path.display()))?;
+        let sha = value.get("sha").and_then(|s| s.as_str()).unwrap_or("");
+        if !sha.is_empty() {
+            let dir = repo_root.join("runtime/build").join(sha);
+            if dir.join("dsh/lib/bin.js").is_file() {
+                return bundled_runtime(dir);
+            }
+        }
+    }
+    source_runtime()
+}
+
+/// The assembled prebuilt runtime tree (prepare-runtime.mjs output).
+fn bundled_runtime(dir: PathBuf) -> Result<Runtime, String> {
+    let cli = dir.join("dsh/node_modules/@deepseek-ai/dsh/lib/bin.js");
+    if !cli.is_file() {
+        return Err(format!("bundled runtime missing CLI entry: {}", cli.display()));
+    }
+    let node = dir.join("tools/node_modules/node/bin/node");
+    if !node.is_file() {
+        return Err(format!("bundled runtime missing node binary: {}", node.display()));
+    }
+    Ok(Runtime {
+        node,
+        args_prefix: Vec::new(),
+        cli,
+        cwd: dir.join("dsh"),
+        path_prepend: vec![dir.join("tools/node_modules/.bin"), dir.join("tools/node_modules/node/bin")],
+    })
+}
+
+/// The source checkout (dev): tsx-run CLI from the fork working tree.
+fn source_runtime() -> Result<Runtime, String> {
+    let checkout = find_checkout()?;
+    let node = std::env::var("DSH_NODE").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("node"));
+    Ok(Runtime {
+        node,
+        args_prefix: vec!["--import".to_string(), "tsx/esm".to_string()],
+        cli: checkout.join("apps/cli/src/bin.ts"),
+        cwd: checkout,
+        path_prepend: Vec::new(),
+    })
 }
 
 /// The bridge package directory: $DSH_DESKTOP_BRIDGE, then the dev checkout layout.
@@ -177,34 +252,30 @@ fn dsh_home() -> Result<PathBuf, String> {
 /// pnpm versions flap between machines (store v10 vs v11): when the install
 /// fails on the store-mismatch error, relink the profile with a plain
 /// `pnpm install` through the dsh CLI's own recovery and retry once.
-fn run_plugin_install(node: &str, checkout: &Path, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
-    match plugin_install_once(node, checkout, bridge, dsh_home, logs) {
+fn run_plugin_install(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+    match plugin_install_once(runtime, bridge, dsh_home, logs) {
         Ok(()) => Ok(()),
         Err(first) => {
             eprintln!("dsh-desktop: plugin install failed once ({first}); relinking the profile and retrying");
-            relink_profile(node, checkout, dsh_home, logs)?;
-            plugin_install_once(node, checkout, bridge, dsh_home, logs)
+            relink_profile(runtime, dsh_home, logs)?;
+            plugin_install_once(runtime, bridge, dsh_home, logs)
         }
     }
 }
 
 /// One plugin-install attempt.
-fn plugin_install_once(node: &str, checkout: &Path, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+fn plugin_install_once(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(logs.join("logs/install.log"))
         .map_err(|e| format!("open install log: {e}"))?;
-    let status = Command::new(node)
-        .arg("--import")
-        .arg("tsx/esm")
-        .arg("apps/cli/src/bin.ts")
+    let status = cli_command(runtime)
         .arg("plugin")
         .arg("--profile")
         .arg("web")
         .arg("add")
         .arg(bridge)
-        .current_dir(checkout)
         .env("DSH_HOME", dsh_home)
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone log: {e}"))?))
         .stderr(Stdio::from(log))
@@ -219,21 +290,17 @@ fn plugin_install_once(node: &str, checkout: &Path, bridge: &Path, dsh_home: &Pa
 /// Relink the profile's node_modules with a plain install (recovers from a
 /// pnpm store-version mismatch: node_modules linked from a store built by a
 /// different pnpm major). Runs the same dsh CLI the plugin command uses.
-fn relink_profile(node: &str, checkout: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+fn relink_profile(runtime: &Runtime, dsh_home: &Path, logs: &Path) -> Result<(), String> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(logs.join("logs/install.log"))
         .map_err(|e| format!("open install log: {e}"))?;
-    let status = Command::new(node)
-        .arg("--import")
-        .arg("tsx/esm")
-        .arg("apps/cli/src/bin.ts")
+    let status = cli_command(runtime)
         .arg("plugin")
         .arg("--profile")
         .arg("web")
         .arg("install")
-        .current_dir(checkout)
         .env("DSH_HOME", dsh_home)
         .env("CI", "true")
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone log: {e}"))?))
@@ -255,20 +322,16 @@ fn free_port() -> Result<u16, String> {
 }
 
 /// Spawn the harness web server as a direct node child (no pnpm layer).
-fn spawn_sidecar(node: &str, checkout: &Path, dsh_home: &Path, logs: &Path, port: u16) -> Result<(), String> {
+fn spawn_sidecar(runtime: &Runtime, dsh_home: &Path, logs: &Path, port: u16) -> Result<(), String> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(logs.join("logs/sidecar.log"))
         .map_err(|e| format!("open sidecar log: {e}"))?;
-    let child = Command::new(node)
-        .arg("--import")
-        .arg("tsx/esm")
-        .arg("apps/cli/src/bin.ts")
+    let child = cli_command(runtime)
         .arg("web")
         .arg("--port")
         .arg(port.to_string())
-        .current_dir(checkout)
         .env("DSH_HOME", dsh_home)
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone sidecar log: {e}"))?))
         .stderr(Stdio::from(log))

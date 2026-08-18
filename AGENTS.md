@@ -138,6 +138,10 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 
 ### 运行时分发决策（已定，M3 实现）
 
-不发 npm 包。fork 的 GitHub 仓库（`aka-danielZhang/deepseek-harness` master）是 dsh 运行时的唯一事实源，永远带着我们的补丁。桌面每次发包：按仓库记录的 SHA 拉取/更新 fork 代码 → `pnpm install && pnpm run build` → 组装自包含运行时（node 二进制 + 构建产物 + 生产依赖）→ 捆进 .app resources。壳的 sidecar 解析顺序：app 内捆绑运行时 → `$DSH_CHECKOUT` → 本地 fork 源码（dev 兜底）；捆绑形态跑 `lib/bin.js` 构建产物（不经 tsx）。SHA 记在本仓库（`runtime/revision.json`），同步上游 = fork 合并 upstream/master + 改 SHA + 重新出包。
+不发 npm 包。fork 的 GitHub 仓库（`aka-danielZhang/deepseek-harness` master）是 dsh 运行时的唯一事实源，永远带着我们的补丁。发包以 **`desktop/v*` 标签**为锚：`runtime/revision.json` 钉 `{repo, ref: desktop/vX.Y.Z, sha}`，fork 侧 `git tag desktop/vX.Y.Z <sha> && git push origin desktop/vX.Y.Z` 后更新本文件。
+
+组装（`node scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）：持久部分克隆 fetch 标签 → `pnpm install --frozen-lockfile` + `pnpm run build`（`.prepare-runtime-ok` 标记缓存）→ **publish 路径打本地 tarball**（`pnpm pack` 全部 234 个 `@deepseek-ai/*` 包，workspace: 协议按发布规则重写；平台特定原生包 landlock-linux 跳过回退 npm；`FORK_MODIFIED` 名单内的包打包失败即中止）→ 生成的 runtime manifest 以 `pnpm.overrides` 把全树钉到本地 tarball（**必须 `--no-frozen-lockfile`，frozen 模式会静默忽略 overrides**；`pnpm deploy --legacy` 对本 workspace 丢 vendored 传递依赖，不可用）→ `runtime/build/<sha>/{dsh,tools}`（dsh = CLI 树，tools = node 24.9.0 + pnpm 二进制）。
+
+壳的 sidecar 解析顺序：`$DSH_DESKTOP_RUNTIME` → `runtime/build/<sha>`（bundled：`dsh/node_modules/@deepseek-ai/dsh/lib/bin.js`，PATH 前置 tools 的 node/pnpm）→ 本地 fork 源码（dev 兜底，tsx）。e2e 已对 bundled runtime 验证 `DSH_E2E_OK`。
 
 插件（本文件「功能面」的 M1/M2）；壳的 Rust 侧实现需本机 Rust toolchain（当前未安装，装好后从 M1 开始，契约已由本文件锁定）。
