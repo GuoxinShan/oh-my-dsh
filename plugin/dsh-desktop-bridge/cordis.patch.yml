@@ -6,15 +6,3 @@
     - id: dsh-desktop-bridge
       name: dsh-desktop-bridge
 
-# Compatibility rows (desktop-owned): dsh-mcp-settings was built against the
-# rc.5 mcp-client API and crashes the whole plugin tree at import on rc.7
-# (RECONNECT_DEFAULTS is no longer exported). Disable its full row set (the
-# manager would crash; the inventory and settings UI wait on the manager's
-# service) so cold starts boot. Remove when dsh-mcp-settings is rebuilt
-# against rc.7 (or the profile pins mcp-client to rc.5).
-- id: dsh-mcp-settings-manager
-  disabled: true
-- id: dsh-mcp-settings-inventory
-  disabled: true
-- id: dsh-mcp-settings-ui
-  disabled: true
