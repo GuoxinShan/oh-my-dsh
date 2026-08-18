@@ -136,4 +136,8 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 
 仓库整体（README 详述）：M1 Tauri 原型（脚手架 + sidecar + 端口 + 就绪 + 窗口）→ M2 对齐 dataelement 行为 → M3 平台化（签名/更新/安装包）→ M4 系统 WebView 回归。
 
+### 运行时分发决策（已定，M3 实现）
+
+不发 npm 包。fork 的 GitHub 仓库（`aka-danielZhang/deepseek-harness` master）是 dsh 运行时的唯一事实源，永远带着我们的补丁。桌面每次发包：按仓库记录的 SHA 拉取/更新 fork 代码 → `pnpm install && pnpm run build` → 组装自包含运行时（node 二进制 + 构建产物 + 生产依赖）→ 捆进 .app resources。壳的 sidecar 解析顺序：app 内捆绑运行时 → `$DSH_CHECKOUT` → 本地 fork 源码（dev 兜底）；捆绑形态跑 `lib/bin.js` 构建产物（不经 tsx）。SHA 记在本仓库（`runtime/revision.json`），同步上游 = fork 合并 upstream/master + 改 SHA + 重新出包。
+
 插件（本文件「功能面」的 M1/M2）；壳的 Rust 侧实现需本机 Rust toolchain（当前未安装，装好后从 M1 开始，契约已由本文件锁定）。
