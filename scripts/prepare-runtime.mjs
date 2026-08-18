@@ -75,10 +75,12 @@ const skipped = []
 // Fork-modified packages MUST pack from our tree — falling back to the npm
 // build for any of these would silently ship the unpatched runtime.
 const FORK_MODIFIED = new Set([
+  '@deepseek-ai/dsh-agent-default-model',
   '@deepseek-ai/dsh-client-modules',
-  '@deepseek-ai/dsh-mcp-client',
-  '@deepseek-ai/dsh-host-apiproxy',
+  '@deepseek-ai/dsh-client-ui-model-selection',
   '@deepseek-ai/dsh-client-ui-settings-models',
+  '@deepseek-ai/dsh-host-apiproxy',
+  '@deepseek-ai/dsh-mcp-client',
 ])
 for (const pkg of packages) {
   if (!pkg.name?.startsWith('@deepseek-ai/')) continue
