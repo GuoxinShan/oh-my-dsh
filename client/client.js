@@ -8,12 +8,21 @@
  * stylesheet (the module system claims untagged <style> tags for this plugin
  * and removes them on unload), and exports the Cordis plugin.
  *
- * Contribution: one entry in the `conversation.input.right` list slot — the
- * tool row inside the composer card, immediately left of the model select and
+ * Contribution one: an entry in the `conversation.input.right` list slot —
+ * the tool row inside the composer card, immediately left of the model select and
  * the context ring. The chip FOLLOWS the session's current model selection:
  * it reads the selected provider from the shared per-session model directory
  * (the same store ModelSelect renders from) and shows only that provider's
  * remaining quotas. A provider without a quota adapter renders nothing.
+ *
+ * Contribution two: an entry in the `settings.models.provider` list slot —
+ * the accessory seat each configured provider row on the Models settings
+ * page renders between its identity and its actions. The provider arrives
+ * in the slot's owner share (the row's stable route id), so the badge is
+ * stationary per row: one compact capsule per provider, popover downward.
+ * The seat is declared by the built-in ui-settings-models plugin; when it
+ * is absent (older harness) this registration simply waits and renders
+ * nothing.
  *
  * Data comes from the host half's same-origin JSON route
  * (`/provider-balance/quota?provider=<route-id>`); the API key never crosses
@@ -56,6 +65,9 @@ window.__ModuleLoader__.load({
         '  white-space: nowrap;',
         '}',
         '.dpb-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }',
+        /* Settings-row variant (Models page provider rows): the row's dense
+         * 28px capsule vocabulary rather than the composer's tool row. */
+        '.dpb-trigger.dpb-compact { height: 22px; padding: 0 6px; font-size: 12px; line-height: 18px; }',
         '.dpb-num { color: var(--dpb-tint, var(--dsw-alias-label-primary)); font-weight: 500; }',
         '.dpb-sep { color: var(--dsw-alias-label-tertiary); }',
         '.dpb-tools { color: var(--dsw-alias-label-secondary); font-weight: 400; }',
@@ -70,6 +82,9 @@ window.__ModuleLoader__.load({
         '  font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary);',
         '  cursor: default;',
         '}',
+        /* Settings-row variant: the badge sits in a provider row high in the
+         * panel, so its popover opens DOWNWARD from the trigger. */
+        '.dpb-panel.dpb-panel-down { top: calc(100% + 6px); bottom: auto; left: 0; right: auto; }',
         '.dpb-head { display: flex; align-items: center; gap: 6px; padding-right: 24px; }',
         '.dpb-title { font-weight: 500; color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
         '.dpb-sub { color: var(--dsw-alias-label-tertiary); font-size: 11px; }',
@@ -298,53 +313,19 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
-    /* The chip: follows the session's CURRENT model provider. `data` is  */
-    /* the host snapshot for exactly that provider; a provider without a  */
-    /* quota adapter renders nothing at all.                              */
+    /* Quota feed for one provider route: first load, gentle polling, and */
+    /* failure-as-error folding. Shared by every badge surface; the       */
+    /* provider is an explicit input, so each surface decides where it    */
+    /* comes from (session selection on the composer, the row's owner     */
+    /* share on the Models page).                                         */
     /* ------------------------------------------------------------------ */
-    function ProviderBalanceChip(props) {
-      var t = props.t
-      var sessionId = props.sessionId
-
-      /* Current model selection's provider, live from the shared per-session
-       * model directory (the same store ModelSelect renders from). */
-      var providerState = useState(undefined)
-      var provider = providerState[0]
-      var setProvider = providerState[1]
-
-      /* modelDirectories is resolved lazily per effect run: the service may
-       * activate after this plugin loads. */
-      var getModelDirectories = props.getModelDirectories
-
-      useEffect(function () {
-        var directories = getModelDirectories()
-        if (directories === undefined) return undefined
-        var directory
-        try {
-          directory = directories.directoryFor(sessionId)
-        } catch (error) {
-          return undefined
-        }
-        var read = function () {
-          var current = directory.store.getSnapshot().current
-          setProvider(current !== null && current !== undefined ? current.provider : undefined)
-        }
-        read()
-        return directory.store.subscribe(read)
-      }, [sessionId])
-
+    function useProviderQuota(provider) {
       var dataState = useState(null)
       var data = dataState[0]
       var setData = dataState[1]
       var loadingState = useState(false)
       var loading = loadingState[0]
       var setLoading = loadingState[1]
-      var openState = useState(false)
-      var open = openState[0]
-      var setOpen = openState[1]
-      var tick = useState(0)
-      var setTick = tick[1]
-      var rootRef = useRef(null)
 
       var load = useCallback(function (force) {
         if (provider === undefined) return
@@ -368,24 +349,39 @@ window.__ModuleLoader__.load({
           .finally(function () { setLoading(false) })
       }, [provider])
 
-      /* Provider switch resets the chip; first load + gentle polling. */
+      /* Provider switch resets the badge; first load + gentle polling. */
       useEffect(function () {
         setData(null)
-        setOpen(false)
         if (provider === undefined) return undefined
         load(false)
         var timer = setInterval(function () { load(false) }, POLL_MS)
         return function () { clearInterval(timer) }
       }, [provider, load])
 
-      /* Slow clock while the panel is open: countdowns stay fresh. */
+      return { data: data, loading: loading, refresh: load }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Open popover state shared by every badge surface: outside click /  */
+    /* Escape close (ContextMeter's pattern), plus a slow clock while the */
+    /* panel is open so countdowns stay fresh.                            */
+    /* ------------------------------------------------------------------ */
+    function usePopoverPanel() {
+      var openState = useState(false)
+      var open = openState[0]
+      var setOpen = openState[1]
+      var tickState = useState(0)
+      var setTick = tickState[1]
+      var rootRef = useRef(null)
+
+      /* Slow clock while the panel is open. */
       useEffect(function () {
         if (!open) return undefined
         var timer = setInterval(function () { setTick(function (n) { return n + 1 }) }, 30 * 1000)
         return function () { clearInterval(timer) }
       }, [open])
 
-      /* Outside click / Escape close (ContextMeter's pattern). */
+      /* Outside click / Escape close. */
       useEffect(function () {
         if (!open) return undefined
         var onPointerDown = function (event) {
@@ -403,7 +399,30 @@ window.__ModuleLoader__.load({
         }
       }, [open])
 
-      /* No selection yet, or the provider has no quota adapter: no chip. */
+      return { open: open, setOpen: setOpen, tick: tickState[0], rootRef: rootRef }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* The badge surface: one provider's chip + detail panel. `data` is   */
+    /* the host snapshot for exactly that provider; a provider without a  */
+    /* quota adapter renders nothing at all.                              */
+    /* ------------------------------------------------------------------ */
+    function ProviderBalanceBadge(props) {
+      var t = props.t
+      var provider = props.provider
+
+      var quota = useProviderQuota(provider)
+      var panel = usePopoverPanel()
+      var data = quota.data
+      var loading = quota.loading
+      var open = panel.open
+      var setOpen = panel.setOpen
+      var rootRef = panel.rootRef
+
+      /* A provider swap under a live badge closes its panel. */
+      useEffect(function () { setOpen(false) }, [provider])
+
+      /* No provider, or the provider has no quota adapter: no badge. */
       if (provider === undefined || data === null || data.unsupported === true) return null
 
       var now = Date.now()
@@ -463,17 +482,17 @@ window.__ModuleLoader__.load({
         createElement(Tooltip, { label: tooltipText, side: 'top', delayMs: 200, disabled: open },
           createElement('button', {
             type: 'button',
-            className: 'dpb-trigger',
+            className: 'dpb-trigger' + (props.compact ? ' dpb-compact' : ''),
             'aria-label': t('chip.title'),
             'aria-haspopup': 'dialog',
             'aria-expanded': open,
             onClick: function () { setOpen(!open) },
           }, chipBody)),
         open && createElement('div', {
-          className: 'dpb-panel',
+          className: 'dpb-panel' + (props.panelDown ? ' dpb-panel-down' : ''),
           role: 'dialog',
           'aria-label': t('chip.title'),
-          key: 'panel-' + tick,
+          key: 'panel-' + panel.tick,
         },
           createElement('div', { className: 'dpb-head' },
             createElement('span', { className: 'dpb-title' }, name),
@@ -489,7 +508,7 @@ window.__ModuleLoader__.load({
             'aria-label': t('panel.refresh'),
             title: t('panel.refresh'),
             disabled: loading,
-            onClick: function () { load(true) },
+            onClick: function () { quota.refresh(true) },
           }, loading ? '…' : '↻'),
           rows,
           data.fetchedAt
@@ -500,7 +519,58 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
-    /* Cordis plugin: dictionaries + the input.right slot entry.          */
+    /* The composer chip: follows the session's CURRENT model provider,    */
+    /* live from the shared per-session model directory (the same store    */
+    /* ModelSelect renders from).                                          */
+    /* ------------------------------------------------------------------ */
+    function ProviderBalanceChip(props) {
+      var sessionId = props.sessionId
+
+      var providerState = useState(undefined)
+      var provider = providerState[0]
+      var setProvider = providerState[1]
+
+      /* modelDirectories is resolved lazily per effect run: the service may
+       * activate after this plugin loads. */
+      var getModelDirectories = props.getModelDirectories
+
+      useEffect(function () {
+        var directories = getModelDirectories()
+        if (directories === undefined) return undefined
+        var directory
+        try {
+          directory = directories.directoryFor(sessionId)
+        } catch (error) {
+          return undefined
+        }
+        var read = function () {
+          var current = directory.store.getSnapshot().current
+          setProvider(current !== null && current !== undefined ? current.provider : undefined)
+        }
+        read()
+        return directory.store.subscribe(read)
+      }, [sessionId])
+
+      if (provider === undefined) return null
+      return createElement(ProviderBalanceBadge, { provider: provider, t: props.t })
+    }
+
+    /* The Models settings row badge: the provider route id arrives in the
+     * slot's owner share (settings.models.provider), so the badge is
+     * stationary per row and needs no subscription. The row's displayName
+     * is not consumed: the panel already names the plan or falls back to
+     * the route label. */
+    function ProviderBalanceRowBadge(props) {
+      return createElement(ProviderBalanceBadge, {
+        provider: props.provider,
+        t: props.t,
+        compact: true,
+        panelDown: true,
+      })
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Cordis plugin: dictionaries + both slot entries.                   */
     /* ------------------------------------------------------------------ */
     module.exports = {
       name: 'dsh-provider-balance',
@@ -522,6 +592,18 @@ window.__ModuleLoader__.load({
             locale: NS,
             inject: function () { return { getModelDirectories: getModelDirectories } },
           }, ProviderBalanceChip)
+        })
+
+        /* Models settings page: one badge per configured provider row. The
+         * `t` seat comes from the locale namespace on the registration; the
+         * provider route id comes from the slot's owner share. */
+        ctx.slots.inject('settings.models.provider', function () {
+          return ctx.slots.register({
+            name: 'settings.models.provider',
+            id: 'provider-balance',
+            order: 10,
+            locale: NS,
+          }, ProviderBalanceRowBadge)
         })
       },
     }
