@@ -653,6 +653,7 @@ export interface PluginContext {
     }) => () => void
   }
   get?: (name: string) => unknown
+  on?: (event: string, listener: (payload: unknown) => void) => void
   logger?: { info: (template: string, ...args: unknown[]) => void; warn?: (template: string, ...args: unknown[]) => void }
   effect?: (callback: () => () => void, label?: string) => () => void
 }
@@ -670,16 +671,29 @@ export interface PluginContext {
  */
 export function apply(ctx: PluginContext, rawConfig: unknown): void {
   const config = resolveConfig(rawConfig)
-  const credentials = typeof ctx.get === 'function'
-    ? ctx.get('credentials') as { resolve: (ref: string) => Promise<{ value: string } | undefined> } | undefined
-    : undefined
   const states = new Map<string, SourceState>()
   for (const source of config.sources) states.set(source.id, {})
 
-  /** Lazy read of the DSH credentials file (the credentials-local provider's managed layer). */
-  let credentialsFileCache: Map<string, string> | undefined
+  /**
+   * The credentials service is looked up PER RESOLUTION, never captured at
+   * apply time: this plugin may activate before the provider mounts, and a
+   * captured `undefined` would stick — the fallback layers below then freeze
+   * whatever they saw at first use, so key rotation in the credentials store
+   * never reaches the adapters until a restart (the "changed the key but the
+   * panel still shows the old account" bug).
+   */
+  const credentialsService = (): { resolve: (ref: string) => Promise<{ value: string } | undefined> } | undefined =>
+    (typeof ctx.get === 'function' ? ctx.get('credentials') : undefined) as
+      | { resolve: (ref: string) => Promise<{ value: string } | undefined> }
+      | undefined
+
+  /**
+   * Fresh read of the DSH credentials file (the credentials-local provider's
+   * managed layer). Re-read per resolution — no cache: the document is a
+   * handful of lines, reads are TTL-gated, and a frozen copy was the other
+   * half of the key-rotation bug.
+   */
   const readCredentialsFile = (): Map<string, string> => {
-    if (credentialsFileCache !== undefined) return credentialsFileCache
     const map = new Map<string, string>()
     try {
       const home = process.env.DSH_HOME ?? `${process.env.HOME ?? ''}/.dsh`
@@ -693,12 +707,12 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     } catch {
       // Absent or unreadable file: not an error, the layer is simply empty.
     }
-    credentialsFileCache = map
     return map
   }
 
   /** Credential resolution: credentials service → process env → credentials file. */
   const resolveKeyByEnv = async (apiKeyEnv: string): Promise<string | undefined> => {
+    const credentials = credentialsService()
     if (credentials !== undefined) {
       try {
         const resolved = await credentials.resolve(apiKeyEnv)
@@ -850,6 +864,25 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
       adapter,
     }
   }
+
+  /**
+   * Key rotation invalidates cached snapshots immediately: after a credential
+   * commit, every quota fetched through that reference belongs to the old
+   * key's account, so the next poll re-fetches instead of serving the old
+   * account's numbers until the TTL expires. (The detection cache stays: it
+   * remembers endpoint SHAPES, never key values.)
+   */
+  ctx.on?.('credentials/updated', (ref: unknown) => {
+    if (typeof ref !== 'string') return
+    for (const [id, state] of states) {
+      const configured = config.sources.find(source => source.id === id)
+      const apiKeyEnv = configured?.apiKeyEnv ?? routeConfigOf(id)?.apiKeyEnv
+      if (apiKeyEnv === ref) {
+        state.snapshot = undefined
+        state.fetchedAt = undefined
+      }
+    }
+  })
 
   const handler = async (req: unknown, res: {
     setHeader: (name: string, value: string) => void
