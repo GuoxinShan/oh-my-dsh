@@ -640,6 +640,17 @@ interface SourceState {
   fetchedAt?: number
 }
 
+/** One refresh attempt, recorded for after-the-fact diagnosis. Never carries
+ * secrets: `via` names only the credential LAYER, errors are status-coded. */
+interface RefreshEvent {
+  at: string
+  ok: boolean
+  /** Credential layer that supplied the key: credentials | env | file. */
+  via?: string
+  durationMs: number
+  error?: { code: string; message: string }
+}
+
 /** Minimal slice of the Cordis context this plugin consumes. */
 export interface PluginContext {
   webServer: {
@@ -654,7 +665,6 @@ export interface PluginContext {
   }
   get?: (name: string) => unknown
   on?: (event: string, listener: (payload: unknown) => void) => void
-  logger?: { info: (template: string, ...args: unknown[]) => void; warn?: (template: string, ...args: unknown[]) => void }
   effect?: (callback: () => () => void, label?: string) => () => void
 }
 
@@ -710,24 +720,36 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     return map
   }
 
-  /** Credential resolution: credentials service → process env → credentials file. */
-  const resolveKeyByEnv = async (apiKeyEnv: string): Promise<string | undefined> => {
+  /** Credential resolution: credentials service → process env → credentials file.
+   * Returns the value plus WHICH layer supplied it (`via`), so refresh events
+   * can name the layer without ever recording the key itself. */
+  const resolveKeyByEnv = async (apiKeyEnv: string): Promise<{ value: string; via: string } | undefined> => {
     const credentials = credentialsService()
     if (credentials !== undefined) {
       try {
         const resolved = await credentials.resolve(apiKeyEnv)
-        if (resolved !== undefined && resolved.value.length > 0) return resolved.value
+        if (resolved !== undefined && resolved.value.length > 0) return { value: resolved.value, via: 'credentials' }
       } catch (error) {
-        ctx.logger?.info('provider-balance: credentials resolve for %s failed: %s', apiKeyEnv, String(error))
+        console.warn('provider-balance: credentials resolve for %s failed: %s', apiKeyEnv, String(error))
       }
     }
     const fromEnv = process.env[apiKeyEnv]
-    if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv
+    if (fromEnv !== undefined && fromEnv.length > 0) return { value: fromEnv, via: 'env' }
     const fromFile = readCredentialsFile().get(apiKeyEnv)
-    return fromFile !== undefined && fromFile.length > 0 ? fromFile : undefined
+    return fromFile !== undefined && fromFile.length > 0 ? { value: fromFile, via: 'file' } : undefined
   }
 
-  const resolveKey = (source: ResolvedSource): Promise<string | undefined> => resolveKeyByEnv(source.apiKeyEnv)
+  const resolveKey = (source: ResolvedSource): Promise<{ value: string; via: string } | undefined> => resolveKeyByEnv(source.apiKeyEnv)
+
+  /** Per-source ring buffer of recent refresh outcomes (newest last). */
+  const EVENTS_PER_SOURCE = 30
+  const events = new Map<string, RefreshEvent[]>()
+  const recordEvent = (id: string, event: RefreshEvent): void => {
+    const list = events.get(id) ?? []
+    list.push(event)
+    if (list.length > EVENTS_PER_SOURCE) list.shift()
+    events.set(id, list)
+  }
 
   /** Fetch one source through its adapter; never throws. */
   const refresh = (source: ResolvedSource, adapterOverride?: ProviderAdapter): Promise<ProviderBalanceSnapshot> => {
@@ -735,33 +757,49 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     if (state.inFlight !== undefined) return state.inFlight
     const adapter = adapterOverride ?? ADAPTERS[source.kind]
     const task = (async (): Promise<ProviderBalanceSnapshot> => {
-      const apiKey = await resolveKey(source)
-      if (apiKey === undefined) {
-        fail('missing-key', `no credential "${source.apiKeyEnv}" configured (env or DSH credentials store)`)
+      const startedAt = Date.now()
+      let via: string | undefined
+      try {
+        const resolvedKey = await resolveKey(source)
+        if (resolvedKey === undefined) {
+          fail('missing-key', `no credential "${source.apiKeyEnv}" configured (env or DSH credentials store)`)
+        }
+        via = resolvedKey.via
+        const getJson = (path: string) => getJsonFrom(`${source.quotaBase}${path}`, resolvedKey.value, config.requestTimeoutMs)
+        const quotas = await adapter.read(getJson)
+        recordEvent(source.id, { at: new Date().toISOString(), ok: true, via, durationMs: Date.now() - startedAt })
+        return {
+          id: source.id,
+          ok: true,
+          ...quotas,
+          fetchedAt: new Date().toISOString(),
+          stale: false,
+        }
+      } catch (error) {
+        const described = describeUpstreamError(error)
+        recordEvent(source.id, {
+          at: new Date().toISOString(),
+          ok: false,
+          ...(via !== undefined ? { via } : {}),
+          durationMs: Date.now() - startedAt,
+          error: described,
+        })
+        // Straight to the process console: this harness wires no stdout sink
+        // for ctx.logger records, so only console output reaches a tee'd log.
+        console.warn('provider-balance: %s refresh failed (%s): %s', source.id, described.code, described.message)
+        const previous = state.snapshot
+        if (previous?.ok === true) {
+          // Keep the last good reading, explicitly marked stale.
+          const staleSnapshot: ProviderBalanceSnapshot = { ...previous, stale: true, error: described }
+          state.snapshot = staleSnapshot
+          state.fetchedAt = Date.now()
+          return staleSnapshot
+        }
+        return { id: source.id, ok: false, error: described }
+      } finally {
+        state.inFlight = undefined
       }
-      const getJson = (path: string) => getJsonFrom(`${source.quotaBase}${path}`, apiKey as string, config.requestTimeoutMs)
-      const quotas = await adapter.read(getJson)
-      return {
-        id: source.id,
-        ok: true,
-        ...quotas,
-        fetchedAt: new Date().toISOString(),
-        stale: false,
-      }
-    })().catch((error: unknown): ProviderBalanceSnapshot => {
-      const described = describeUpstreamError(error)
-      const previous = state.snapshot
-      if (previous?.ok === true) {
-        // Keep the last good reading, explicitly marked stale.
-        const staleSnapshot: ProviderBalanceSnapshot = { ...previous, stale: true, error: described }
-        state.snapshot = staleSnapshot
-        state.fetchedAt = Date.now()
-        return staleSnapshot
-      }
-      return { id: source.id, ok: false, error: described }
-    }).finally(() => {
-      state.inFlight = undefined
-    })
+    })()
     state.inFlight = task
     return task
   }
@@ -836,7 +874,7 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
       const key = await resolveKeyByEnv(route.apiKeyEnv)
       if (key !== undefined) {
         try {
-          const body = await getJsonFrom(`${route.origin}/v1/usage`, key, config.requestTimeoutMs) as Parameters<typeof sub2apiRead>[0]
+          const body = await getJsonFrom(`${route.origin}/v1/usage`, key.value, config.requestTimeoutMs) as Parameters<typeof sub2apiRead>[0]
           if (typeof body?.balance === 'number' && Number.isFinite(body.balance) && typeof body.unit === 'string') {
             adapter = {
               credential: route.apiKeyEnv,
@@ -893,6 +931,18 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     const provider = url.searchParams.get('provider') ?? undefined
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Cache-Control', 'no-store')
+    /* Diagnostics: `?events=1` returns the per-source ring buffers of recent
+     * refresh outcomes instead of quota snapshots — the answer to "the badge
+     * keeps showing '!', what happened". */
+    if (url.searchParams.get('events') === '1') {
+      const payload: Record<string, RefreshEvent[]> = {}
+      for (const [id, list] of events) {
+        if (provider !== undefined && id !== provider) continue
+        payload[id] = list
+      }
+      res.end(JSON.stringify({ events: payload, servedAt: new Date().toISOString() }))
+      return
+    }
     try {
       let sources: ProviderBalanceSnapshot[]
       if (provider !== undefined) {
@@ -915,7 +965,7 @@ export function apply(ctx: PluginContext, rawConfig: unknown): void {
     () => ctx.webServer.register({ kind: 'exact', path: config.route, handler }),
     'provider-balance: quota route',
   )
-  ctx.logger?.info(
+  console.log(
     'provider-balance: serving %s for %s',
     config.route,
     config.sources.map(source => source.id).join(', '),

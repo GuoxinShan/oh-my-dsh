@@ -183,6 +183,11 @@ window.__ModuleLoader__.load({
 
     var QUOTA_URL = '/provider-balance/quota'
     var POLL_MS = 5 * 60 * 1000
+    /* A failed load retries quickly a few times before settling back into the
+     * slow poll, so a transient blip does not pin the badge on "!" for five
+     * minutes. */
+    var RETRY_MS = 30 * 1000
+    var MAX_RETRIES = 3
 
     /** DSH provider route id → display label. Route identity, not business
      * data: shown only when the upstream API returns no product name. */
@@ -328,9 +333,9 @@ window.__ModuleLoader__.load({
       var setLoading = loadingState[1]
 
       var load = useCallback(function (force) {
-        if (provider === undefined) return
+        if (provider === undefined) return Promise.resolve(null)
         setLoading(true)
-        fetch(QUOTA_URL + '?provider=' + encodeURIComponent(provider) + (force ? '&refresh=1' : ''), {
+        return fetch(QUOTA_URL + '?provider=' + encodeURIComponent(provider) + (force ? '&refresh=1' : ''), {
           headers: { Accept: 'application/json' },
         })
           .then(function (response) {
@@ -339,23 +344,43 @@ window.__ModuleLoader__.load({
           })
           .then(function (body) {
             var sources = (body && body.sources) || []
-            setData(sources.length > 0
+            var folded = sources.length > 0
               ? Object.assign({ provider: provider }, sources[0])
-              : { provider: provider, unsupported: true })
+              : { provider: provider, unsupported: true }
+            setData(folded)
+            return folded
           })
           .catch(function () {
-            setData({ provider: provider, ok: false, error: { code: 'fetch', message: '' } })
+            var folded = { provider: provider, ok: false, error: { code: 'fetch', message: '' } }
+            setData(folded)
+            return folded
           })
           .finally(function () { setLoading(false) })
       }, [provider])
 
-      /* Provider switch resets the badge; first load + gentle polling. */
+      /* Provider switch resets the badge; first load + gentle polling, with
+       * quick retries while the last load failed. */
       useEffect(function () {
         setData(null)
         if (provider === undefined) return undefined
-        load(false)
-        var timer = setInterval(function () { load(false) }, POLL_MS)
-        return function () { clearInterval(timer) }
+        var stopped = false
+        var retries = 0
+        var timer
+        var run = function () {
+          if (stopped) return
+          load(false).then(function (folded) {
+            if (stopped) return
+            if (folded !== null && folded.ok === false && retries < MAX_RETRIES) {
+              retries += 1
+              timer = setTimeout(run, RETRY_MS)
+            } else {
+              retries = 0
+              timer = setTimeout(run, POLL_MS)
+            }
+          })
+        }
+        run()
+        return function () { stopped = true; clearTimeout(timer) }
       }, [provider, load])
 
       return { data: data, loading: loading, refresh: load }
@@ -455,11 +480,13 @@ window.__ModuleLoader__.load({
       }
       if (chipBody.length === 0) chipBody.push(createElement('span', { key: 'x', className: 'dpb-num' }, '!'))
 
-      var tooltipText = balances.length > 0
-        ? name + ' · 余额 ' + (balances[0].currency === 'USD' ? '$' : '¥') + (isFinite(balances[0].total) ? balances[0].total.toFixed(2) : '—')
-        : name + ' · ' + t('chip.5h') + ' ' + (sessionLeft !== undefined ? sessionLeft + '%' : '—')
-          + ' · ' + t('chip.week') + ' ' + (weeklyLeft !== undefined ? weeklyLeft + '%' : '—')
-          + (tools !== undefined ? ' · ' + t('chip.tools') + ' ' + tools.remaining : '')
+      var tooltipText = data.ok !== true
+        ? name + ' · ' + errorMessage(data.error, t)
+        : balances.length > 0
+          ? name + ' · 余额 ' + (balances[0].currency === 'USD' ? '$' : '¥') + (isFinite(balances[0].total) ? balances[0].total.toFixed(2) : '—')
+          : name + ' · ' + t('chip.5h') + ' ' + (sessionLeft !== undefined ? sessionLeft + '%' : '—')
+            + ' · ' + t('chip.week') + ' ' + (weeklyLeft !== undefined ? weeklyLeft + '%' : '—')
+            + (tools !== undefined ? ' · ' + t('chip.tools') + ' ' + tools.remaining : '')
 
       var rows = []
       if (data.ok !== true) {

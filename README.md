@@ -116,6 +116,10 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
      ~/.dsh/profiles/web/node_modules/dsh-provider-balance
    ```
 
+   > ⚠️ 用 `pnpm install` 的 `file:` 依赖装出来的是**硬链接副本**：编辑器原子替换写文件后
+   > 副本与仓库脱钩，进程会一直跑旧代码。开发时务必用上面的软链方式；若已用 `file:` 安装，
+   > 删掉 `node_modules/dsh-provider-balance` 目录再建软链即可。
+
 2. 从 harness checkout 启动（`--patch` 必须放在 web 应用自有 flag 如 `--port` 之前）：
 
    ```sh
@@ -182,6 +186,21 @@ ref 被改写，对应供应商的快照立即作废，下一次轮询（≤5 �
 
 HTTP 接口：`GET /provider-balance/quota?provider=<路由id>[&refresh=1]` 返回该供应商的
 单条快照（`sources` 数组一个元素）；不带 `provider` 返回全部源。
+
+## 故障排查（胶囊显示 `!`）
+
+`!` = 该供应商最近一次刷新失败且没有可回退的旧快照。两条线索可追查：
+
+1. **悬浮提示**：hover 胶囊直接显示错误原因（如「上游接口返回错误: upstream HTTP 429」）；
+   点击展开面板也有同一行错误。
+2. **刷新事件接口**：`GET /provider-balance/quota?events=1[&provider=<路由id>]` 返回每个源
+   最近 30 次刷新记录（时间、成败、耗时、`via` 凭据来源层、错误码），不含任何密钥。
+
+此外每次失败还会向宿主进程 stdout 打一行
+`provider-balance: <源> refresh failed (<错误码>): <详情>`。
+
+客户端轮询策略：失败时先每 30 秒快速重试（最多 3 次），仍失败才退回 5 分钟慢轮询 ——
+一次网络抖动不会让 `!` 挂 5 分钟。
 
 ## 添加新供应商
 
