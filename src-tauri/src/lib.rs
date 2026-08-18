@@ -78,7 +78,7 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
     let node = find_node()?;
     let bridge = find_bridge()?;
     let logs = shell_root()?;
-    let dsh_home = dsh_home(&logs)?;
+    let dsh_home = dsh_home()?;
 
     // The bridge row must be in the profile before the server scans it.
     run_plugin_install(&node, &checkout, &bridge, &dsh_home, &logs)?;
@@ -148,30 +148,29 @@ fn find_bridge() -> Result<PathBuf, String> {
     ))
 }
 
-/// The shell-private root (`~/.dsh-desktop/`): the sidecar's DSH home
-/// (`home/`, fully isolated) plus `logs/`. Isolation is deliberate: the
-/// harness has no multi-process locking story for one DSH_HOME, so a desktop
-/// sidecar sharing the terminal's live `~/.dsh` would contend on the same
-/// session/storage files (observed as intermittent boot hangs) and risk
-/// data corruption when both run. Sharing/migrating terminal data is a
-/// future explicit, single-instance-guarded feature.
+/// The shell-private root (`~/.dsh-desktop/`): logs only.
 fn shell_root() -> Result<PathBuf, String> {
     let user_home = std::env::var("HOME").map_err(|_| "$HOME is not set".to_string())?;
     let root = Path::new(&user_home).join(".dsh-desktop");
-    fs::create_dir_all(root.join("home")).map_err(|e| format!("create {}: {e}", root.join("home").display()))?;
     fs::create_dir_all(root.join("logs")).map_err(|e| format!("create {}: {e}", root.join("logs").display()))?;
     Ok(root)
 }
 
-/// The DSH home the sidecar runs with: the shell-owned isolated home, or
-/// $DSH_HOME when explicitly set (e2e or deliberate experimentation).
-fn dsh_home(logs_root: &Path) -> Result<PathBuf, String> {
+/// The DSH home the sidecar runs with: the user's real `~/.dsh`, shared with
+/// the terminal (sessions, workspaces, settings, credentials — the desktop
+/// IS another face of the same account). $DSH_HOME overrides for isolation.
+/// Caveat: two live harness servers on one home have no locking story —
+/// mostly fine for one user (per-session JSONL logs; JSON storages are
+/// last-wins whole-file writes), but a shared session being driven from two
+/// faces at once is undefined. Coordinated single-instance is an M2 item.
+fn dsh_home() -> Result<PathBuf, String> {
     if let Ok(from_env) = std::env::var("DSH_HOME") {
         if !from_env.is_empty() {
             return Ok(PathBuf::from(from_env));
         }
     }
-    Ok(logs_root.join("home"))
+    let user_home = std::env::var("HOME").map_err(|_| "$HOME is not set".to_string())?;
+    Ok(Path::new(&user_home).join(".dsh"))
 }
 
 /// Idempotently ensure the bridge row is installed in the web profile.
@@ -425,12 +424,25 @@ fn e2e_probe_script() -> String {
 /// The title channel is dead on macOS (WKWebView document.title does not
 /// sync to the NSWindow title), so the channels are the IPC command and the
 /// location-hash fallback written by the probe.
-fn watch_e2e_title(app: tauri::AppHandle, _window: tauri::WebviewWindow) {
+fn watch_e2e_title(app: tauri::AppHandle, window: tauri::WebviewWindow) {
     std::thread::spawn(move || {
         let started = Instant::now();
         let exit_when_done = std::env::var("DSH_DESKTOP_E2E_EXIT").ok().as_deref() == Some("1");
+        let mut last_fragment = String::new();
         while started.elapsed() < Duration::from_secs(120) {
             std::thread::sleep(Duration::from_millis(500));
+            // Hash diagnostics: read the URL only after navigation must have
+            // committed, and contain wry's nil-URL panic for good measure.
+            if started.elapsed() >= Duration::from_secs(20) {
+                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.url().ok()));
+                if let Ok(Some(url)) = read {
+                    let fragment = url.fragment().unwrap_or_default();
+                    if fragment != last_fragment && !fragment.is_empty() {
+                        println!("dsh-desktop e2e: fragment -> {fragment}");
+                        last_fragment = fragment.to_string();
+                    }
+                }
+            }
             let Some(verdict) = ipc_verdict() else { continue };
             println!("dsh-desktop e2e: DSH_E2E_{verdict}");
             if exit_when_done {

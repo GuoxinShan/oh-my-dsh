@@ -43,10 +43,14 @@ docs/                        补充规范（未来；能进本文件的不单开
 
 加命令 = 先改本表，再改两侧。
 
+### 兼容行（桥 bundle 层）
+
+桥插件的 `cordis.patch.yml` 还携带一个兼容行集：`dsh-mcp-settings-manager/-inventory/-ui` 置 `disabled: true`。原因：dsh-mcp-settings 按 rc.5 的 mcp-client API 构建，在 rc.7（`RECONNECT_DEFAULTS` 收为内部导出）下 import 即炸，拖垮整个插件树——这是**既存问题**（终端 3080 是 Aug 14 启动的长效进程所以没暴露，任何冷启动都会复现）。禁用整个行集让冷启动可 boot；dsh-mcp-settings 按 rc.7 重建（或 profile 把 mcp-client pin 回 rc.5）后删除本行集。
+
 ### 壳实现要点（M1，`src-tauri/`）
 
 - **sidecar 启动**：直接 `node --import tsx/esm apps/cli/src/bin.ts web --port <N>`（cwd = DSH checkout），不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。运行时发现顺序：`DSH_CHECKOUT` env → `~/workspace/coding-study/deepseek-harness`（校验 `docs/architecture.md`）。
-- **DSH_HOME 所有权**：壳拥有独立 `$HOME/.dsh-desktop/`（`home/` 作为 DSH_HOME、`logs/` 落 sidecar 与安装日志），**不与终端 `~/.dsh` 共享**：harness 对同一 DSH_HOME 没有多进程锁故事，桌面 sidecar 与终端服务并发跑同一 home 实测会间歇挂死 sidecar 且有数据竞争风险。共享/迁移终端数据是将来显式的单实例迁移功能，不做默认。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），保证桥插件层始终在壳 home 的 web profile 里。
+- **DSH_HOME 所有权**：默认共享真实 `~/.dsh`——桌面与终端是同一账号的两个面（会话历史、工作区、settings、credentials 全部同源可见）。`$DSH_HOME` env 可强制隔离。`~/.dsh-desktop/` 只放壳的日志。⚠️ 并发注意：harness 对同一 DSH_HOME 没有多进程锁；单用户下基本安全（会话是 per-session JSONL，JSON storages 是整文件 last-wins 原子写），但同一会话同时被两个面驱动是未定义行为；协调式单实例是壳 M2 项。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），桥及其 bundle 层进 web profile。
 - **端口**：`TcpListener::bind("127.0.0.1:0")` 取随机口，就绪探测 `GET /`（webserver 的 SPA index 路由）状态 2xx（500ms 间隔，120s 超时；tsx 冷启动慢）。
 - **WKWebView 已知坑（已修）**：webserver 对 loopback 并发 **chunked** 响应（无 content-length）会被 WKWebView 随机挂死/加载失败（39 个 boot bundle 突发时必现；Chrome 无此问题）。修复在 harness `packages/client/modules/src/index.ts` 的 serveBundle 显式 `content-length`；sidecar 从源码运行改源即生效，值得上游到 fork。
 - **窗口**：就绪后主线程建 `main` 窗口（1400×900）加载 `http://127.0.0.1:<port>`；初始化脚本注入冻结的 `window.__DSH_DESKTOP__`（platform = `std::env::consts::os`）。
@@ -116,7 +120,7 @@ DSH_DESKTOP_E2E_PROBE=1 pnpm desktop:dev
 DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 ```
 
-壳拥有 `~/.dsh-desktop/`（`home/` 即 sidecar 的 DSH_HOME，`logs/` 落 `sidecar.log` 与 `install.log`）。浏览器内验证桌面行为以 `window.__DSH_DESKTOP__` 手工注入为辅助手段。
+壳的 sidecar 默认跑在真实 `~/.dsh`（与终端同源）；`~/.dsh-desktop/logs/` 落 `sidecar.log` 与 `install.log`。浏览器内验证桌面行为以 `window.__DSH_DESKTOP__` 手工注入为辅助手段。
 
 ## Conventions
 
