@@ -2,26 +2,40 @@
  * Desktop webview bridge, browser half. Probes the desktop gate signal; in a
  * plain browser (terminal `dsh web`) the probe is 'absent' and apply returns
  * with zero registrations, so the row is always safe to mount. Inside the
- * shell it installs three effects — external-link routing, attention
- * notifications, and the shell.overlay desktop badge — all as reversible
- * effects collected by the plugin fiber.
+ * shell it installs four effects — external-link routing, download saving,
+ * attention notifications, and the shell.overlay desktop badge — all as
+ * reversible effects collected by the plugin fiber.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the 'shell.overlay' SlotMap declaration (ui-layout's
 // frame declares it) so the registration below typechecks against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the locale plugin's Context merge (ctx.locale).
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { AttentionEdge, AttentionRow } from './attention.ts'
 import { attentionIndex, diffAttention } from './attention.ts'
 import type { LinkDecision } from './links.ts'
 import { classifyAnchor } from './links.ts'
+import type { DownloadDecision } from './downloads.ts'
+import { classifyDownload, saveViaShell } from './downloads.ts'
 import type { DesktopProbe, TauriInvoke } from './env.ts'
 import { probeDesktop } from './env.ts'
 import { DesktopBadge } from './badge.tsx'
-import type { BadgeInjected } from './badge.tsx'
+import { en, zh, type DesktopBridgeKey } from './locales.ts'
 
-/** Required services: the slot registry and the sessions list feed. */
-export const inject = ['slots', 'sessions']
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** The desktop bridge's copy (badge labels). */
+    'desktop-bridge': DesktopBridgeKey
+  }
+}
+
+/** Dictionary namespace owned by this plugin. */
+const NS = 'desktop-bridge'
+
+/** Required services: the slot registry, the sessions list feed, and the locale registry. */
+export const inject = ['slots', 'sessions', 'locale']
 
 /** Logger face used by the installers (the cordis logger satisfies this). */
 interface WarnLog {
@@ -29,7 +43,7 @@ interface WarnLog {
 }
 
 /**
- * Client plugin body: probe, then install the three bridges.
+ * Client plugin body: probe, then install the four bridges.
  * @param ctx - client root context.
  * @throws when the gate signal is present but malformed, or the Tauri IPC carrier is missing (shell-contract violation; the boot audit reports the failed fiber without affecting other plugins).
  */
@@ -42,17 +56,21 @@ export function apply(ctx: ClientContext): void {
   }
   const { invoke } = probe
 
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'desktop-bridge: dictionaries')
   ctx.effect(() => installExternalLinks(document, invoke, logger), 'desktop-bridge: external links')
+  ctx.effect(() => installDownloads(document, invoke, logger), 'desktop-bridge: downloads')
   ctx.effect(() => installAttention(
     ctx.sessions.list,
     invoke,
     logger,
   ), 'desktop-bridge: attention')
-  const injected = (): BadgeInjected => ({ openExternal: (url) => { void callOpenExternal(invoke, url, logger) } })
+  const injected = (): { openExternal: (url: string) => void } => ({
+    openExternal: (url) => { void callOpenExternal(invoke, url, logger) },
+  })
   // slots.inject waits on the ui-layout declaration (activation order is
   // unconstrained), reruns after redeclaration, and leaves with this fiber.
   ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, inject: injected }, DesktopBadge))
+    ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge))
 }
 
 /**
@@ -65,16 +83,8 @@ export function apply(ctx: ClientContext): void {
 export function installExternalLinks(doc: Document, invoke: TauriInvoke, logger: WarnLog): () => void {
   const onClick = (event: MouseEvent): void => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-    const target = event.target
-    if (target === null || typeof (target as Element).closest !== 'function') return
-    const anchor = (target as Element).closest('a')
-    if (anchor === null) return
-    let decision: LinkDecision
-    try {
-      decision = classifyAnchor(anchor as HTMLAnchorElement, doc.defaultView?.location.origin ?? '')
-    } catch {
-      return
-    }
+    const decision = anchorDecision(event, doc, classifyAnchor)
+    if (decision === undefined) return
     if (decision.action === 'route') {
       event.preventDefault()
       void callOpenExternal(invoke, decision.url, logger)
@@ -82,6 +92,56 @@ export function installExternalLinks(doc: Document, invoke: TauriInvoke, logger:
   }
   doc.addEventListener('click', onClick, true)
   return () => { doc.removeEventListener('click', onClick, true) }
+}
+
+/**
+ * Capture-phase download bridge: `a[download]` clicks fetch their bytes and
+ * hand them to the shell's save command; a rejected save falls back to a
+ * plain navigational download.
+ * @param doc - the document to listen on (injected for tests).
+ * @param invoke - the shell IPC carrier.
+ * @param logger - warning sink for rejected invokes.
+ * @returns the disposer removing the listener.
+ */
+export function installDownloads(doc: Document, invoke: TauriInvoke, logger: WarnLog): () => void {
+  const onClick = (event: MouseEvent): void => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    const decision = anchorDecision(event, doc, classifyDownload)
+    if (decision === undefined) return
+    if (decision.action === 'pass') return
+    event.preventDefault()
+    saveViaShell(decision, invoke).then(
+      (saved) => { if (saved === undefined) fallbackDownload(decision.url) },
+      (error: unknown) => {
+        logger.warn(`dsh-desktop-bridge: save failed for ${decision.url}, falling back to navigation: ${String(error)}`)
+        fallbackDownload(decision.url)
+      },
+    )
+  }
+  doc.addEventListener('click', onClick, true)
+  return () => { doc.removeEventListener('click', onClick, true) }
+}
+
+/** Resolve the clicked anchor and run one classifier; undefined = not an anchor click. */
+function anchorDecision<T>(
+  event: MouseEvent,
+  doc: Document,
+  classify: (anchor: Pick<HTMLAnchorElement, 'href' | 'target' | 'download' | 'getAttribute'>, origin: string) => T,
+): T | undefined {
+  const target = event.target
+  if (target === null || typeof (target as Element).closest !== 'function') return undefined
+  const anchor = (target as Element).closest('a')
+  if (anchor === null) return undefined
+  try {
+    return classify(anchor as HTMLAnchorElement, doc.defaultView?.location.origin ?? '')
+  } catch {
+    return undefined
+  }
+}
+
+/** Last-resort download: let the webview navigate to the URL. */
+function fallbackDownload(url: string): void {
+  window.location.href = url
 }
 
 /** Fire one open-external IPC call; on rejection fall back to window.open. */

@@ -10,7 +10,7 @@ DSH 本身就是「Node Host 进程 + 纯 Web UI」的分离架构，壳只需�
 
 1. spawn Harness 子进程（sidecar，捆绑 Node 24 + 架构相关原生模块）
 2. 随机回环端口分配（`portpicker`，避免冲突）
-3. 就绪检测（轮询 `/api/host.describe`）
+3. 就绪检测（轮询 `GET /`，webserver 就绪即 2xx）
 4. 窗口加载 `http://127.0.0.1:<port>`（系统 WebView：WKWebView / WebView2）
 
 Electron 壳里 Chromium + Node 是纯冗余——DSH 带原生模块（landlock addon）需要真 Node ABI，dsh-desktop 因此单独捆绑了 node@24.9.0，Electron 自带的运行时完全空转。Tauri 版直接砍掉这层开销。
@@ -49,8 +49,8 @@ dsh-desktop
 ## Milestones
 
 - [x] M0 桥插件：`plugin/dsh-desktop-bridge`（外链路由 / 注意力通知 / 桌面指示），实机挂载验证通过
-- [ ] M1 壳原型：Tauri 脚手架 + sidecar spawn + 端口分配 + 就绪检测 + 窗口加载 + `__DSH_DESKTOP__` 注入 + IPC 命令表
-- [ ] M2 对齐 dsh-desktop 行为：单实例锁、孤儿进程清理、日志落盘、启动根目录管理、下载桥与通知点击回跳
+- [x] M1 壳原型：Tauri 脚手架 + sidecar spawn + 端口分配 + 就绪检测 + 窗口加载 + `__DSH_DESKTOP__` 注入 + IPC 命令表（e2e `DSH_E2E_OK`；WKWebView chunked 加载失败已修，见 docs/notes）
+- [ ] M2 对齐 dsh-desktop 行为：单实例锁、孤儿进程清理、日志落盘、启动根目录管理、通知点击回跳
 - [ ] M3 平台化：macOS 签名公证、自动更新、安装包（DMG / NSIS）
 - [ ] M4 WKWebView / WebView2 下 DSH client UI 回归（重点：`color-mix()` 等 CSS 兼容）
 

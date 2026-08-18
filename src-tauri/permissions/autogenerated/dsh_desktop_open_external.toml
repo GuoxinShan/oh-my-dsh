@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dsh-desktop-open-external"
+description = "Enables the dsh_desktop_open_external command without any pre-configured scope."
+commands.allow = ["dsh_desktop_open_external"]
+
+[[permission]]
+identifier = "deny-dsh-desktop-open-external"
+description = "Denies the dsh_desktop_open_external command without any pre-configured scope."
+commands.deny = ["dsh_desktop_open_external"]

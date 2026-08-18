@@ -1,0 +1,16 @@
+{
+  "name": "dsh-desktop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "plugin:setup": "cd plugin/dsh-desktop-bridge && pnpm install && pnpm run setup",
+    "plugin:check": "cd plugin/dsh-desktop-bridge && pnpm run typecheck && pnpm run test && pnpm run build",
+    "check": "pnpm run plugin:check"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6"
+  }
+}

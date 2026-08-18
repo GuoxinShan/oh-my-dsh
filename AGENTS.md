@@ -39,8 +39,20 @@ docs/                        补充规范（未来；能进本文件的不单开
 |---|---|---|
 | `dsh_desktop_open_external` | `{ url: string }` | 系统浏览器打开 http(s)/mailto 链接。invoke 被拒时插件回退 `window.open(url, '_blank', 'noopener')` 并 `logger.warn`。 |
 | `dsh_desktop_notify` | `{ title: string, body: string }` | 原生系统通知（回合完成 / 等待输入）。fire-and-forget，拒绝只记日志。 |
+| `dsh_desktop_save_file` | `{ name: string, base64: string }` | 下载桥：把 base64 字节写入用户下载目录（文件名去路径成分，重名自动加 `-N` 后缀），返回落盘绝对路径。M2 起存在。 |
 
 加命令 = 先改本表，再改两侧。
+
+### 壳实现要点（M1，`src-tauri/`）
+
+- **sidecar 启动**：直接 `node --import tsx/esm apps/cli/src/bin.ts web --port <N>`（cwd = DSH checkout），不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。运行时发现顺序：`DSH_CHECKOUT` env → `~/workspace/coding-study/deepseek-harness`（校验 `docs/architecture.md`）。
+- **DSH_HOME 所有权**：壳拥有独立 `$HOME/.dsh-desktop/`（`home/` 作为 DSH_HOME、`logs/` 落 sidecar 与安装日志），**不与终端 `~/.dsh` 共享**：harness 对同一 DSH_HOME 没有多进程锁故事，桌面 sidecar 与终端服务并发跑同一 home 实测会间歇挂死 sidecar 且有数据竞争风险。共享/迁移终端数据是将来显式的单实例迁移功能，不做默认。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），保证桥插件层始终在壳 home 的 web profile 里。
+- **端口**：`TcpListener::bind("127.0.0.1:0")` 取随机口，就绪探测 `GET /`（webserver 的 SPA index 路由）状态 2xx（500ms 间隔，120s 超时；tsx 冷启动慢）。
+- **WKWebView 已知坑（已修）**：webserver 对 loopback 并发 **chunked** 响应（无 content-length）会被 WKWebView 随机挂死/加载失败（39 个 boot bundle 突发时必现；Chrome 无此问题）。修复在 harness `packages/client/modules/src/index.ts` 的 serveBundle 显式 `content-length`；sidecar 从源码运行改源即生效，值得上游到 fork。
+- **窗口**：就绪后主线程建 `main` 窗口（1400×900）加载 `http://127.0.0.1:<port>`；初始化脚本注入冻结的 `window.__DSH_DESKTOP__`（platform = `std::env::consts::os`）。
+- **IPC 能力**：capability 授 `core:default` + 四个 `allow-dsh-desktop-*` 权限（`build.rs` 的 `AppManifest::commands` 自动生成，标识符把下划线转连字符），remote urls 模式 `http://127.0.0.1:*`（随机端口）。
+- **命令后端（M1 范围）**：open_external 按平台 `open`/`xdg-open`/`start`，先做 scheme 白名单（http/https/mailto/tel）；notify 用 `osascript display notification`（darwin）/ `notify-send`（linux），title/body 做引号转义；Windows 通知 M3 补。退出时 SIGKILL 子进程（优雅 SIGTERM→SIGKILL 阶梯是壳 M2 范围）。
+- **e2e 探针**：`DSH_DESKTOP_E2E_PROBE=1` 时壳在页面加载后经 `window.eval`（主线程调度，wry 约束）注入探针 JS（gate→app-root→badge DOM→save_file IPC 往返），verdict 经 IPC 命令 `dsh_desktop_e2e_report`（`dsh-e2e-` hash 兜底）；壳轮询 IPC 结论并打日志。配 `DSH_DESKTOP_E2E_EXIT=1` 自动退出：0 通过 / 2 失败 / 3 超时。注意：`window.title()` 与 `document.title` 在 macOS 上不同步，标题不能做 verdict 通道。
 
 ### 功能面
 
@@ -50,10 +62,11 @@ M1（已实现）：
 2. **注意力通知** —— 订阅 `ctx.sessions.list`（raf 批量快照流），做状态转移 diff（纯函数 `diffAttention`，`src/client/attention.ts`）：`running: true→false` 或 `pendingInteraction: 无→有`，且通知时刻 `document.hidden`，发 `dsh_desktop_notify`；一轮转移同时出现两种边时只发「等待输入」一条。标题用 `displayTitle`。后台会话（未选中）同样通知——这是桌面形态的核心价值。
 3. **桌面指示** —— `shell.overlay`（加性 list 槽，全帧浮层）注册 `desktop-badge` 条目：右下角小 pill「桌面版」，点击以 `dsh_desktop_open_external` 打开当前 origin（复制会话到系统浏览器）。样式只用 `--dsw-*` 语义 token，绝不写字面色。
 
-M2（规划，先改本表再动手）：
+M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
-- 下载桥：`/export` 的 blob 下载在 WKWebView 不落地 → 捕获 `a[download]` 点击，fetch blob → base64 → `dsh_desktop_save_file { name, base64 }`。
-- 通知点击回跳：壳发 `dsh-desktop://focus-session` 事件，插件聚焦并 `sessions.open(id)`。
+- ~~下载桥~~（已实现）：捕获 `a[download]` 点击（同源 http(s) 与 `blob:`，纯函数 `classifyDownload` 判定）→ fetch blob → base64 → `dsh_desktop_save_file`；invoke 失败回退 `location.href` 导航下载。
+- ~~badge 文案接 `ctx.locale` 双语~~（已实现，namespace `desktop-bridge`）。
+- 通知点击回跳：壳发 `dsh-desktop://focus-session` 事件，插件聚焦并 `sessions.open(id)`。**受阻**：macOS 通知点击回调需 UNUserNotificationCenter delegate（objc2 绑定），`osascript` 无回调通道——留待 M3 平台化一并做。
 - 托盘 / 未读角标（壳读 DOM title 或插件显式上报）。
 
 ### 组合与 slot 纪律（沿用 DSH client 约定的最小子集）
@@ -66,7 +79,7 @@ M2（规划，先改本表再动手）：
 
 ## 壳（Tauri 2）契约要点
 
-壳对插件只有两个义务：初始化脚本注入 `window.__DSH_DESKTOP__`（见上），注册 IPC 命令表（见上）。其余职责不变：spawn harness sidecar（`dsh web`，随机回环端口）、`/api/host.describe` 就绪检测、窗口加载 `http://127.0.0.1:<port>`。生产形态把本插件经 `dsh plugin --profile web add` 装进随包 profile（自带 `dsh.bundle` 层，无需 `--patch`）。
+壳对插件只有两个义务：初始化脚本注入 `window.__DSH_DESKTOP__`（见上），注册 IPC 命令表（见上）。其余职责不变：spawn harness sidecar（`dsh web`，随机回环端口）、`GET /` 就绪检测（host.describe 是 RPC 方法名，不是 HTTP 路由）、窗口加载 `http://127.0.0.1:<port>`。生产形态把本插件经 `dsh plugin --profile web add` 装进随包 profile（自带 `dsh.bundle` 层，无需 `--patch`）。
 
 ## Commands
 
@@ -93,7 +106,17 @@ curl -s localhost:3987/ | grep -o 'dsh-desktop-bridge[^\"]*'   # boot graph 应�
 curl -sI localhost:3987/plugins/dsh-desktop-bridge/client.js   # 应 200
 ```
 
-浏览器验证需真实 Tauri 环境（门控信号 absent → 插件静默），故桌面行为以 `window.__DSH_DESKTOP__` 手工注入 + 浏览器控制台冒烟为辅助手段。
+### 壳的运行与端到端验证（M1 起）
+
+```sh
+# 前置：Rust toolchain（rustup）、Node 22+ 与 DSH checkout（发现顺序见「壳实现要点」）
+pnpm desktop:dev                # dev 壳：spawn sidecar → 就绪 → 开窗
+# e2e（探针走 gate→badge DOM→save_file IPC 往返，结论打在 stdout；EXIT 变体自动退出）
+DSH_DESKTOP_E2E_PROBE=1 pnpm desktop:dev
+DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
+```
+
+壳拥有 `~/.dsh-desktop/`（`home/` 即 sidecar 的 DSH_HOME，`logs/` 落 `sidecar.log` 与 `install.log`）。浏览器内验证桌面行为以 `window.__DSH_DESKTOP__` 手工注入为辅助手段。
 
 ## Conventions
 

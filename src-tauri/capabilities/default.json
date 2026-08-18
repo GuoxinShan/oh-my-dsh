@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/acl/capability",
+  "identifier": "desktop-bridge",
+  "description": "Lets the locally spawned harness server (random loopback port) use the desktop bridge IPC commands",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "core:default",
+    "allow-dsh-desktop-open-external",
+    "allow-dsh-desktop-notify",
+    "allow-dsh-desktop-save-file",
+    "allow-dsh-desktop-e2e-report"
+  ]
+}
