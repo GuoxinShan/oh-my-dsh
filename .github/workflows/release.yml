@@ -1,25 +1,29 @@
 name: Release
 
-# 发布流水线：打 tag（v*）或手动触发 → macOS runner 构建 → Developer ID 签名
-# → Apple 公证（app 内嵌）→ DMG 单独公证 → 上传 GitHub Release（dmg +
-# updater artifacts + latest.json）。所需 secrets 与密钥一次性配置见
-# docs/release-runbook.md；仓库私有/公有都能跑，公有仓库 runner 免费。
+# 增量发布流水线，tag 前缀分家（见 AGENTS.md「发版」）：
+#   desktop/vX.Y.Z        → 桌面公证版（.app/.dmg + updater artifacts + latest.json）
+#   plugin/<name>/vX.Y.Z  → 插件源码 Release（git archive 附件，不发 npm）
+#
+# ⚠️ latest 指针纪律：自动更新端点是 releases/latest/download/latest.json，
+# desktop Release 独占 latest 指针；插件 Release 一律 make_latest: false，
+# 否则插件发布会把 latest 抢走、桌面自动更新即刻断链。
 
 on:
   push:
-    tags: ['v*']
+    tags: ['desktop/v*', 'plugin/*/v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.1.2); used only for manual runs'
+        description: 'Release tag (e.g. desktop/v0.1.2 or plugin/dsh-provider-balance/v0.4.0)'
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build, sign, notarize, publish
+  desktop:
+    name: Desktop (sign, notarize, publish)
+    if: startsWith(github.ref_name, 'desktop/v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'desktop/v'))
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -34,7 +38,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
-        id: runtime-cache
         uses: actions/cache@v4
         with:
           path: |
@@ -58,15 +61,13 @@ jobs:
           security import /tmp/signing.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" build.keychain
           rm -f /tmp/signing.p12
-          # Developer ID G2 intermediate (chain the scanner walks).
           curl -s -A "Mozilla/5.0" -o /tmp/devg2ca.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
           security import /tmp/devg2ca.cer -k build.keychain
           rm -f /tmp/devg2ca.cer
           security find-identity -v -p codesigning build.keychain
 
       - name: Bridge typecheck anchor (fork checkout doubles as DSH_CHECKOUT)
-        run: |
-          DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
+        run: DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
 
       - name: Build signed + notarized bundle
         env:
@@ -95,28 +96,81 @@ jobs:
           set -euo pipefail
           BUNDLE=src-tauri/target/release/bundle
           VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          TARBALL="$BUNDLE/macos/dsh-desktop.app.tar.gz"
-          SIG=$(cat "$TARBALL.sig")
+          SIG=$(cat "$BUNDLE/macos/dsh-desktop.app.tar.gz.sig")
           REPO="${{ github.repository }}"
-          node - "$VERSION" "$SIG" "https://github.com/$REPO/releases/download/${{ github.ref_name || inputs.tag }}/dsh-desktop.app.tar.gz" <<'EOF'
-          const [,, version, sig, url] = process.argv
+          TAG="${{ github.ref_name || inputs.tag }}"
+          node -e '
+          const [version, sig, url] = [process.argv[1], process.argv[2], process.argv[3]]
           const manifest = {
             version,
-            notes: 'See the release page for notes.',
+            notes: "See the release page for notes.",
             pub_date: new Date().toISOString(),
-            platforms: { 'darwin-aarch64': { signature: sig, url } },
+            platforms: { "darwin-aarch64": { signature: sig, url } },
           }
-          require('fs').writeFileSync('src-tauri/target/release/bundle/latest.json', JSON.stringify(manifest, null, 2) + '\n')
-          EOF
+          require("fs").writeFileSync("src-tauri/target/release/bundle/latest.json", JSON.stringify(manifest, null, 2) + "\n")
+          ' "$VERSION" "$SIG" "https://github.com/$REPO/releases/download/$TAG/dsh-desktop.app.tar.gz"
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (owns the latest pointer)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name || inputs.tag }}
+          make_latest: true
           files: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz
             src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig
             src-tauri/target/release/bundle/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  plugin:
+    name: Plugin (${{ github.ref_name }})
+    if: startsWith(github.ref_name, 'plugin/') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'plugin/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: git archive needs the tagged tree, and workflow_dispatch
+      # runs check out a branch (shallow) where tags are absent otherwise.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # plugin/<name>/vX.Y.Z → name + version; fail loud on a malformed tag.
+      - name: Resolve plugin name and version from the tag
+        id: plugin
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name || inputs.tag }}"
+          NAME=$(printf '%s' "$TAG" | sed -E 's|^plugin/([^/]+)/v.*$|\1|')
+          VERSION=$(printf '%s' "$TAG" | sed -E 's|^plugin/[^/]+/v(.*)$|\1|')
+          [ -d "plugin/$NAME" ] || { echo "plugin/$NAME not found"; exit 1; }
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package the plugin subtree (git archive)
+        run: |
+          set -euo pipefail
+          NAME=${{ steps.plugin.outputs.name }}
+          TAG="${{ github.ref_name || inputs.tag }}"
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="$NAME/" -o "dist/$NAME-${{ steps.plugin.outputs.version }}.tar.gz" "$TAG:plugin/$NAME"
+
+      # 插件 Release 绝不抢 latest 指针（见文件头注释）。
+      - name: Publish GitHub Release (never latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          make_latest: false
+          body: |
+            ${{ steps.plugin.outputs.name }} ${{ steps.plugin.outputs.version }}
+
+            安装（从 monorepo tag）：
+            ```
+            dsh plugin --profile web add https://github.com/${{ github.repository }}.git#plugin/${{ steps.plugin.outputs.name }}:${{ github.ref_name || inputs.tag }}
+            ```
+            或下载下方 tarball 解包后 `dsh plugin --profile web add <目录>`。
+            变更见包内 CHANGELOG / README。
+          files: |
+            dist/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

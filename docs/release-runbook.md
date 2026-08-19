@@ -1,8 +1,17 @@
 # 发布 Runbook（GitHub Actions + GitHub Releases）
 
-面向「推一个 tag 就出公证版安装包并接入自动更新」的完整操作手册。构建细节见 `packaging-playbook.md`，本文件只管发布。
+面向「推一个 tag 就出发布物」的完整操作手册。构建细节见 `packaging-playbook.md`，本文件只管发布。
 
-## 0. 一次性配置：Secrets（Settings → Secrets and variables → Actions）
+## 0. tag 约定（增量发布，桌面与插件互不锁步）
+
+| 发什么 | tag | Release 产物 | latest 指针 |
+|---|---|---|---|
+| 桌面公证版 | `desktop/vX.Y.Z` | dmg + app.tar.gz + .sig + latest.json | **独占**（`make_latest: true`） |
+| 插件 | `plugin/<name>/vX.Y.Z` | git archive 的插件源码 tarball + 安装说明 | **永不**（`make_latest: false`） |
+
+⚠️ **latest 指针纪律**：桌面自动更新端点是 `releases/latest/download/latest.json`——插件 Release 抢走 latest 会让桌面自动更新即刻 404。流水线已内置 `make_latest: false`；若手动在网页上发插件 Release，务必不勾 "Set as the latest release"。桌面版本号 = `tauri.conf.json` 与 `Cargo.toml` 两处同步；插件版本号 = 各包 `package.json`。
+
+## 0.5 一次性配置：Secrets（Settings → Secrets and variables → Actions）
 
 | Secret | 内容 | 生成方式 |
 |---|---|---|
@@ -20,21 +29,33 @@
 
 ## 1. 发布（正常路径）
 
+**桌面**：
+
 ```sh
 # 1. 版本号两处同步：src-tauri/tauri.conf.json 的 version 与 src-tauri/Cargo.toml 的 version
 # 2. （可选）runtime 升级：fork 打 desktop/v* 标签 + 更新 runtime/revision.json
-git tag v0.1.2 && git push origin v0.1.2
+git tag desktop/v0.1.2 && git push origin desktop/v0.1.2
 ```
 
-推 tag 即触发 `.github/workflows/release.yml`：组装 runtime（缓存命中秒级）→ 构建 → Developer ID 签名（app + runtime 内 16 个 Mach-O）→ Apple 公证 → DMG 单独公证 → 上传 Release 附件（`dsh-desktop_<ver>_aarch64.dmg`、`dsh-desktop.app.tar.gz(+ .sig)`、`latest.json`）。
+推 tag 即触发 release.yml 的 desktop job：组装 runtime（缓存命中秒级）→ 构建 → Developer ID 签名（app + runtime 内 16 个 Mach-O）→ Apple 公证 → DMG 单独公证 → 上传 Release 附件（`dsh-desktop_<ver>_aarch64.dmg`、`dsh-desktop.app.tar.gz(+ .sig)`、`latest.json`，`make_latest: true`）。
 
-验证：Actions 页面全绿 → Releases 页有该 tag 的附件 → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。
+验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。
+
+**插件**：
+
+```sh
+cd plugin/dsh-provider-balance
+# bump package.json version，提交后：
+git tag plugin/dsh-provider-balance/v0.4.0 && git push origin plugin/dsh-provider-balance/v0.4.0
+```
+
+触发 plugin job（ubuntu，秒级）：`git archive` 打插件子树 tarball → Release 附件 + 安装说明（`dsh plugin add <repo>#plugin/<name>:<tag>`），`make_latest: false`。测试仍在 ci.yml 的 push/PR 里跑；插件 Release 不重复跑测试（快照已由 tag 锚定）。
 
 ## 2. 自动更新的接线（已内置，无需操作）
 
 - 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 `dsh-desktop.app.tar.gz`，签名校验用上面的 tauri 私钥对应的公钥；
-- 用户侧：**启动后约 3s 自动检查一次**——有新版时右下角「桌面版」pill 亮小圆点；点开弹层即见「更新到 vX.Y.Z」，一键下载+校验+安装+自动重启。也可手动点「检查更新」。dev 构建/离线时静默不打扰；
-- **GitHub 的 latest 指向**：`action-gh-release` 每次发布同 tag 附件即更新 latest 指针；删旧 Release 不影响 latest 指向最新版。
+- 用户侧：**启动后约 3s 自动检查一次**——有新版时发一条原生系统通知；设置 → 「关于」页内可见「更新到 vX.Y.Z」，一键下载+校验+安装+自动重启（进页自动检查与启动检查共享同一次请求，可手动重查）。dev 构建/离线时静默不打扰；
+- **GitHub 的 latest 指向**：desktop Release `make_latest: true` 独占 latest；插件 Release 一律 `make_latest: false`（见 §0 的指针纪律）。
 
 ## 3. 手动发布路径（CI 不可用时的备胎）
 

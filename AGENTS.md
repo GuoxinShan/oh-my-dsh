@@ -38,7 +38,7 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 ### 发版
 
 - 插件与桌面**锁步禁止**。各包 `package.json` 的 `version` 独立走动。
-- Git tag 前缀分家：桌面 `desktop/vX.Y.Z`（已有，钉 runtime revision）；插件 `plugin/<name>/vX.Y.Z`（例：`plugin/dsh-provider-balance/v0.4.0`）。GitHub Release 按 tag 分流，互不覆盖附件。
+- Git tag 前缀分家：桌面 `desktop/vX.Y.Z`（已有，钉 runtime revision）；插件 `plugin/<name>/vX.Y.Z`（例：`plugin/dsh-provider-balance/v0.4.0`）。GitHub Release 按 tag 分流，互不覆盖附件。**latest 指针纪律**：桌面自动更新端点 `releases/latest/download/latest.json` 依赖 latest 指针——desktop Release `make_latest: true` 独占，插件 Release 一律 `make_latest: false`（release.yml 已内置；网页手动发插件 Release 时同样不得设为 latest）。
 - 安装面保持 `dsh plugin --profile web add <repo>/plugin/<name>`（file: / git 路径均可）。本仓不把出树插件发到 npm——和 runtime「不发 npm、fork 是事实源」同一条线；要分发就打 git tag，让 `dsh plugin add` 指向该 tag。
 - 壳的 release 打包（`bridge.tar.gz` → `~/.dsh-desktop/bridge/` → 幂等 `plugin add`）今天只覆盖桥。迁入其他插件后，prepare 脚本对 `plugin/*` 循环打包/add；那是打包链的后续 PR，不在搬家当天改壳。
 
