@@ -164,10 +164,22 @@ console.log(`prepare-runtime: packed ${packed} fork packages` + (skipped.length 
 // passes the same --import for bundled runs).
 const runtimeDir = resolve(outDir, 'dsh')
 mkdirSync(runtimeDir, { recursive: true })
+// The fork set rides as DIRECT dependencies, not only overrides: a `npm:`
+// alias override reaches ordinary dependency edges, but the hoist fallback
+// (`.pnpm/node_modules`) and peer resolutions can still bind the official
+// upstream copy — observed when upstream's rc.8 matched a `^0.1.0-rc.7`
+// range and the composition loaded the unpatched registry build. Direct deps
+// always resolve the alias, and peers/hoists then bind to that instance.
+const forkDirectDeps = {}
+for (const name of FORK_MODIFIED) {
+  const forkName = `${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`
+  forkDirectDeps[name] = `npm:${forkName}@${forkNpmVersion}`
+}
 writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
   private: true,
   dependencies: {
-    '@deepseek-ai/dsh': forkBaseVersion,
+    ...forkDirectDeps,
+    '@deepseek-ai/dsh': `npm:${FORK_NPM_SCOPE}/dsh@${forkNpmVersion}`,
     tsx: '^4.19.2',
   },
   pnpm: { overrides },
@@ -187,6 +199,27 @@ writeFileSync(resolve(runtimeDir, 'pnpm-workspace.yaml'), [
 console.log('prepare-runtime: installing runtime tree...')
 rmSync(resolve(runtimeDir, 'pnpm-lock.yaml'), { force: true })
 execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+
+// 4b. Fail loud if any fork-modified package still resolved to an official
+// registry copy: the fix above is structural, but a future pnpm peer-resolution
+// path could reintroduce the drift — shipping the unpatched build is exactly
+// the failure this assembly exists to prevent.
+{
+  const { readdirSync } = await import('node:fs')
+  const drifted = []
+  const pnpmDir = resolve(runtimeDir, 'node_modules/.pnpm')
+  for (const entry of readdirSync(pnpmDir)) {
+    const hit = /^@deepseek-ai\+(.+)@/.exec(entry)
+    if (hit === null) continue
+    const pkg = `@deepseek-ai/${hit[1]}`
+    if (FORK_MODIFIED.has(pkg)) drifted.push(`${pkg} (${entry})`)
+  }
+  if (drifted.length > 0) {
+    console.error('prepare-runtime: fork-modified packages resolved to official registry copies:')
+    for (const line of drifted) console.error(`  ${line}`)
+    process.exit(1)
+  }
+}
 
 // 5. Runtime tools: node + pnpm binaries.
 const toolsDir = resolve(outDir, 'tools')
