@@ -2,15 +2,18 @@
  * Desktop webview bridge, browser half. Probes the desktop gate signal; in a
  * plain browser (terminal `dsh web`) the probe is 'absent' and apply returns
  * with zero registrations, so the row is always safe to mount. Inside the
- * shell it installs four effects — external-link routing, download saving,
- * attention notifications, and the shell.overlay desktop badge — all as
- * reversible effects collected by the plugin fiber.
+ * shell it installs five effects — external-link routing, download saving,
+ * attention notifications, the shell.overlay desktop badge, and the macOS
+ * titlebar fusion — all as reversible effects collected by the plugin fiber.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the 'shell.overlay' SlotMap declaration (ui-layout's
 // frame declares it) so the registration below typechecks against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the settings SlotMap declarations ('settings.section')
+// owned by the settings domain base — no runtime edge to ui-settings.
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { AttentionEdge, AttentionRow } from './attention.ts'
@@ -21,8 +24,13 @@ import type { DownloadDecision } from './downloads.ts'
 import { classifyDownload, saveViaShell } from './downloads.ts'
 import type { DesktopProbe, TauriInvoke } from './env.ts'
 import { probeDesktop } from './env.ts'
-import { DesktopBadge } from './badge.tsx'
+import { DesktopBadge, type BadgeInjected } from './badge.tsx'
+import { AboutSection, type AboutInjected } from './about.tsx'
 import { en, zh, type DesktopBridgeKey } from './locales.ts'
+import { installRailCss, installRailHider } from './rail.ts'
+import { DesktopRailControls, type RailControlsInjected } from './rail-controls.tsx'
+import { installTitlebarCss, shouldFuseTitlebar, TITLEBAR_ZONE_PX } from './titlebar.ts'
+import { DesktopDragStrip } from './titlebar.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -34,8 +42,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Dictionary namespace owned by this plugin. */
 const NS = 'desktop-bridge'
 
-/** Required services: the slot registry, the sessions list feed, and the locale registry. */
-export const inject = ['slots', 'sessions', 'locale']
+/** Required services: the slot registry, the sessions list feed, the locale registry, and the workspace actions (New Session). */
+export const inject = ['slots', 'sessions', 'locale', 'workspaces']
 
 /** Logger face used by the installers (the cordis logger satisfies this). */
 interface WarnLog {
@@ -56,6 +64,17 @@ export function apply(ctx: ClientContext): void {
   }
   const { invoke } = probe
 
+  // macOS overlay-titlebar fusion: reserve the top band under the floating
+  // traffic lights; the strip entry registered below is the drag region.
+  // Same gate hides the collapsed sidebar rail outright (rail.ts): the 56px
+  // strip ui-layout keeps would sit dead under the traffic lights.
+  const fuseTitlebar = shouldFuseTitlebar(probe.gate.platform)
+  if (fuseTitlebar) {
+    ctx.effect(() => installTitlebarCss(document, TITLEBAR_ZONE_PX), 'desktop-bridge: titlebar band')
+    ctx.effect(() => installRailCss(document), 'desktop-bridge: collapsed-rail css')
+    ctx.effect(() => installRailHider(document), 'desktop-bridge: collapsed-rail hider')
+  }
+
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'desktop-bridge: dictionaries')
   ctx.effect(() => installExternalLinks(document, invoke, logger), 'desktop-bridge: external links')
   ctx.effect(() => installDownloads(document, invoke, logger), 'desktop-bridge: downloads')
@@ -64,13 +83,91 @@ export function apply(ctx: ClientContext): void {
     invoke,
     logger,
   ), 'desktop-bridge: attention')
-  const injected = (): { openExternal: (url: string) => void } => ({
+  const injected = (): BadgeInjected => ({
     openExternal: (url) => { void callOpenExternal(invoke, url, logger) },
   })
+  // One updater round-trip per app boot, shared by the boot auto-check and
+  // the About section's mount check (both consume this memoized call).
+  let updateCheck: Promise<{ version: string; notes: string } | null> | undefined
+  const checkUpdate = (): Promise<{ version: string; notes: string } | null> => {
+    if (updateCheck === undefined) {
+      updateCheck = (async () => {
+        const raw = (await invoke.invoke('dsh_desktop_check_update')) as { update?: { version?: unknown; notes?: unknown } | null }
+        if (raw.update === null || raw.update === undefined) return null
+        return {
+          version: typeof raw.update.version === 'string' ? raw.update.version : '?',
+          notes: typeof raw.update.notes === 'string' ? raw.update.notes : '',
+        }
+      })()
+      // A failed check (offline, dev build without an endpoint) must not pin
+      // the memo forever — the next caller retries.
+      updateCheck.catch(() => { updateCheck = undefined })
+    }
+    return updateCheck
+  }
+  const t = ctx.locale.bind(NS) as (key: DesktopBridgeKey) => string
+  const aboutInjected = (): AboutInjected => ({
+    versionInfo: async () => {
+      const raw = (await invoke.invoke('dsh_desktop_version_info')) as { version?: unknown; harnessVersion?: unknown; runtimeRef?: unknown }
+      return {
+        version: typeof raw.version === 'string' ? raw.version : '?',
+        harnessVersion: typeof raw.harnessVersion === 'string' ? raw.harnessVersion : '?',
+        runtimeRef: typeof raw.runtimeRef === 'string' ? raw.runtimeRef : '?',
+      }
+    },
+    checkUpdate,
+    applyUpdate: async () => {
+      await invoke.invoke('dsh_desktop_apply_update')
+      // The process restarts on success; reaching here means the shell let
+      // the call resolve, which should not happen — treat as a failure.
+      throw new Error('apply_update resolved without restarting')
+    },
+    t,
+  })
+  // Boot auto-check (3s in): on a hit, one native notification points at the
+  // About section; misses and soft failures stay silent.
+  ctx.effect(() => {
+    const timer = setTimeout(() => {
+      checkUpdate().then((found) => {
+        if (found === null) return
+        void invoke.invoke('dsh_desktop_notify', { title: 'dsh-desktop', body: `${t('about.apply')} v${found.version}` })
+          .catch((error: unknown) => { logger.warn(`dsh-desktop-bridge: update notify rejected: ${String(error)}`) })
+      }, () => undefined)
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, 'desktop-bridge: boot update check')
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'desktop-about',
+    order: 100,
+    label: () => t('about.nav'),
+    inject: aboutInjected,
+  }, AboutSection))
   // slots.inject waits on the ui-layout declaration (activation order is
   // unconstrained), reruns after redeclaration, and leaves with this fiber.
-  ctx.slots.inject('shell.overlay', () =>
-    ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge))
+  ctx.slots.inject('shell.overlay', () => {
+    const disposeBadge = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge)
+    if (!fuseTitlebar) return disposeBadge
+    const disposeStrip = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-drag-strip', order: 0 }, DesktopDragStrip)
+    // Resolve ctx.layout lazily per click, never at registration time:
+    // slots.inject fires the moment ui-layout's declaration lands — inside
+    // that fiber's startup, before it turns ACTIVE — and strict ctx.get only
+    // serves ACTIVE providers, so a registration-time read can miss a layout
+    // that is about to exist (the controls would never appear).
+    const railInjected = (): RailControlsInjected => ({
+      toggleSidebar: () => {
+        const layout = ctx.get('layout')
+        if (layout === undefined) {
+          logger.warn('dsh-desktop-bridge: ctx.layout unavailable, sidebar toggle ignored')
+          return
+        }
+        layout.toggleSidebar()
+      },
+      startSession: () => { ctx.workspaces.startSession() },
+    })
+    const disposeControls = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-rail-controls', order: 5, locale: NS, inject: railInjected }, DesktopRailControls)
+    return () => { disposeControls(); disposeStrip(); disposeBadge() }
+  })
 }
 
 /**

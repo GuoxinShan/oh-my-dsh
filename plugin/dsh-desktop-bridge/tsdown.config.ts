@@ -47,7 +47,7 @@ function purityGate(): import('tsdown').UserConfig['plugins'][number] {
 export default defineConfig([
   {
     name: 'dsh-desktop-bridge',
-    entry: ['src/index.ts', 'src/invariant.ts'],
+    entry: ['src/index.ts', 'src/invariant.ts', 'src/log-sink.ts'],
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',

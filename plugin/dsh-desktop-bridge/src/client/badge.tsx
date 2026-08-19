@@ -19,8 +19,7 @@ export interface BadgeInjected {
 export type DesktopBadgeProps = BadgeInjected & PropsLocale<'desktop-bridge'>
 
 /**
- * The desktop pill: shows the desktop identity, hands the current origin to
- * the OS browser on click (the title explains the action).
+ * The web-end pill: clicking it hands the current origin to the OS browser.
  * @param props - the injected face plus the locale seat.
  * @returns the pill element.
  */

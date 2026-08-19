@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop-bridge",
   "version": "0.1.0",
-  "description": "Desktop webview bridge for the DeepSeek Harness web UI: external-link routing, native attention notifications, and a desktop badge — inert outside the desktop shell",
+  "description": "Desktop webview bridge for the DeepSeek Harness web UI (external-link routing, native attention notifications, desktop badge — inert outside the desktop shell), plus a host log sink persisting ctx.logger traffic to per-boot JSONL files",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -13,6 +13,9 @@
     "./invariant": {
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
+    },
+    "./log-sink": {
+      "default": "./lib/log-sink.js"
     },
     "./client": {
       "types": "./lib/types/client/index.d.ts",
@@ -45,6 +48,7 @@
   "files": [
     "lib/index.js",
     "lib/invariant.js",
+    "lib/log-sink.js",
     "lib/client.js",
     "lib/client.js.map",
     "lib/types/**/*.d.ts",
@@ -62,6 +66,7 @@
     "@deepseek-ai/cordis": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-client-ui-layout": ">=0.1.0-rc.5",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.5",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.5",
     "react": "^18.2.0"
   },
@@ -70,6 +75,8 @@
     "@deepseek-ai/dsh-client-locale": "link:dsh/packages/client/locale",
     "@deepseek-ai/dsh-client-runtime": "link:dsh/packages/client/runtime",
     "@deepseek-ai/dsh-client-ui-layout": "link:dsh/packages/client/ui-layout",
+    "@deepseek-ai/dsh-client-ui-primitives": "link:dsh/packages/client/ui-primitives",
+    "@deepseek-ai/dsh-client-ui-settings": "link:dsh/packages/client/ui-settings",
     "@deepseek-ai/dsh-client-ui-slots": "link:dsh/packages/client/ui-slots",
     "@types/node": "^24.13.3",
     "@types/react": "~18.3.1",

@@ -12,7 +12,7 @@ export interface DesktopGate {
   version: number
   /** Shell identity string, e.g. 'dsh-desktop'. */
   shell: string
-  /** OS platform, e.g. 'darwin' | 'win32' | 'linux'. */
+  /** OS platform as injected by the shell (`std::env::consts::OS`), e.g. 'macos' | 'windows' | 'linux'. */
   platform: string
 }
 

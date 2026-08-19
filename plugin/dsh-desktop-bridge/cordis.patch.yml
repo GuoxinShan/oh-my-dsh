@@ -1,8 +1,12 @@
-# The dsh-desktop-bridge bundle patch: mounts the desktop bridge as one row.
-# The node half is an empty surface apply; the browser half (discovered via
-# the package's dsh.client declaration) is inert unless the desktop shell's
-# gate signal is present.
+# The dsh-desktop-bridge bundle patch: mounts the desktop bridge as one row
+# plus the host log sink as another. The bridge's node half is an empty
+# surface apply and its browser half (discovered via the package's dsh.client
+# declaration) is inert unless the desktop shell's gate signal is present.
+# The log sink gives ctx.logger a file outlet (see src/log-sink.ts); it is
+# active wherever this bundle is mounted, terminal `dsh web` included.
 - insert:
     - id: dsh-desktop-bridge
       name: dsh-desktop-bridge
+    - id: dsh-desktop-log-sink
+      name: dsh-desktop-bridge/log-sink
 
