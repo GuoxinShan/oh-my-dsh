@@ -21,6 +21,10 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
+// invalidate themselves instead of shipping a stale tree.
+const SCRIPT_REV = 2
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
 const srcDir = resolve(repoRoot, 'runtime/src')
@@ -28,10 +32,18 @@ const outDir = resolve(repoRoot, 'runtime/build', revision.sha)
 const tarballDir = resolve(repoRoot, 'runtime/tarballs', revision.sha)
 const buildMarker = resolve(srcDir, '.prepare-runtime-ok')
 
-if (existsSync(resolve(outDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')) && existsSync(resolve(outDir, 'tools/node_modules/node/bin/node'))) {
+const cachedRev = existsSync(resolve(outDir, '.script-rev'))
+  ? readFileSync(resolve(outDir, '.script-rev'), 'utf8').trim()
+  : ''
+if (
+  cachedRev === String(SCRIPT_REV)
+  && existsSync(resolve(outDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'))
+  && existsSync(resolve(outDir, 'tools/node_modules/node/bin/node'))
+) {
   console.log(`prepare-runtime: cached ${revision.sha.slice(0, 12)} -> ${outDir}`)
   process.exit(0)
 }
+rmSync(outDir, { recursive: true, force: true })
 
 mkdirSync(outDir, { recursive: true })
 
@@ -118,6 +130,11 @@ console.log(`prepare-runtime: packed ${packed} fork packages` + (skipped.length 
 
 // 4. Runtime manifest: CLI from our tarball, every @deepseek-ai/* pinned to
 // our tarballs via overrides, plus the node/pnpm tools the sidecar needs.
+// tsx is a first-class runtime dep, not a dev nicety: profiles may install
+// source-distributed plugins (.ts entries under their node_modules), which
+// plain Node refuses to type-strip — the terminal source runtime loads them
+// via `node --import tsx/esm`, and the bundled runtime must match (the shell
+// passes the same --import for bundled runs).
 if (cliTarball === undefined) {
   console.error('prepare-runtime: @deepseek-ai/dsh tarball not found among packed packages')
   process.exit(1)
@@ -128,6 +145,7 @@ writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
   private: true,
   dependencies: {
     '@deepseek-ai/dsh': `file:${cliTarball}`,
+    tsx: '^4.19.2',
   },
   pnpm: { overrides },
 }, null, 2) + '\n')
@@ -157,5 +175,6 @@ writeFileSync(resolve(toolsDir, 'package.json'), JSON.stringify({
 writeFileSync(resolve(toolsDir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  node: true\n')
 rmSync(resolve(toolsDir, 'pnpm-lock.yaml'), { force: true })
 execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: toolsDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+writeFileSync(resolve(outDir, '.script-rev'), `${SCRIPT_REV}\n`)
 
 console.log(`prepare-runtime: done -> ${outDir}`)

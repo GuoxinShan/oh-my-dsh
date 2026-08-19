@@ -1,0 +1,122 @@
+name: Release
+
+# 发布流水线：打 tag（v*）或手动触发 → macOS runner 构建 → Developer ID 签名
+# → Apple 公证（app 内嵌）→ DMG 单独公证 → 上传 GitHub Release（dmg +
+# updater artifacts + latest.json）。所需 secrets 与密钥一次性配置见
+# docs/release-runbook.md；仓库私有/公有都能跑，公有仓库 runner 免费。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.2); used only for manual runs'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign, notarize, publish
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
+        id: runtime-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            runtime/src
+            runtime/build
+            runtime/tarballs
+          key: runtime-${{ hashFiles('runtime/revision.json') }}-${{ hashFiles('scripts/prepare-runtime.mjs') }}
+
+      - name: Import signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$MACOS_CERTIFICATE" | base64 --decode > /tmp/signing.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import /tmp/signing.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f /tmp/signing.p12
+          # Developer ID G2 intermediate (chain the scanner walks).
+          curl -s -A "Mozilla/5.0" -o /tmp/devg2ca.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import /tmp/devg2ca.cer -k build.keychain
+          rm -f /tmp/devg2ca.cer
+          security find-identity -v -p codesigning build.keychain
+
+      - name: Bridge typecheck anchor (fork checkout doubles as DSH_CHECKOUT)
+        run: |
+          DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
+
+      - name: Build signed + notarized bundle
+        env:
+          DSH_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm desktop:build
+
+      - name: Notarize the DMG (tauri notarizes the .app only)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          spctl -a -vv -t install "$DMG"
+
+      - name: Compose updater manifest (latest.json)
+        run: |
+          set -euo pipefail
+          BUNDLE=src-tauri/target/release/bundle
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          TARBALL="$BUNDLE/macos/dsh-desktop.app.tar.gz"
+          SIG=$(cat "$TARBALL.sig")
+          REPO="${{ github.repository }}"
+          node - "$VERSION" "$SIG" "https://github.com/$REPO/releases/download/${{ github.ref_name || inputs.tag }}/dsh-desktop.app.tar.gz" <<'EOF'
+          const [,, version, sig, url] = process.argv
+          const manifest = {
+            version,
+            notes: 'See the release page for notes.',
+            pub_date: new Date().toISOString(),
+            platforms: { 'darwin-aarch64': { signature: sig, url } },
+          }
+          require('fs').writeFileSync('src-tauri/target/release/bundle/latest.json', JSON.stringify(manifest, null, 2) + '\n')
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          files: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz
+            src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig
+            src-tauri/target/release/bundle/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

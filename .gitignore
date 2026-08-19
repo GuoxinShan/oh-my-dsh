@@ -15,6 +15,20 @@ plugin/dsh-desktop-bridge/lib/
 # Tauri
 src-tauri/gen/
 
+# 打包资源（prepare-desktop-bundle 再生：runtime/bridge tarball + revision 副本）
+src-tauri/resources/
+
+# 签名与公证凭据（绝不入库）
+*.p8
+*.p12
+*.pem
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.key
+AuthKey_*
+tauri-keys/
+
 # Logs & local
 *.log
 .DS_Store
@@ -29,3 +43,6 @@ src-tauri/gen/
 # 运行时组装缓存（fork 克隆与构建产物，机器本地再生）
 runtime/src/
 runtime/build/
+
+# fork 包 tarball（prepare-runtime 再生）
+runtime/tarballs/

@@ -1,25 +1,59 @@
 # AGENTS.md
 
-dsh-desktop 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）的桌面化项目，由两个平面组成：
+dsh-desktop 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）的桌面化 monorepo：出树插件与 Tauri 壳同仓、独立发版。两个平面：
 
-- **`plugin/dsh-desktop-bridge`** —— DSH 双面客户端插件（npm 包，TypeScript）。把 DSH Web UI 桥接到桌面 webview 环境：外链路由、原生注意力通知、桌面指示。这是本仓库当前的产品主体。
-- **Tauri 2 Rust 壳**（规划中，见 Milestones）—— spawn harness sidecar、端口分配、就绪检测、窗口加载。壳层不含业务逻辑；harness 不感知壳的存在。
+- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。当前成员 `dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）；后续成员按同格迁入（`dsh-mcp-settings`、`dsh-provider-balance`）。
+- **Tauri 2 Rust 壳** —— spawn harness sidecar、端口分配、就绪检测、窗口加载。壳层不含业务逻辑；harness 不感知壳的存在。壳只特殊对待桥插件（gate + IPC）；其余插件对壳不可见。
 
 规范层级：[README.md](README.md) 记录「为什么」（技术选型）；本文件记录「契约与约定」（怎么做）；代码是实现。冲突时以本文件为准。改契约必须同 PR 改本文件。
 
 ## Repository layout
 
 ```
-plugin/dsh-desktop-bridge/   DSH 客户端插件包（本文件「插件契约」一节的实现）
-  src/index.ts                 host half：surface 插件，空 apply
-  src/invariant.ts             伙伴不变量说明
-  src/client/                  browser half：env 探测 + 三个桥 + shell.overlay 桌面指示
-  tests/                       node:test 单测（纯函数）
-scripts/                     壳层与工具脚本（未来）
-docs/                        补充规范（未来；能进本文件的不单开文件）
+plugin/<name>/               一个可独立发版的 DSH 插件包（目录名 === package.json name）
+  dsh-desktop-bridge/        桌面门控桥 + 日志汇（本文件「插件契约」一节）
+    src/index.ts             host half：surface 插件，空 apply
+    src/log-sink.ts          日志汇 host 行：ctx.logger → 每启动一个 JSONL 文件（见「日志汇行」）
+    src/invariant.ts         伙伴不变量说明
+    src/client/              browser half：env 探测 + 三个桥 + shell.overlay 桌面指示
+    tests/                   node:test 单测（纯函数）
+src-tauri/                   Tauri 2 壳（不感知插件业务）
+scripts/                     壳层与工具脚本：prepare-runtime.mjs、prepare-desktop-bundle.mjs
+docs/                        packaging-playbook.md + notes/（决策记录住仓根，不跟包走）
 ```
 
 `CLAUDE.md` 是指向本文件的 symlink（与 DSH 仓库同惯例）：改 AGENTS.md，不要改链接。
+
+## 插件 monorepo 规范
+
+本仓是「个人 DSH 扩展 + 桌面壳」的单一事实源。插件与桌面同仓，是为了一次 checkout、一次 harness rc bump 过全树，同时保留各自的发布节奏。对照：[dataelement/dsh-desktop](https://github.com/dataelement/dsh-desktop) 把 DSH 钉在 npm 上、用仓根 `patches/` 改上游压缩产物——那是壳侧补丁模型，不是插件布局，不学。
+
+### 落点
+
+- 每个插件一个目录：`plugin/<package.json name>/`。目录名必须等于未加 scope 的包名，因为 `dsh plugin --profile web add <path>` 按这个路径装包，entry id 也是这个名字。
+- 一个目录 = 一个可 `plugin add` 的安装单元，自带 `package.json`、`dsh.bundle`/`cordis.patch.yml`、源码、测试。mcp-settings 那种「一包三行」（manager / inventory / ui）仍是**一个**目录、一份 patch，不是三个目录。
+- 桥插件不能当容器：它的 apply 在非桌面环境必须零副作用；mcp-settings / provider-balance 在终端 `dsh web` 也要工作。塞进 `dsh-desktop-bridge` 会把「桌面门控」和「始终挂载」搅在一个 fiber 里。
+- 不要再套 `plugin/packages/`，不要把插件放到仓根与 `src-tauri/` 平级，不要放进 fork 的 `packages/`。
+
+### 发版
+
+- 插件与桌面**锁步禁止**。各包 `package.json` 的 `version` 独立走动。
+- Git tag 前缀分家：桌面 `desktop/vX.Y.Z`（已有，钉 runtime revision）；插件 `plugin/<name>/vX.Y.Z`（例：`plugin/dsh-provider-balance/v0.4.0`）。GitHub Release 按 tag 分流，互不覆盖附件。
+- 安装面保持 `dsh plugin --profile web add <repo>/plugin/<name>`（file: / git 路径均可）。本仓不把出树插件发到 npm——和 runtime「不发 npm、fork 是事实源」同一条线；要分发就打 git tag，让 `dsh plugin add` 指向该 tag。
+- 壳的 release 打包（`bridge.tar.gz` → `~/.dsh-desktop/bridge/` → 幂等 `plugin add`）今天只覆盖桥。迁入其他插件后，prepare 脚本对 `plugin/*` 循环打包/add；那是打包链的后续 PR，不在搬家当天改壳。
+
+### 迁入既有插件仓
+
+- `git subtree`（或 `--allow-unrelated-histories`）保留历史，禁止拷贝文件了事。
+- 源仓工作区必须干净：未提交的发版改动先在源仓落地（mcp-settings 0.2.3 的 credentials 竞态就是这种）。
+- 迁入后源仓 archive 为只读，不再双写。
+- 迁入当天**不上**仓根 `pnpm-workspace.yaml`：桥锁 pnpm 10，mcp-settings 锁 pnpm 11。各包继续自己的 `pnpm install`；workspace 收敛是独立 PR。
+- 迁入当天不统一测试/构建工具链。第二步再把裸 `client.js` 分发（provider-balance）收进桥的 tsdown 纯度门。
+
+### 跨包纪律
+
+- 跨插件只走 slot 与 ctx 服务，禁止 import 另一插件的实现符号；harness 包只做 type-only import（构建时擦除）。
+- 决策记录一律 `docs/notes/`（仓根），不跟包走。包内 README 只写该包的安装与行为。
 
 ## 插件契约（dsh-desktop-bridge）
 
@@ -40,22 +74,32 @@ docs/                        补充规范（未来；能进本文件的不单开
 | `dsh_desktop_open_external` | `{ url: string }` | 系统浏览器打开 http(s)/mailto 链接。invoke 被拒时插件回退 `window.open(url, '_blank', 'noopener')` 并 `logger.warn`。 |
 | `dsh_desktop_notify` | `{ title: string, body: string }` | 原生系统通知（回合完成 / 等待输入）。fire-and-forget，拒绝只记日志。 |
 | `dsh_desktop_save_file` | `{ name: string, base64: string }` | 下载桥：把 base64 字节写入用户下载目录（文件名去路径成分，重名自动加 `-N` 后缀），返回落盘绝对路径。M2 起存在。 |
+| `dsh_desktop_version_info` | — | About 页信息：返回 `{ version, harnessVersion, runtimeRef }`（app 版本 + 解压 runtime 的 dsh 包版本 + 包内 runtime 标签）。 |
+| `dsh_desktop_check_update` | — | 查询更新端点（M3 起）：有更新返回 `{ update: { version, notes } }`，无则 `{ update: null }`；未配置/不可达时返回错误文案（软失败，弹层展示）。 |
+| `dsh_desktop_apply_update` | — | 下载+校验签名+安装+重启（成功即进程替换，调用方不再收到返回）；失败返回错误文案。 |
 
 加命令 = 先改本表，再改两侧。
 
-### 兼容行（桥 bundle 层）
+### 日志汇行（dsh-desktop-log-sink）
 
-桥插件的 `cordis.patch.yml` 还携带一个兼容行集：`dsh-mcp-settings-manager/-inventory/-ui` 置 `disabled: true`。原因：dsh-mcp-settings 按 rc.5 的 mcp-client API 构建，在 rc.7（`RECONNECT_DEFAULTS` 收为内部导出）下 import 即炸，拖垮整个插件树——这是**既存问题**（终端 3080 是 Aug 14 启动的长效进程所以没暴露，任何冷启动都会复现）。禁用整个行集让冷启动可 boot；dsh-mcp-settings 按 rc.7 重建（或 profile 把 mcp-client pin 回 rc.5）后删除本行集。
+桥包随 bundle 层挂载第二个行 `dsh-desktop-log-sink`（`exports["./log-sink"]`，host-only），解决 harness web 组合里 `ctx.logger` 无出口的问题：内建 sink 只有 1000 条内存环形缓冲，console exporter 未挂载，logger 流量不进 stdout，壳的 `desktop-*.log` 与终端 `web-*.log` 都抓不到它。
+
+- apply 注册一个 `ctx.logger` Exporter：每条消息一行 JSON（`{sn, ts, name, type, text[, backfill]}`；`text` 经 `Logger.format` 展开 printf 占位与 Error 栈，对象用 `util.inspect` 防循环引用），追加写入 `logger-<yyyymmdd-HHMMSS>.log`。级别 default=DEBUG（全量）。目录解析与 `web:log`/壳完全一致（`DSH_WEB_LOG_DIR` → `$DSH_HOME/logs`），`logger-latest.log` 软链指向最新（unix-only）。
+- 挂载时先从环形缓冲 backfill 启动早期消息（记录标 `backfill: true`）；进程级状态（文件路径 + sn 水位）放 `globalThis`，HMR 重挂载按水位去重、同一文件续写不新建。
+- 写盘失败为尽力而为：报一次 stderr（被壳 tee 捕获）后自闭，绝不把异常抛回日志调用方。
+- 该行随桥 bundle 层生效，终端 `dsh web`（同一 web profile）也会启用——刻意如此：终端同样没有 logger 出口。文件与 `web-*`/`desktop-*` 同家族，不轮转，手动清理。
 
 ### 壳实现要点（M1，`src-tauri/`）
 
 - **sidecar 启动**：直接 `node --import tsx/esm apps/cli/src/bin.ts web --port <N>`（cwd = DSH checkout），不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。运行时发现顺序：`DSH_CHECKOUT` env → `~/workspace/coding-study/deepseek-harness`（校验 `docs/architecture.md`）。
-- **DSH_HOME 所有权**：默认共享真实 `~/.dsh`——桌面与终端是同一账号的两个面（会话历史、工作区、settings、credentials 全部同源可见）。`$DSH_HOME` env 可强制隔离。`~/.dsh-desktop/` 只放壳的日志。⚠️ 并发注意：harness 对同一 DSH_HOME 没有多进程锁；单用户下基本安全（会话是 per-session JSONL，JSON storages 是整文件 last-wins 原子写），但同一会话同时被两个面驱动是未定义行为；协调式单实例是壳 M2 项。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），桥及其 bundle 层进 web profile。
+- **DSH_HOME 所有权**：默认共享真实 `~/.dsh`——桌面与终端是同一账号的两个面（会话历史、工作区、settings、credentials 全部同源可见）。`$DSH_HOME` env 可强制隔离。`~/.dsh-desktop/` 只放壳的编排日志（`logs/install.log`）；**sidecar 的 harness 输出走 fork 的 `web:log` 约定**：每次启动一个 `$DSH_HOME/logs/desktop-<yyyymmdd-HHMMSS>.log` + `desktop-latest.log` 软链（与终端 `web-*` 同目录、前缀区分，`DSH_WEB_LOG_DIR` 可覆盖目录；软链 unix-only）。⚠️ 并发注意：harness 对同一 DSH_HOME 没有多进程锁；单用户下基本安全（会话是 per-session JSONL，JSON storages 是整文件 last-wins 原子写），但同一会话同时被两个面驱动是未定义行为；协调式单实例是壳 M2 项。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），桥及其 bundle 层进 web profile。
 - **端口**：`TcpListener::bind("127.0.0.1:0")` 取随机口，就绪探测 `GET /`（webserver 的 SPA index 路由）状态 2xx（500ms 间隔，120s 超时；tsx 冷启动慢）。
 - **WKWebView 已知坑（已修）**：webserver 对 loopback 并发 **chunked** 响应（无 content-length）会被 WKWebView 随机挂死/加载失败（39 个 boot bundle 突发时必现；Chrome 无此问题）。修复在 harness `packages/client/modules/src/index.ts` 的 serveBundle 显式 `content-length`；sidecar 从源码运行改源即生效，值得上游到 fork。
-- **窗口**：就绪后主线程建 `main` 窗口（1400×900）加载 `http://127.0.0.1:<port>`；初始化脚本注入冻结的 `window.__DSH_DESKTOP__`（platform = `std::env::consts::os`）。
-- **IPC 能力**：capability 授 `core:default` + 四个 `allow-dsh-desktop-*` 权限（`build.rs` 的 `AppManifest::commands` 自动生成，标识符把下划线转连字符），remote urls 模式 `http://127.0.0.1:*`（随机端口）。
-- **命令后端（M1 范围）**：open_external 按平台 `open`/`xdg-open`/`start`，先做 scheme 白名单（http/https/mailto/tel）；notify 用 `osascript display notification`（darwin）/ `notify-send`（linux），title/body 做引号转义；Windows 通知 M3 补。退出时 SIGKILL 子进程（优雅 SIGTERM→SIGKILL 阶梯是壳 M2 范围）。
+- **窗口**：就绪后主线程建 `main` 窗口（1400×900）加载 `http://127.0.0.1:<port>`；初始化脚本注入冻结的 `window.__DSH_DESKTOP__`（platform = `std::env::consts::os`）。macOS 用 `TitleBarStyle::Overlay`：红绿灯悬浮进页面、不画原生标题栏。注意 Overlay 只设 `fullSizeContentView` + `titlebarAppearsTransparent`，**窗口标题文本仍会画进悬浮带**（与页面 logo 重复的「DeepSeek Harness」就是这么来的）——建窗后经 objc2-app-kit 调 `NSWindowTitleVisibility::Hidden`（`hide_painted_title`；直接依赖 `objc2-app-kit`，本就经 tao/wry 在依赖树内）不画标题但保留字符串给 Mission Control / Window 菜单；**红绿灯按 Electron `WindowButtonsProxy` 钉位**（`inset_traffic_lights`：改 close.superview.superview 即 titleBarContainer 的 frame，把它钉在窗口顶边，再在容器内放三钮——只改按钮会输给缩放动画中的系统 layout。目标：圈中线 y19 对齐带内开关 `top:8/22`，红灯左缘 x16 对齐侧栏字标线。`observe_titlebar_layout` 订 `NSWindowDidResize`（缩放动画每一帧都发；Tauri 的 `Resized` 往往只在动画结束才发，太晚）+ `DidEndLiveResize` + 进出全屏；`WillEnter/WillExitFullScreen` 先藏容器防跳，结束后 redraw 复位）；桥插件侧配合见「功能面」标题栏融合条目。其他平台保留原生标题栏。
+- **IPC 能力**：capability 授 `core:default` + `core:window:allow-start-dragging` + `core:window:allow-internal-toggle-maximize`（拖拽条用，Tauri 2 `data-tauri-drag-region` 的运行时命令）+ 全部 `allow-dsh-desktop-*` 权限（`build.rs` 的 `AppManifest::commands` 自动生成，标识符把下划线转连字符），remote urls 模式 `http://127.0.0.1:*`（随机端口）。
+- **命令后端（M1 范围）**：open_external 按平台 `open`/`xdg-open`/`start`，先做 scheme 白名单（http/https/mailto/tel）；notify 用 `osascript display notification`（darwin）/ `notify-send`（linux），title/body 做引号转义；Windows 通知 M3 补。
+- **sidecar 监护（已落地，含优雅退出阶梯与进程组）**：sidecar spawn 进**独立进程组**（`process_group(0)`），终止信号打 `-pgid`——一次内核调用原子覆盖 sidecar 全树（harness 自己 spawn 的 MCP server、工具子进程），无树遍历、无 TOCTOU；`setsid` 逃逸者由下次启动清扫兜底。壳捕获 SIGINT/TERM/HUP（handler 只写原子量，poller 线程执行关闭），退出统一走 **组 SIGTERM→3s→组 SIGKILL 阶梯**，`RunEvent::Exit` 同路径，收尾后删除自己的注册条目。防孤儿第二道保险——**stale-sidecar 注册表** `~/.dsh-desktop/sidecars.json`：spawn 时记录 `{sidecar/shell pid + ps lstart, port, log}`，每次启动先清扫再 spawn。清扫**只作用于注册表内 pid**（绝不按进程名扫表，终端 `dsh web` 不可能被误伤）；pid 复用由 lstart 等值比较挡住（复用 pid 的 lstart 与记录不符 → 视为死）；注册表损坏 fail-open 读空。清扫决策：shell 活 & sidecar 活 → 保留（另一在跑的壳所有）；sidecar 死 → 忘记；shell 死 & sidecar 活 → 孤儿，走阶梯回收后忘记。上游跟踪：tauri#14443（sidecar 树杀 + PID 注册表 PR）与 plugins-workspace#1332（shell 插件 process-group 选项，process-wrap）均已留评论分享实测数据；Windows 侧（M3）对齐方向是 process-wrap/Job Objects。
+- **dev-loop 坑的最终结论（tauri-cli 2.11.4 源码核实）**：`tauri dev` watcher 重建用 `Child::kill()` 杀壳——Unix 上即 **SIGKILL、不可捕获**，壳的退出路径不可能跑到；tauri-cli 唯一的树杀（kill-children.sh）只覆盖 beforeDevCommand 子进程，从不清理 app 自己的后代；其内置忽略表（`node_modules/ target/ gen/ Cargo.lock .DS_Store`）**不含 `icons/`**，改图标同样触发重建。⇒ watcher 重建必留孤儿 sidecar（reparent 到 launchd，持端口与 `~/.dsh`）；上述注册表使**下一次启动自动回收**（已实测：重建 → 新壳日志 `reaped stale sidecar pid=…`）。SIGKILL 场景只能事后回收，这是设计边界而非缺陷；协调式单实例（M2）在其上再做端口/会话协调。
 - **e2e 探针**：`DSH_DESKTOP_E2E_PROBE=1` 时壳在页面加载后经 `window.eval`（主线程调度，wry 约束）注入探针 JS（gate→app-root→badge DOM→save_file IPC 往返），verdict 经 IPC 命令 `dsh_desktop_e2e_report`（`dsh-e2e-` hash 兜底）；壳轮询 IPC 结论并打日志。配 `DSH_DESKTOP_E2E_EXIT=1` 自动退出：0 通过 / 2 失败 / 3 超时。注意：`window.title()` 与 `document.title` 在 macOS 上不同步，标题不能做 verdict 通道。
 
 ### 功能面
@@ -64,18 +108,21 @@ M1（已实现）：
 
 1. **外链路由** —— document 捕获阶段 click 监听：`target=_blank` 的锚点、跨源 http(s) 锚点、`mailto:`/`tel:` → `preventDefault` + `dsh_desktop_open_external`。同源无 target 的锚点、`#`、`javascript:`、`blob:`/`data:` 一律放行（SPA 内部导航）。判定是纯函数 `classifyAnchor`（`src/client/links.ts`），单测覆盖。
 2. **注意力通知** —— 订阅 `ctx.sessions.list`（raf 批量快照流），做状态转移 diff（纯函数 `diffAttention`，`src/client/attention.ts`）：`running: true→false` 或 `pendingInteraction: 无→有`，且通知时刻 `document.hidden`，发 `dsh_desktop_notify`；一轮转移同时出现两种边时只发「等待输入」一条。标题用 `displayTitle`。后台会话（未选中）同样通知——这是桌面形态的核心价值。
-3. **桌面指示** —— `shell.overlay`（加性 list 槽，全帧浮层）注册 `desktop-badge` 条目：右下角小 pill「桌面版」，点击以 `dsh_desktop_open_external` 打开当前 origin（复制会话到系统浏览器）。样式只用 `--dsw-*` 语义 token，绝不写字面色。
+3. **web 端指示** —— `shell.overlay`（加性 list 槽，全帧浮层）注册 `desktop-badge` 条目：右下角小 pill「web端」，点击以 `dsh_desktop_open_external` 打开当前 origin（复制会话到系统浏览器）。样式只用 `--dsw-*` 语义 token，绝不写字面色。
+4. **About 设置页（0.1.2 起）** —— `settings.section` 加性槽注册 `desktop-about` 条目：设置面板里的「关于」页，展示 Desktop 版本 + DeepSeek Harness 版本（壳读解压 runtime 的 dsh 包版本）+ runtime 标签 + 更新区（进页自动检查——与启动自动检查共享一次记忆化调用——手动重查、一键下载安装重启，软失败文案）；**启动 3s 后自动检查一次**，发现新版发原生通知（`dsh_desktop_notify`），无新版/无端点（dev）/离线均静默。label thunk 走 `ctx.locale.bind`（该槽不带 locale 座位），组件文案走 inject face 的 t。
 
 M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
 - ~~下载桥~~（已实现）：捕获 `a[download]` 点击（同源 http(s) 与 `blob:`，纯函数 `classifyDownload` 判定）→ fetch blob → base64 → `dsh_desktop_save_file`；invoke 失败回退 `location.href` 导航下载。
 - ~~badge 文案接 `ctx.locale` 双语~~（已实现，namespace `desktop-bridge`）。
-- 通知点击回跳：壳发 `dsh-desktop://focus-session` 事件，插件聚焦并 `sessions.open(id)`。**受阻**：macOS 通知点击回调需 UNUserNotificationCenter delegate（objc2 绑定），`osascript` 无回调通道——留待 M3 平台化一并做。
+- ~~标题栏融合（macOS）~~（已实现）：壳建窗用 `TitleBarStyle::Overlay` + `NSWindowTitleVisibility::Hidden`（不画标题文本，见「壳实现要点·窗口」）；桥插件在 `platform === 'macos'` 时（纯函数 `shouldFuseTitlebar`，`src/client/titlebar.ts`）注入一条 CSS——`div:has(> [data-shell-overlay])>div:nth-child(-n+3)` 各加 28px `padding-top`（选择器锚点是 ui-layout AppFrame 的三列：sidebar/center/details；给列而非 frame 加 padding，让列的表面（侧栏填充）**铺到红绿灯底下**、只有内容避开悬浮带，而不是整帧下移留出空白条）——并注册第二个 `shell.overlay` 条目 `desktop-drag-strip`（`data-tauri-drag-region` 透明拖拽条，单击拖动、双击切换最大化，走 capability 的两个 window 权限，不加自定义 IPC）。视觉结果：侧栏 surface 从窗口顶边铺开，红绿灯直接压在侧栏色块上，侧栏内容（logo 行）从带下方开始，与原生 mac 应用的融合标题栏一致。已知边界：拖拽带盖住侧栏 resize handle 顶部 28px（z-index 20 > handle 2）；Overlay 窗口未聚焦时不可拖（Tauri #4316）；`nth-child` 锚点假设 AppFrame 的三列仍是 frame 的前三个子元素（ui-layout 结构变更需同步此选择器）。
+- ~~收起侧栏整列隐藏 + 标题带控制钮（macOS）~~（已实现）：Overlay 标题栏下，ui-layout 的「收起」仍是 56px 控制轨（`SIDEBAR_COLLAPSED`，rail 里有 logo/新建会话/设置图标）——这条 rail 垫在红绿灯正下方成为无交互死条。桥插件在 `platform === 'macos'` 时（与标题栏融合同一门控）把收起列压到 0 宽，并隐藏侧栏 logo 行里的原生 toggle（**BrandWordmark 保留显示**，锚点 `div[data-slot='sidebar']>div>div:first-child>button:last-child`——`data-slot` 是 slot 系统文档化的稳定锚点，Tooltip 无包裹 DOM，logoRow 的最后一个按钮即原生 toggle）：桌面全窗口**只保留一个侧栏开关**——红绿灯右侧、28px 标题带内的常驻双向 toggle，收起时其旁滑入仅收起态可见的新会话气泡（`src/client/rail.ts` + `rail-controls.tsx`）。机制：列宽在 frame 的 inline `grid-template-columns`（`<sidebar>px minmax(0,1fr) <details>px`），纯 CSS `!important` 覆盖整条模板会丢 details 动态宽度，故用 MutationObserver 在 `data-sidebar-collapsed` 期间把第一轨改写为 `0px`（纯函数 `collapseRailTemplate`，只认「`<num>px` 开头且后随轨道」的模板形状，失配原样放行、功能退化为原生 rail；React 重渲染重写 style 后 observer 同 microtask 再纠正，无闪烁；frame 自带 grid 轨道 transition，收起 56→0 / 展开 0→280 均为平滑动画；React 不回读 DOM style 做 diff，外部改写稳定）；按钮是第三个 `shell.overlay` 条目 `desktop-rail-controls`（order 5，`top:8px;left:86px;height:22px;gap:8px` 红绿灯右侧、与下移后的灯排同线（中线均为 y≈19；与绿灯圈右缘留约 12px），z-index 1 压过拖拽条——占约 26px 带内区域不再可拖窗，与原生工具栏按钮同理）：toggle **常驻**、双向（收起/展开同钮同图标，无入场动画）；新会话气泡**仅收起态**，用 `opacity/transform/visibility` 过渡（`display` 无法动画）在其旁从 `translateX(12px)` 滑入（delay .18s 接在侧栏滑动后），展开时反向淡出，`prefers-reduced-motion` 去过渡——组件零状态、零订阅机械；容器恒 `pointer-events:none`，toggle 恒可点、气泡仅可见时可点：toggle 调 `ctx.layout.toggleSidebar()`——**点击时惰性 `ctx.get('layout')`**，绝不在注册时读取：slots.inject 在 ui-layout 声明落地（其 fiber 启动途中、尚未 ACTIVE）即触发，而 strict `ctx.get` 只服务 ACTIVE 提供方，注册时读取会拿到 undefined 导致按钮永不出现（2026-08-19 实踩，缺席仅 warn 并忽略点击）；新会话调 `ctx.workspaces.startSession()`（无参 = 侧栏按钮同款语义；inject 加 `workspaces`）；图标用 ui-primitives 的 `IconPanelLeftOutline16` / `IconNewChatOutline16`（与 rail 原图标一致），样式全在 `railCss()`、只用 `--dsw-*` token。已知边界：DOM 锚点依赖 ui-layout 的 `data-sidebar-collapsed` 属性与 inline 三轨模板（ui-layout 结构变更需同步 rail.ts，与 `nth-child` 锚点同性质）；收起态下 rail 的 workspace 浏览/设置入口不可达（新会话由带内按钮补齐，其余需展开后用）。
+- 通知点击回跳：壳发 `dsh-desktop://focus-session` 事件，插件聚焦并 `sessions.open(id)`。**受阻**：macOS 通知点击回调需 UNUserNotificationCenter delegate（objc2 绑定），`osascript` 无回调通道——留待 M3 平台化一并做。同理**通知横幅图标也受阻**：osascript 通知恒归属 Script Editor，要图标必须有真实 .app bundle 身份——osacompile applet 捷径已证伪（run 事件投递不可靠、`open` 对未识别 bundle 会 fallback 到 Terminal 开窗，详见 `docs/notes/2026-08-19-notify-applet-incident.md`），勿再尝试；正路同归 M3 的 UNUserNotificationCenter。
 - 托盘 / 未读角标（壳读 DOM title 或插件显式上报）。
 
 ### 组合与 slot 纪律（沿用 DSH client 约定的最小子集）
 
-- UI 只经 `ctx.slots.register(...)` 组合；本插件只注册 `shell.overlay`（additive），声明洞一律禁止。
+- UI 只经 `ctx.slots.register(...)` 组合；本插件只注册**已声明的加性槽**——`shell.overlay`（badge/拖拽条/带内开关）与 `settings.section`（关于页）——声明洞一律禁止。
 - 跨包只走 slot 与 ctx 服务，禁止 import 其他插件的实现符号；harness 包只做 type-only import（构建时擦除）。
 - 注册即 effect：所有监听、订阅、slot 注册经 `ctx.effect()` / register 返回的 disposer，卸载/HMR 全量回收。
 - 文案中文（M2 起接 `ctx.locale` 双语）；代码注释英文。
@@ -120,11 +167,11 @@ DSH_DESKTOP_E2E_PROBE=1 pnpm desktop:dev
 DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 ```
 
-壳的 sidecar 默认跑在真实 `~/.dsh`（与终端同源）；`~/.dsh-desktop/logs/` 落 `sidecar.log` 与 `install.log`。浏览器内验证桌面行为以 `window.__DSH_DESKTOP__` 手工注入为辅助手段。
+壳的 sidecar 默认跑在真实 `~/.dsh`（与终端同源）；harness 输出落 `~/.dsh/logs/desktop-<时间戳>.log`（`desktop-latest.log` 软链指最新，`DSH_WEB_LOG_DIR` 可覆盖），`~/.dsh-desktop/logs/` 只落 `install.log`。浏览器内验证桌面行为以 `window.__DSH_DESKTOP__` 手工注入为辅助手段。
 
 ## Conventions
 
-- ESM（`"type": "module"`）；包名 `dsh-desktop-bridge`（无 scope，随包分发）。
+- ESM（`"type": "module"`）；插件包名无 scope，目录名 === `package.json` `name`，随仓分发（见「插件 monorepo 规范」）。
 - client bundle 构建契约（banner/footer/externals）从 DSH `packages/client/tsdown.client.ts` 蒸馏：产物是 `window.__ModuleLoader__.load({id, factory})` 闭包；externals = 平台模块表（react/cordis/ui-slots/web-react/ui-primitives/ui-attachment/schema-form + runtime 豁免）；非平台 `@deepseek-ai/*` 值 import 一律构建报错（纯度门）。
 - 纯函数与副作用安装分离：判定/diff 逻辑无 DOM 依赖可单测；安装函数薄壳包 effect。
 - 空不发声、缺即报错：可选服务 `ctx.get()` 处理 undefined；配置缺引用在能定位的最早点 throw。
@@ -142,6 +189,10 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 
 组装（`node scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）：持久部分克隆 fetch 标签 → `pnpm install --frozen-lockfile` + `pnpm run build`（`.prepare-runtime-ok` 标记缓存）→ **publish 路径打本地 tarball**（`pnpm pack` 全部 234 个 `@deepseek-ai/*` 包，workspace: 协议按发布规则重写；平台特定原生包 landlock-linux 跳过回退 npm；`FORK_MODIFIED` 名单内的包打包失败即中止）→ 生成的 runtime manifest 以 `pnpm.overrides` 把全树钉到本地 tarball（**必须 `--no-frozen-lockfile`，frozen 模式会静默忽略 overrides**；`pnpm deploy --legacy` 对本 workspace 丢 vendored 传递依赖，不可用）→ `runtime/build/<sha>/{dsh,tools}`（dsh = CLI 树，tools = node 24.9.0 + pnpm 二进制）。
 
-壳的 sidecar 解析顺序：`$DSH_DESKTOP_RUNTIME` → `runtime/build/<sha>`（bundled：`dsh/node_modules/@deepseek-ai/dsh/lib/bin.js`，PATH 前置 tools 的 node/pnpm）→ 本地 fork 源码（dev 兜底，tsx）。e2e 已对 bundled runtime 验证 `DSH_E2E_OK`。
+壳的 sidecar 解析顺序：`$DSH_DESKTOP_RUNTIME` → **包内资源解压树**（release：`~/.dsh-desktop/runtime/<sha>/{dsh,tools}`，首启从 Resources 里的 runtime.tar.gz 原子解压，`.ok` 标记完整；桥插件同法解压到 `~/.dsh-desktop/bridge/`，并补 `node_modules/@deepseek-ai/cordis` → runtime 树的符号链接——桥 host 半对 cordis 是值引用（`Logger.format`），dev 布局靠 devDep 链接解析、解压包没有；同一 real path 保证单一模块实例（**刻意不往包里打第二份 cordis**：副本 = 双模块实例），install 后建避免 pnpm 碰到，链接指向非当前 revision 的 cordis（升级残留）即自愈重指）→ `runtime/build/<sha>`（dev）→ 本地 fork 源码（dev 兜底，tsx）。e2e 已对 bundled runtime 与资源解压分支（强制 miss dev 路径）验证 `DSH_E2E_OK`。
 
-插件（本文件「功能面」的 M1/M2）；壳的 Rust 侧实现需本机 Rust toolchain（当前未安装，装好后从 M1 开始，契约已由本文件锁定）。
+### 打包（M3 已落地，手册：`docs/packaging-playbook.md`）
+
+`pnpm desktop:build` 一键出 `.app` + `.dmg`（aarch64；**签名+公证版 ~160MB**，ad-hoc 降级 ~113MB）。资源走 **tarball** 而非散目录：runtime 树是 pnpm 安装（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀 GB 级）；tar 往返链接感知，且解压到 home 规避 App Translocation 只读卷。`beforeBuildCommand` 先跑 `scripts/prepare-desktop-bundle.mjs`（桥构建 → runtime 组装（SHA 键控缓存 + `SCRIPT_REV` 组装版本盐）→ 打 `src-tauri/resources/{runtime.tar.gz, runtime-revision.json, bridge.tar.gz}`，gitignored、按需再生；revision 副本含两个 tarball 的 **sha256**，壳的 `.ok` 缓存标记内容寻址——同 revision 内容变更自动重解压替换）。**bundled runtime 与源码 runtime 行为对齐**：tsx 是 runtime 一等依赖，`bundled_runtime` 同样 `--import tsx/esm`——profile 可挂 `file:` 源码分发插件（.ts 入口），纯 Node 拒绝剥 node_modules 下的类型（0.1.0 实踩：真实 home 全树崩溃，scratch home 测不出，**e2e 矩阵必须含真实 home 场景**）。**裸 `cargo build/check` 会因 build.rs 校验资源缺失而失败**，必须先 prepare。分发：**签名+公证已落地**——`.app`/`.dmg` 均 `spctl` 应答 `source=Notarized Developer ID`（**公证扫描会钻进 tar.gz**，runtime 树 16 个 Mach-O 打 tar 前逐个 Developer ID 签名，`DSH_CODESIGN_IDENTITY` 门控 + allow-jit entitlements；hardened runtime 已开；DMG 需 `notarytool submit` 单独公证；ASC 个人 API 密钥不能用于 notarytool，用 App 专用密码）。凭据与完整流程见 playbook §5。**自动更新（0.1.2 起）**：`tauri-plugin-updater` + `createUpdaterArtifacts`，端点 `releases/latest/download/latest.json`，更新包 `dsh-desktop.app.tar.gz` 经 tauri 签名私钥（`tauri-keys/`，gitignored）签名、公钥在 `tauri.conf.json` plugins.updater；发布流水线 `.github/workflows/release.yml`（tag 触发：签名公证 → DMG 公证 → Release 附件 + latest.json），发布手册 `docs/release-runbook.md`。
+
+插件（本文件「功能面」的 M1/M2）；壳的 Rust 侧实现需本机 Rust toolchain（stable，已就绪）。

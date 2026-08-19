@@ -27,24 +27,20 @@ Electron 壳里 Chromium + Node 是纯冗余——DSH 带原生模块（landlock
 两个平面（契约详见 [AGENTS.md](AGENTS.md)）：
 
 ```
-dsh-desktop
-├── plugin/dsh-desktop-bridge        DSH 双面客户端插件（当前产品主体）
-│    ├── host half：空 apply（Loader 行合法即可）
-│    └── browser half（window.__DSH_DESKTOP__ 门控，普通浏览器零副作用）
-│         ├── 外链路由 → dsh_desktop_open_external（系统浏览器）
-│         ├── 注意力通知 → dsh_desktop_notify（后台会话回合完成/等待输入）
+dsh-desktop                         出树插件 + 桌面壳的 monorepo
+├── plugin/<name>/                  一个可独立打 tag 的 DSH 插件（目录名 === 包名）
+│    └── dsh-desktop-bridge         桌面门控桥（host 空 apply + browser 半门控）
+│         ├── 外链路由 → dsh_desktop_open_external
+│         ├── 注意力通知 → dsh_desktop_notify
 │         └── shell.overlay 桌面指示 pill
-└── Tauri 2 Rust 壳（规划中）
-     ├── sidecar: Harness Node 子进程（独立崩溃域，崩溃壳层可重启）
-     ├── 随机 127.0.0.1 端口分配 + 就绪检测
-     ├── 单实例锁 / 优雅关停（SIGTERM → SIGKILL）
-     ├── 自动更新（Tauri updater 插件）
-     ├── webview 初始化脚本注入 window.__DSH_DESKTOP__ + IPC 命令表
-     └── 系统 WebView 窗口
-          └── http://127.0.0.1:<random>  ← DSH Web UI + 桥插件
+└── Tauri 2 Rust 壳
+     ├── sidecar: Harness Node 子进程
+     ├── 随机 127.0.0.1 端口 + 就绪检测
+     ├── webview 注入 window.__DSH_DESKTOP__ + IPC
+     └── 系统 WebView → http://127.0.0.1:<random>
 ```
 
-关键原则：壳层不含业务逻辑；Harness 不感知壳的存在，可独立开发调试（终端里 `dsh web` 照常工作，桥插件在非桌面环境自动静默）。桌面感知行为全部住在插件里，以 `dsh plugin --profile web add dsh-desktop-bridge` 装进随包 profile。
+关键原则：壳层不含业务逻辑；Harness 不感知壳的存在。每个插件是独立安装单元（`dsh plugin --profile web add <repo>/plugin/<name>`），桌面 tag（`desktop/v*`）与插件 tag（`plugin/<name>/v*`）分家。对照 dataelement/dsh-desktop 的 `patches/` 模型：那是钉死上游再打压缩包补丁，不是插件布局。
 
 ## Milestones
 

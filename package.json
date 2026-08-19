@@ -5,6 +5,7 @@
   "scripts": {
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
+    "desktop:prepare": "node scripts/prepare-desktop-bundle.mjs",
     "desktop:build": "tauri build",
     "plugin:setup": "cd plugin/dsh-desktop-bridge && pnpm install && pnpm run setup",
     "plugin:check": "cd plugin/dsh-desktop-bridge && pnpm run typecheck && pnpm run test && pnpm run build",
