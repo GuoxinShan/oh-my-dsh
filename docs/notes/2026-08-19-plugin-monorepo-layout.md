@@ -41,4 +41,6 @@ Both merges preserve full history (two-parent merge commits; `git log <merge>^2`
 
 Acceptance: `pnpm install` in `plugin/dsh-mcp-settings` builds `lib/` via prepare (pnpm 11 auto-switched per packageManager); scratch DSH_HOME, both plugins `plugin add`ed from the monorepo paths, `dsh web` boots with both rows in the boot graph, both `/plugins/*/client.js` serve 200, zero fiber errors in the boot log.
 
+One anchor migrated too: dsh-mcp-settings resolves the harness checkout through a sibling `../deepseek-harness` (the old `~/workspace/deepseek-harness` symlink pointed at the fork). `scripts/setup-plugins.mjs` now creates `plugin/deepseek-harness` (gitignored) with the same `$DSH_CHECKOUT` precedence + `docs/architecture.md` validation as the bridge's `dsh` anchor, and `pnpm run plugins:check` loops `plugin/*` (skipping symlink anchors) so one command checks the whole tree — the monorepo's reason to exist.
+
 Source repos to be archived read-only (GitHub) — the local clones stay as-is until then. Follow-ups NOT in this move: re-point the real `~/.dsh/profiles/web` deps from the old paths to `plugin/*`; loop `plugin/*` through prepare-desktop-bundle for release packaging.

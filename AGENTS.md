@@ -137,14 +137,18 @@ M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 前置：Node 22+、pnpm；类型检查与构建另需 DSH 源码 checkout（默认 `~/workspace/coding-study/deepseek-harness`，可用 `DSH_CHECKOUT` 覆盖，验证标准 `$DSH/docs/architecture.md` 存在）。
 
 ```sh
+pnpm run plugin:setup     # 根级：建 plugin/deepseek-harness 锚（mcp-settings tsconfig 用）+ 桥自己的 dsh 锚
+pnpm run plugins:check    # 全树：plugin/* 每包跑自己的 typecheck/test/build（--if-present，跳过 symlink 锚）
+
 cd plugin/dsh-desktop-bridge
 pnpm install          # 安装 devDeps（tsdown/typescript/tsx/react 类型）
-pnpm run setup        # 建 dsh → $DSH_CHECKOUT 符号链接（类型解析锚，gitignored）
 pnpm run typecheck    # tsc --noEmit（harness 包 import 经 dsh 链接解析到源码）
 pnpm run build        # tsdown：lib/index.js + lib/invariant.js + lib/client.js
 pnpm run test         # node --import tsx --test（纯函数单测）
 pnpm run watch        # tsdown --watch（配合 dsh web 的 client-hmr 热替换）
 ```
+
+mcp-settings 在包内自带 pnpm 11（packageManager）与 vitest 工具链，`cd plugin/dsh-mcp-settings && pnpm install && pnpm test` 独立可用；provider-balance 无构建步骤（裸源码分发，收敛进 tsdown 纯度门是后续项）。
 
 ### 实机挂载验证（scratch home，勿污染真实 `~/.dsh`）
 

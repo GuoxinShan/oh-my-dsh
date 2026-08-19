@@ -7,8 +7,9 @@
     "desktop:dev": "tauri dev",
     "desktop:prepare": "node scripts/prepare-desktop-bundle.mjs",
     "desktop:build": "tauri build",
-    "plugin:setup": "cd plugin/dsh-desktop-bridge && pnpm install && pnpm run setup",
+    "plugin:setup": "node scripts/setup-plugins.mjs",
     "plugin:check": "cd plugin/dsh-desktop-bridge && pnpm run typecheck && pnpm run test && pnpm run build",
+    "plugins:check": "for d in plugin/*/; do d=${d%/}; [ -L \"$d\" ] && continue; echo \"== $d\"; (cd \"$d\" && pnpm run --if-present typecheck && pnpm run --if-present test && pnpm run --if-present build) || exit 1; done",
     "check": "pnpm run plugin:check"
   },
   "devDependencies": {

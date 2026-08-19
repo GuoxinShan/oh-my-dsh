@@ -11,6 +11,8 @@ out/
 # dsh-desktop-bridge：类型解析锚（指向 DSH checkout 的符号链接）与构建产物
 plugin/dsh-desktop-bridge/dsh
 plugin/dsh-desktop-bridge/lib/
+# dsh-mcp-settings 的同级 harness 锚（scripts/setup-plugins.mjs 再生）
+plugin/deepseek-harness
 
 # Tauri
 src-tauri/gen/
