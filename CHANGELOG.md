@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.3] - 2026-08-18
+
+### Fixed
+
+- Retried refused credential-dependent spawns once the credentials service becomes available. The profile loader starts rows concurrently, so the settings provider (an earlier row) could wake the manager's first resync before the credentials provider (a later row) mounted; every `authorizationCredentialRef` / `envCredentialRefs` server was then refused once and stayed `failed` for the whole process lifetime — exactly the web-search trio failing after every `dsh web` restart. The manager now re-syncs when the credentials service activates; a live fiber still carries over, so established connections are untouched, and profiles without a credentials provider keep the existing per-server error.
+
+### Verification
+
+- TypeScript project typecheck and 57 Vitest tests, including a new regression test that mounts the manager before the credentials service and asserts the refused rows reconnect after it activates.
+- Cold-start reproduction against the real `settings-file` + `credentials-local` providers mounted concurrently like the profile loader: the three credential-dependent HTTP servers all reach `connected` with the fix, permanent `failed` without it.
+
 ## [0.2.2] - 2026-08-18
 
 ### Fixed

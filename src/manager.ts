@@ -220,6 +220,15 @@ export class McpManagerService extends Service {
       if (this.credentialInvalidations.size > 0) this.enqueueResync()
     })
 
+    // The profile loader starts rows concurrently, so the settings provider
+    // (an earlier row) can wake this manager's first resync before the
+    // credentials provider (a later row) has mounted: every
+    // credential-dependent spawn is then refused once, with no later event to
+    // retry it. One extra resync once the credentials service is available
+    // re-spawns exactly those refused rows — a live fiber carries over, so
+    // established connections are untouched.
+    ctx.inject(['credentials'], () => { this.enqueueResync() })
+
     installSettingsSection(ctx, MCP_SETTINGS_NAMESPACE, Config, config, {
       // The helper injects the settings service and already guards onChange
       // against an unloading consumer; every resync re-reads the scope.

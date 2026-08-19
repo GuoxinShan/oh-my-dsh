@@ -81,7 +81,7 @@ class MemorySettings extends SettingsProvider {
 
 /** Minimal writable credential provider for projection tests. */
 class MemoryCredentials extends CredentialProvider {
-  private readonly values = new Map<CredentialRef, string>()
+  protected readonly values = new Map<CredentialRef, string>()
 
   resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
     const value = this.values.get(ref)
@@ -373,6 +373,45 @@ describe('mcp-manager composition', () => {
       { requestInit: { headers: { Authorization: 'Bearer second-value' } } },
     )
     await ctx.fiber.dispose()
+  })
+
+  it('retries refused credential-dependent spawns once the credentials service mounts', async () => {
+    // The loader starts profile rows concurrently: the settings provider can
+    // wake the manager's first resync before the credentials provider mounts,
+    // refusing credential-dependent spawns with no retry. The manager must
+    // re-sync when the credentials service becomes available.
+    class SeededCredentials extends MemoryCredentials {
+      constructor(ctx: Context) {
+        super(ctx)
+        this.values.set(credentialRef('TEST_KEY'), 'secret-value')
+      }
+    }
+
+    const late = new Context()
+    await late.plugin(SystemPrompt)
+    await late.plugin(ToolRuntime)
+    const settingsFiber = late.plugin(MemorySettings)
+    await settingsFiber.await()
+    const managerFiber = late.plugin(McpManagerService)
+    await managerFiber.await()
+    const errors = captureErrors(late)
+
+    await late.settings.update(MCP_SETTINGS_NAMESPACE, { servers: [{
+      transport: 'streamable-http', serverName: 'http-auth', url: 'https://example.test/mcp',
+      authorizationCredentialRef: 'TEST_KEY',
+    }] })
+    await vi.waitFor(() => { expect(late.mcpManager.snapshot()[0]?.connection).toBe('failed') })
+    expect(errors.some(line => line.includes('no credentials service is mounted'))).toBe(true)
+    expect(vi.mocked(StreamableHTTPClientTransport)).not.toHaveBeenCalled()
+
+    await late.plugin(SeededCredentials)
+
+    await vi.waitFor(() => { expect(late.mcpManager.snapshot()[0]?.connection).toBe('connected') })
+    expect(vi.mocked(StreamableHTTPClientTransport)).toHaveBeenCalledWith(
+      new URL('https://example.test/mcp'),
+      { requestInit: { headers: { Authorization: 'Bearer secret-value' } } },
+    )
+    await late.fiber.dispose()
   })
 
   it('does not spawn after disposal while credential resolution is pending', async () => {
