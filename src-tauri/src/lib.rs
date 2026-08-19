@@ -66,7 +66,6 @@ pub fn run() {
             dsh_desktop_notify,
             dsh_desktop_save_file,
             dsh_desktop_e2e_report,
-            dsh_desktop_version_info,
             dsh_desktop_check_update,
             dsh_desktop_apply_update
         ])
@@ -1308,47 +1307,10 @@ fn dsh_desktop_e2e_report(verdict: String) -> Result<(), String> {
     Ok(())
 }
 
-/// IPC: version info for the About settings section (app version + bundled
-/// runtime ref + harness package version from the extracted runtime).
-#[tauri::command]
-fn dsh_desktop_version_info(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let manifest_value = app
-        .path()
-        .resource_dir()
-        .ok()
-        .and_then(|d| fs::read_to_string(d.join("resources/runtime-revision.json")).ok())
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    let runtime_ref = manifest_value
-        .as_ref()
-        .and_then(|v| v.get("ref").and_then(|s| s.as_str()))
-        .unwrap_or("dev")
-        .to_string();
-    // The harness version lives in the extracted runtime's CLI package; in
-    // dev (no bundled manifest) or before extraction, fall back to the ref.
-    let harness_version = manifest_value
-        .as_ref()
-        .and_then(|v| v.get("sha").and_then(|s| s.as_str()).map(str::to_string))
-        .and_then(|sha| {
-            shell_root().ok().map(|root| {
-                root.join("runtime").join(sha).join("dsh/node_modules/@deepseek-ai/dsh/package.json")
-            })
-        })
-        .filter(|p| p.is_file())
-        .and_then(|p| fs::read_to_string(p).ok())
-        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string))
-        .unwrap_or_else(|| runtime_ref.clone());
-    Ok(serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
-        "runtimeRef": runtime_ref,
-        "harnessVersion": harness_version,
-    }))
-}
-
-/// IPC: check the updater endpoint for a newer release.
-/// Returns {version, notes} when an update exists, null when current, and a
+/// IPC: check the updater endpoint for a newer release. Returns
+/// {version, notes} when an update exists, null when current, and a
 /// plain-English error when the updater is unconfigured or unreachable
-/// (dev builds, offline) so the About popover can show a soft failure.
+/// (dev builds, offline) so the indicator can fail soft.
 #[tauri::command]
 async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     use tauri_plugin_updater::UpdaterExt as _;
@@ -1364,7 +1326,7 @@ async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::V
 
 /// IPC: download + install + relaunch. The process is replaced on success,
 /// so a successful call never resolves on the client side; failures return
-/// a plain-English error for the About popover.
+/// a plain-English error.
 #[tauri::command]
 async fn dsh_desktop_apply_update(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt as _;

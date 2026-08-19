@@ -14,7 +14,6 @@
     "allow-dsh-desktop-notify",
     "allow-dsh-desktop-save-file",
     "allow-dsh-desktop-e2e-report",
-    "allow-dsh-desktop-version-info",
     "allow-dsh-desktop-check-update",
     "allow-dsh-desktop-apply-update"
   ]

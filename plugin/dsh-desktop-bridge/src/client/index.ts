@@ -11,9 +11,6 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // frame declares it) so the registration below typechecks against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-// Type-only: pulls the settings SlotMap declarations ('settings.section')
-// owned by the settings domain base — no runtime edge to ui-settings.
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { AttentionEdge, AttentionRow } from './attention.ts'
@@ -25,7 +22,7 @@ import { classifyDownload, saveViaShell } from './downloads.ts'
 import type { DesktopProbe, TauriInvoke } from './env.ts'
 import { probeDesktop } from './env.ts'
 import { DesktopBadge, type BadgeInjected } from './badge.tsx'
-import { AboutSection, type AboutInjected } from './about.tsx'
+import { UpdateIndicator, type UpdateIndicatorInjected } from './update-indicator.tsx'
 import { en, zh, type DesktopBridgeKey } from './locales.ts'
 import { installRailCss, installRailHider } from './rail.ts'
 import { DesktopRailControls, type RailControlsInjected } from './rail-controls.tsx'
@@ -86,10 +83,13 @@ export function apply(ctx: ClientContext): void {
   const injected = (): BadgeInjected => ({
     openExternal: (url) => { void callOpenExternal(invoke, url, logger) },
   })
-  // One updater round-trip per app boot, shared by the boot auto-check and
-  // the About section's mount check (both consume this memoized call).
+  // One shared updater round-trip: the indicator's first check rides the
+  // memo; its periodic ticks pass force to bypass it and see the live
+  // endpoint. A failed check (offline, dev build without an endpoint) must
+  // not pin the memo forever — the next caller retries.
   let updateCheck: Promise<{ version: string; notes: string } | null> | undefined
-  const checkUpdate = (): Promise<{ version: string; notes: string } | null> => {
+  const checkUpdate = (force = false): Promise<{ version: string; notes: string } | null> => {
+    if (force) updateCheck = undefined
     if (updateCheck === undefined) {
       updateCheck = (async () => {
         const raw = (await invoke.invoke('dsh_desktop_check_update')) as { update?: { version?: unknown; notes?: unknown } | null }
@@ -99,22 +99,11 @@ export function apply(ctx: ClientContext): void {
           notes: typeof raw.update.notes === 'string' ? raw.update.notes : '',
         }
       })()
-      // A failed check (offline, dev build without an endpoint) must not pin
-      // the memo forever — the next caller retries.
       updateCheck.catch(() => { updateCheck = undefined })
     }
     return updateCheck
   }
-  const t = ctx.locale.bind(NS) as (key: DesktopBridgeKey) => string
-  const aboutInjected = (): AboutInjected => ({
-    versionInfo: async () => {
-      const raw = (await invoke.invoke('dsh_desktop_version_info')) as { version?: unknown; harnessVersion?: unknown; runtimeRef?: unknown }
-      return {
-        version: typeof raw.version === 'string' ? raw.version : '?',
-        harnessVersion: typeof raw.harnessVersion === 'string' ? raw.harnessVersion : '?',
-        runtimeRef: typeof raw.runtimeRef === 'string' ? raw.runtimeRef : '?',
-      }
-    },
+  const updateInjected = (): UpdateIndicatorInjected => ({
     checkUpdate,
     applyUpdate: async () => {
       await invoke.invoke('dsh_desktop_apply_update')
@@ -122,32 +111,13 @@ export function apply(ctx: ClientContext): void {
       // the call resolve, which should not happen — treat as a failure.
       throw new Error('apply_update resolved without restarting')
     },
-    t,
   })
-  // Boot auto-check (3s in): on a hit, one native notification points at the
-  // About section; misses and soft failures stay silent.
-  ctx.effect(() => {
-    const timer = setTimeout(() => {
-      checkUpdate().then((found) => {
-        if (found === null) return
-        void invoke.invoke('dsh_desktop_notify', { title: 'dsh-desktop', body: `${t('about.apply')} v${found.version}` })
-          .catch((error: unknown) => { logger.warn(`dsh-desktop-bridge: update notify rejected: ${String(error)}`) })
-      }, () => undefined)
-    }, 3000)
-    return () => clearTimeout(timer)
-  }, 'desktop-bridge: boot update check')
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'desktop-about',
-    order: 100,
-    label: () => t('about.nav'),
-    inject: aboutInjected,
-  }, AboutSection))
   // slots.inject waits on the ui-layout declaration (activation order is
   // unconstrained), reruns after redeclaration, and leaves with this fiber.
   ctx.slots.inject('shell.overlay', () => {
     const disposeBadge = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge)
-    if (!fuseTitlebar) return disposeBadge
+    const disposeUpdate = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-update-indicator', order: 6, inject: updateInjected }, UpdateIndicator)
+    if (!fuseTitlebar) return () => { disposeUpdate(); disposeBadge() }
     const disposeStrip = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-drag-strip', order: 0 }, DesktopDragStrip)
     // Resolve ctx.layout lazily per click, never at registration time:
     // slots.inject fires the moment ui-layout's declaration lands — inside
@@ -166,7 +136,7 @@ export function apply(ctx: ClientContext): void {
       startSession: () => { ctx.workspaces.startSession() },
     })
     const disposeControls = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-rail-controls', order: 5, locale: NS, inject: railInjected }, DesktopRailControls)
-    return () => { disposeControls(); disposeStrip(); disposeBadge() }
+    return () => { disposeControls(); disposeStrip(); disposeUpdate(); disposeBadge() }
   })
 }
 

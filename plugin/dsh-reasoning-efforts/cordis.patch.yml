@@ -1,0 +1,23 @@
+# The dsh-reasoning-efforts bundle patch: one host row that fills the
+# reasoning-effort declarations the GUI cannot edit for hand-declared
+# llm-pi-ai models (see src/index.ts). Rules live in the row's config and are
+# validated fail-loud at mount; first match wins, so the narrowing
+# non-reasoning rule must stay above the broad fill.
+- insert:
+    - id: dsh-reasoning-efforts
+      name: dsh-reasoning-efforts
+      config:
+        rules:
+          # Grok via an OpenAI-compatible gateway: pin the explicitly
+          # non-reasoning variants first, then fill the reasoning line with
+          # xAI's own wire levels (low/medium/high, per pi-ai's xai catalog).
+          # Imagine/build models match neither rule and stay untouched.
+          - routes: [grok]
+            include: non-reasoning
+            efforts: false
+          - routes: [grok]
+            include: '^(grok$|grok-latest$|composer|grok-4|grok-composer)'
+            efforts:
+              low: low
+              medium: medium
+              high: high

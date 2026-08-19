@@ -55,6 +55,7 @@
   - `user.membership.level` = 档位（`LEVEL_BASIC`/`LEVEL_INTERMEDIATE`/`LEVEL_ADVANCED`，映射 basic/pro/max）；
   - `parallel.limit` = 并发上限。
 - 注意：Kimi 给的是**配额点数**（quota points），不是 token 数也不是百分比；插件换算成剩余百分比展示。
+- ⚠️ 窗口**耗尽时 `remaining` 字段被整体省略**（2026-08-19 实测：5h 窗口 100/100 时 detail 只剩 `limit`/`used`/`resetTime`）：适配器此时用 `limit - used` 反推剩余；`used`/`remaining` 皆缺的窗口按不可读丢弃——绝不能把缺失当满额（0.4.2 之前的 NaN→limit 回退曾把耗尽的 5h 窗口显示成剩余 100%）。
 - key 引用环境变量 `KIMI_CODING_API_KEY`。
 
 ## 官方接口结论（OpenCode Go / opencode.ai）

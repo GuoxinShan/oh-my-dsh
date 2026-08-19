@@ -54,7 +54,7 @@ git tag plugin/dsh-provider-balance/v0.4.0 && git push origin plugin/dsh-provide
 ## 2. 自动更新的接线（已内置，无需操作）
 
 - 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 `dsh-desktop.app.tar.gz`，签名校验用上面的 tauri 私钥对应的公钥；
-- 用户侧：**启动后约 3s 自动检查一次**——有新版时发一条原生系统通知；设置 → 「关于」页内可见「更新到 vX.Y.Z」，一键下载+校验+安装+自动重启（进页自动检查与启动检查共享同一次请求，可手动重查）。dev 构建/离线时静默不打扰；
+- 用户侧：**后台定时检查**（启动 3s 首查，之后每 2h）——有新版时窗口右上角亮出下载小图标，一键下载+校验+安装+自动重启；离线/无端点时图标不出现、完全静默（Zed/GitHub Desktop 的共识模式，Zed「过于激进」的教训取 2h 周期）；
 - **GitHub 的 latest 指向**：desktop Release `make_latest: true` 独占 latest；插件 Release 一律 `make_latest: false`（见 §0 的指针纪律）。
 
 ## 3. 手动发布路径（CI 不可用时的备胎）

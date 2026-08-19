@@ -6,7 +6,6 @@ fn main() {
                 "dsh_desktop_notify",
                 "dsh_desktop_save_file",
                 "dsh_desktop_e2e_report",
-                "dsh_desktop_version_info",
                 "dsh_desktop_check_update",
                 "dsh_desktop_apply_update",
             ]),

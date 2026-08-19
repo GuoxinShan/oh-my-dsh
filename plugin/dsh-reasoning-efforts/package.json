@@ -1,0 +1,52 @@
+{
+  "name": "dsh-reasoning-efforts",
+  "version": "0.1.0",
+  "description": "Declare reasoning efforts for hand-declared llm-pi-ai models (custom OpenAI-compatible gateways), filling the settings field the GUI cannot edit — explicit declarations and catalog-inherited capabilities are never touched",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown",
+    "watch": "tsdown --watch",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "reasoning-effort",
+    "llm-pi-ai"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.1.0-rc.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "link:dsh/vendor/cordis",
+    "@deepseek-ai/cordis-plugin-timer": "link:dsh/vendor/timer",
+    "@deepseek-ai/dsh-llm": "link:dsh/packages/llm/llm",
+    "@deepseek-ai/dsh-settings": "link:dsh/packages/settings/settings",
+    "@types/node": "^24.13.3",
+    "tsdown": "^0.22.2",
+    "tsx": "^4.19.2",
+    "typescript": "^6.0.3"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

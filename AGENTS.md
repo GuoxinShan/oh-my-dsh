@@ -74,8 +74,7 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 | `dsh_desktop_open_external` | `{ url: string }` | 系统浏览器打开 http(s)/mailto 链接。invoke 被拒时插件回退 `window.open(url, '_blank', 'noopener')` 并 `logger.warn`。 |
 | `dsh_desktop_notify` | `{ title: string, body: string }` | 原生系统通知（回合完成 / 等待输入）。fire-and-forget，拒绝只记日志。 |
 | `dsh_desktop_save_file` | `{ name: string, base64: string }` | 下载桥：把 base64 字节写入用户下载目录（文件名去路径成分，重名自动加 `-N` 后缀），返回落盘绝对路径。M2 起存在。 |
-| `dsh_desktop_version_info` | — | About 页信息：返回 `{ version, harnessVersion, runtimeRef }`（app 版本 + 解压 runtime 的 dsh 包版本 + 包内 runtime 标签）。 |
-| `dsh_desktop_check_update` | — | 查询更新端点（M3 起）：有更新返回 `{ update: { version, notes } }`，无则 `{ update: null }`；未配置/不可达时返回错误文案（软失败，弹层展示）。 |
+| `dsh_desktop_check_update` | — | 查询更新端点（M3 起）：有更新返回 `{ update: { version, notes } }`，无则 `{ update: null }`；未配置/不可达时返回错误文案（软失败，更新指示器静默）。 |
 | `dsh_desktop_apply_update` | — | 下载+校验签名+安装+重启（成功即进程替换，调用方不再收到返回）；失败返回错误文案。 |
 
 加命令 = 先改本表，再改两侧。
@@ -109,7 +108,7 @@ M1（已实现）：
 1. **外链路由** —— document 捕获阶段 click 监听：`target=_blank` 的锚点、跨源 http(s) 锚点、`mailto:`/`tel:` → `preventDefault` + `dsh_desktop_open_external`。同源无 target 的锚点、`#`、`javascript:`、`blob:`/`data:` 一律放行（SPA 内部导航）。判定是纯函数 `classifyAnchor`（`src/client/links.ts`），单测覆盖。
 2. **注意力通知** —— 订阅 `ctx.sessions.list`（raf 批量快照流），做状态转移 diff（纯函数 `diffAttention`，`src/client/attention.ts`）：`running: true→false` 或 `pendingInteraction: 无→有`，且通知时刻 `document.hidden`，发 `dsh_desktop_notify`；一轮转移同时出现两种边时只发「等待输入」一条。标题用 `displayTitle`。后台会话（未选中）同样通知——这是桌面形态的核心价值。
 3. **web 端指示** —— `shell.overlay`（加性 list 槽，全帧浮层）注册 `desktop-badge` 条目：右下角小 pill「web端」，点击以 `dsh_desktop_open_external` 打开当前 origin（复制会话到系统浏览器）。样式只用 `--dsw-*` 语义 token，绝不写字面色。
-4. **About 设置页（0.1.2 起）** —— `settings.section` 加性槽注册 `desktop-about` 条目：设置面板里的「关于」页，展示 Desktop 版本 + DeepSeek Harness 版本（壳读解压 runtime 的 dsh 包版本）+ runtime 标签 + 更新区（进页自动检查——与启动自动检查共享一次记忆化调用——手动重查、一键下载安装重启，软失败文案）；**启动 3s 后自动检查一次**，发现新版发原生通知（`dsh_desktop_notify`），无新版/无端点（dev）/离线均静默。label thunk 走 `ctx.locale.bind`（该槽不带 locale 座位），组件文案走 inject face 的 t。
+4. **更新指示器（0.1.3 起，替代已移除的 About 设置页）** —— `shell.overlay` 注册 `desktop-update-indicator` 条目（order 6）：**后台定时检查** GitHub 最新版（挂载 3s 首查走共享单飞记忆化，之后每 2h 强制刷新绕过记忆化；离线/无端点静默），发现新版在**窗口右上角**（`top:8px; right:14px`，与带内控件同层 z-index 1）亮出下载小图标（ui-primitives `IconDownloadOutline16`，tooltip「更新到 vX.Y.Z」），一键下载+校验+安装+自动重启（applying 态半透明禁点）。借鉴 Zed/GitHub Desktop 的共识模式：静默周期轮询 + 有更新才出现的 affordance——Zed 社区对「过于激进」的教训（每次启动打扰）取 2h 周期、不打扰。组件自带定时器（useEffect interval，unmount 即清）；`force` 参数贯穿 inject face 到共享单飞。
 
 M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
@@ -122,7 +121,7 @@ M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
 ### 组合与 slot 纪律（沿用 DSH client 约定的最小子集）
 
-- UI 只经 `ctx.slots.register(...)` 组合；本插件只注册**已声明的加性槽**——`shell.overlay`（badge/拖拽条/带内开关）与 `settings.section`（关于页）——声明洞一律禁止。
+- UI 只经 `ctx.slots.register(...)` 组合；本插件只注册**已声明的加性槽**——`shell.overlay`（badge/拖拽条/带内开关/更新指示器）——声明洞一律禁止。
 - 跨包只走 slot 与 ctx 服务，禁止 import 其他插件的实现符号；harness 包只做 type-only import（构建时擦除）。
 - 注册即 effect：所有监听、订阅、slot 注册经 `ctx.effect()` / register 返回的 disposer，卸载/HMR 全量回收。
 - 文案中文（M2 起接 `ctx.locale` 双语）；代码注释英文。

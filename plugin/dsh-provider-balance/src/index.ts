@@ -231,6 +231,7 @@ const zaiAdapter: ProviderAdapter = {
 
 interface KimiDetail {
   limit?: string | number
+  used?: string | number
   remaining?: string | number
   resetTime?: string
 }
@@ -246,8 +247,17 @@ function kimiWindow(detail: KimiDetail | undefined): QuotaWindow | undefined {
   if (detail === null || typeof detail !== 'object') return undefined
   const limit = Number(detail.limit)
   if (!Number.isFinite(limit) || limit <= 0) return undefined
+  const used = Number(detail.used)
   let remaining = Number(detail.remaining)
-  if (!Number.isFinite(remaining)) remaining = limit
+  if (!Number.isFinite(remaining)) {
+    // An EXHAUSTED window omits `remaining` entirely (observed 2026-08-19:
+    // a 5h window at 100/100 reports only limit/used/resetTime). Derive the
+    // remainder from `used`; the old NaN→limit fallback read exactly as
+    // "100% left" while the account was being limited. A window reporting
+    // neither field is unreadable — omit it rather than fabricate a value.
+    if (!Number.isFinite(used)) return undefined
+    remaining = limit - used
+  }
   remaining = Math.min(Math.max(remaining, 0), limit)
   const resetAt = typeof detail.resetTime === 'string' ? Date.parse(detail.resetTime) : Number.NaN
   const window = percentWindow(((limit - remaining) / limit) * 100, Number.isFinite(resetAt) ? resetAt : undefined)
