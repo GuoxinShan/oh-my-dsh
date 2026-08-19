@@ -1,0 +1,11 @@
+# Add the three MCP settings rows to a Web profile that supplies the required
+# Harness-owned peer services and mcp-client status event.
+- insert:
+    - id: dsh-mcp-settings-manager
+      name: dsh-mcp-settings/manager
+
+    - id: dsh-mcp-settings-inventory
+      name: dsh-mcp-settings/inventory
+
+    - id: dsh-mcp-settings-ui
+      name: dsh-mcp-settings

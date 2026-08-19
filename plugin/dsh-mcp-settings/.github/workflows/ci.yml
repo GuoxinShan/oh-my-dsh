@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  consumer-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install and run prepare build
+        run: pnpm install --frozen-lockfile
+      - name: Build package artifacts
+        run: pnpm run bundle
+      - name: Smoke-check built JavaScript
+        run: pnpm run smoke
+      - name: Pack distribution
+        run: pnpm pack --pack-destination "$RUNNER_TEMP"

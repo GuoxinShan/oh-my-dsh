@@ -1,0 +1,599 @@
+/* MCP settings section, in the settings-panel design language shared with
+ * the Models and Plugins sections: 16/24 section title, 14/22 body, 12/18
+ * captions, separate outlined row cards (r12, border-l2), outlined tags, and
+ * 32px fields. Every color resolves through a `--dsw-alias-*` token. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 720px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.heading {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.intro {
+  margin: 0 0 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.pane,
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.status,
+.editorHeading h3,
+.editorHeading p,
+.listHeading h3 {
+  margin: 0;
+}
+
+.status,
+.saveStatus {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 160px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.search > svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+}
+
+.search input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  padding: 0 12px 0 34px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.search input:focus-visible,
+.field input:focus-visible,
+.field textarea:focus-visible,
+.jsonField textarea:focus-visible {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);
+}
+
+.listHeading {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.listHeading h3 {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.listHeading span {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Server rows are separate outlined cards — the same shape the Models
+ * section uses for providers — never one filled box with hairline dividers. */
+.serverList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.serverRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  padding: 12px 14px;
+  transition: border-color 120ms ease;
+}
+
+.serverRow:hover {
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.serverMain {
+  min-width: 0;
+}
+
+.serverTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.serverTitle strong {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A disabled row keeps its switch and actions live but reads as parked. */
+.serverRow[data-enabled='false'] .serverTitle strong,
+.serverRow[data-enabled='false'] .serverMain code {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.connectionDot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+}
+
+.connectionSpinner {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--dsw-alias-state-business-primary);
+  animation: connection-spin 800ms linear infinite;
+}
+
+.serverRow[data-connection='connected'] .connectionDot {
+  background: var(--dsw-alias-state-success-primary);
+}
+
+.serverRow[data-connection='failed'] .connectionDot {
+  background: var(--dsw-alias-state-error-primary);
+}
+
+/* Tags are annotations on the name, not pills: caption size, outlined, and
+ * the secondary label tone, matching the Models rowTag. */
+.transportTag,
+.toolTag {
+  flex: none;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.toolTag {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 35%, transparent);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.connectionLabel {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.serverMain code {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.iconButton,
+.back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.iconButton {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.iconButton:hover:not(:disabled),
+.back:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* The delete glyph keeps the danger tint the Models rows use. */
+.iconButtonDanger:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.iconButton:focus-visible,
+.back:focus-visible,
+.segmented button:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  width: 32px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.switch span {
+  width: 100%;
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l1);
+  transition: background 120ms ease;
+}
+
+.switch span::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-primary);
+  transition: transform 120ms ease;
+}
+
+.switch input:checked + span {
+  background: var(--dsw-alias-state-business-primary);
+}
+
+.switch input:checked + span::after {
+  transform: translateX(14px);
+}
+
+.switch input:focus-visible + span {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+
+.switch input:disabled + span {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.saveStatus {
+  min-height: 20px;
+  text-align: right;
+}
+
+.editorHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.back {
+  align-self: flex-start;
+  gap: 4px;
+  min-height: 28px;
+  border-radius: 6px;
+  padding: 0 8px 0 4px;
+  font-size: 13px;
+}
+
+.editorHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.editorHeading h3 {
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.editorHeading p {
+  margin-top: 3px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.segmented {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  padding: 2px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.segmented button {
+  min-width: 52px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.segmented button[aria-selected='true'] {
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-shadow-lv1);
+  font-weight: 600;
+}
+
+/* Editing surface: a filled module on the panel, matching the settings
+ * editor card in the Models section rather than adding another outline. */
+.formSurface,
+.jsonField {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.formTopRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 12px;
+}
+
+.field,
+.jsonField {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field > span {
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.transportMenu {
+  width: 100%;
+}
+
+.transportTrigger {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.transportTrigger:hover {
+  border-color: var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.transportTrigger[aria-expanded='true'] {
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);
+}
+
+.transportTrigger:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.transportIcon {
+  display: inline-flex;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.transportValue {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transportChevron {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  transition: transform 120ms ease;
+}
+
+.transportTrigger[aria-expanded='true'] .transportChevron {
+  transform: rotate(180deg);
+}
+
+.requiredMark {
+  margin-left: 3px;
+  color: var(--dsw-alias-state-error-primary);
+  font: inherit;
+}
+
+.field input,
+.field textarea,
+.jsonField textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  padding: 8px 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.field input {
+  height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.field textarea,
+.jsonField textarea {
+  resize: vertical;
+  font-family: var(--ds-font-family-code);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.jsonField textarea {
+  min-height: 420px;
+}
+
+.field em,
+.jsonField em {
+  color: var(--dsw-alias-state-error-primary);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.editorActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.validationSummary {
+  margin: 0 auto 0 0;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@keyframes connection-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connectionSpinner {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .toolbar,
+  .editorHeading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .formTopRow {
+    grid-template-columns: 1fr;
+  }
+
+  .serverRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rowActions {
+    justify-content: flex-end;
+  }
+}
