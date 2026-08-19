@@ -66,8 +66,17 @@ jobs:
           rm -f /tmp/devg2ca.cer
           security find-identity -v -p codesigning build.keychain
 
-      - name: Bridge typecheck anchor (fork checkout doubles as DSH_CHECKOUT)
-        run: DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
+      - name: Prepare deps and the bridge type anchor
+        run: |
+          set -euo pipefail
+          pnpm install
+          # Prime the fork clone (prepare-runtime is idempotent; cache hits
+          # make this seconds), then point the bridge's dsh symlink at it so
+          # plugin:check inside the bundle step typechecks against harness
+          # sources, and install its devDeps.
+          node scripts/prepare-runtime.mjs
+          DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
+          pnpm --dir plugin/dsh-desktop-bridge install
 
       - name: Build signed + notarized bundle
         env:
