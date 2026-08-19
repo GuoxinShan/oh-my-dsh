@@ -33,11 +33,12 @@ Rejected placements: repo root next to `src-tauri/`; nested `plugin/packages/`; 
 
 ## First members
 
-Already here: `plugin/dsh-desktop-bridge`.
+- `plugin/dsh-desktop-bridge` — original member.
+- `plugin/dsh-mcp-settings` — subtree-merged from `~/workspace/dsh-mcp-settings` @ 85a1b92 (0.2.3 credentials-retry fix committed and pushed in the source repo first).
+- `plugin/dsh-provider-balance` — subtree-merged from `~/workspace/dsh-provider-balance` @ 35b5879 (v0.4.0, clean tree).
 
-To migrate (subtree, not copy):
+Both merges preserve full history (two-parent merge commits; `git log <merge>^2` reaches the original chain). Nested `.gitignore` and `pnpm-workspace.yaml` came along, so each package stays its own isolated workspace root — the no-root-workspace rule holds mechanically, not just by convention.
 
-- `~/workspace/dsh-mcp-settings` → `plugin/dsh-mcp-settings` (commit 0.2.3 first)
-- `~/workspace/dsh-provider-balance` → `plugin/dsh-provider-balance` (v0.4.0 is clean)
+Acceptance: `pnpm install` in `plugin/dsh-mcp-settings` builds `lib/` via prepare (pnpm 11 auto-switched per packageManager); scratch DSH_HOME, both plugins `plugin add`ed from the monorepo paths, `dsh web` boots with both rows in the boot graph, both `/plugins/*/client.js` serve 200, zero fiber errors in the boot log.
 
-Shell packaging still special-cases the bridge tarball. Looping `plugin/*` into prepare/`plugin add` is a follow-up, not part of the move.
+Source repos to be archived read-only (GitHub) — the local clones stay as-is until then. Follow-ups NOT in this move: re-point the real `~/.dsh/profiles/web` deps from the old paths to `plugin/*`; loop `plugin/*` through prepare-desktop-bundle for release packaging.
