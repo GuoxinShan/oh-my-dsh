@@ -1,11 +1,13 @@
 //! Desktop shell for the DeepSeek Harness web UI (M1).
 //!
-//! One run: find the harness checkout, own `~/.dsh-desktop/` as the sidecar's
-//! DSH_HOME, idempotently install the desktop-bridge plugin into the web
-//! profile, spawn `dsh web` on a random loopback port, poll
-//! `/api/host.describe` until ready, then open the main window with the
-//! desktop gate signal injected. IPC command backends implement the contract
-//! table in the repository AGENTS.md.
+//! One run: find the harness checkout, idempotently install the
+//! desktop-bridge plugin into the web profile, spawn `dsh web` on a random
+//! loopback port with the user's real `~/.dsh` as DSH_HOME (the desktop IS
+//! another face of the same account), poll `GET /` until ready, then open the
+//! main window with the desktop gate signal injected. Sidecar output is teed
+//! to a per-boot `desktop-<timestamp>.log` under the shared harness log
+//! directory (the `web:log` convention). IPC command backends implement the
+//! contract table in the repository AGENTS.md.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -15,21 +17,39 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// Ready-probe cadence and budget (tsx cold start is slow).
 const PROBE_INTERVAL: Duration = Duration::from_millis(500);
 const PROBE_BUDGET: Duration = Duration::from_secs(120);
 
-/// The sidecar child, killed when the app exits.
+/// Grace period between SIGTERM and SIGKILL in the termination ladder.
+const TERM_GRACE: Duration = Duration::from_secs(3);
+/// Termination-ladder poll cadence.
+const LADDER_TICK: Duration = Duration::from_millis(100);
+
+/// The sidecar child, terminated through the SIGTERM→SIGKILL ladder when
+/// the app exits or catches a termination signal.
 static SIDECAR: Mutex<Option<Child>> = Mutex::new(None);
+
+/// The stale-sidecar registry path for this process (set once during boot).
+#[cfg(unix)]
+static REGISTRY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The termination signal caught by the handler, published for the poller
+/// thread (an atomic store is all the handler itself is allowed to do).
+#[cfg(unix)]
+static SIGNALED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// The e2e verdict reported through the IPC channel, if it works.
 static E2E_VERDICT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Run the shell.
 pub fn run() {
+    #[cfg(unix)]
+    install_terminate_signals();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let app_handle = app.handle().clone();
             std::thread::spawn(move || match boot_sequence(&app_handle) {
@@ -45,7 +65,10 @@ pub fn run() {
             dsh_desktop_open_external,
             dsh_desktop_notify,
             dsh_desktop_save_file,
-            dsh_desktop_e2e_report
+            dsh_desktop_e2e_report,
+            dsh_desktop_version_info,
+            dsh_desktop_check_update,
+            dsh_desktop_apply_update
         ])
         .build(tauri::generate_context!())
         .expect("dsh-desktop: tauri context")
@@ -61,36 +84,80 @@ pub fn run() {
         });
 }
 
-/// Kill the sidecar child if one is running (idempotent).
+/// Terminate the sidecar child if one is running (idempotent): SIGTERM
+/// first so the harness can flush, SIGKILL after the grace period, then
+/// drop our registry entry so the next boot does not reap a dead pid.
 fn kill_sidecar() {
-    if let Ok(mut guard) = SIDECAR.lock() {
-        if let Some(child) = guard.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+    let Some(mut child) = SIDECAR.lock().ok().and_then(|mut guard| guard.take()) else {
+        return;
+    };
+    let pid = child.id();
+    #[cfg(unix)]
+    {
+        let target = signal_target(pid);
+        unsafe { libc::kill(target, libc::SIGTERM) };
+        let deadline = Instant::now() + TERM_GRACE;
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => std::thread::sleep(LADDER_TICK),
+            }
         }
-        *guard = None;
+        if matches!(child.try_wait(), Ok(None)) {
+            unsafe { libc::kill(target, libc::SIGKILL) };
+        }
+        let _ = child.wait();
+        // Grandchildren that ignored SIGTERM while the leader exited early:
+        // one last group sweep. An empty group is a harmless ESRCH no-op.
+        unsafe { libc::kill(target, libc::SIGKILL) };
     }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    #[cfg(unix)]
+    unregister_sidecar(pid);
 }
 
 /// Boot to a ready window: sidecar spawn, readiness, window creation.
 fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
-    let runtime = find_runtime()?;
-    let bridge = find_bridge()?;
+    let runtime = find_runtime(app)?;
+    let bridge = find_bridge(app)?;
     let logs = shell_root()?;
     let dsh_home = dsh_home()?;
 
+    // Reap sidecars orphaned by a previous shell before adding our own:
+    // a `tauri dev` watcher restart SIGKILLs the app outright (see the
+    // supervision section below), so the previous boot's exit path never
+    // ran and its sidecar is still out there holding a port and ~/.dsh.
+    #[cfg(unix)]
+    {
+        let registry = registry_path(&logs);
+        let _ = REGISTRY.set(registry.clone());
+        for entry in sweep_stale_sidecars(&registry) {
+            println!(
+                "dsh-desktop: reaped stale sidecar pid={} port={} (shell pid {} is gone; log {})",
+                entry.sidecar_pid, entry.port, entry.shell_pid, entry.log
+            );
+        }
+    }
+
     // The bridge row must be in the profile before the server scans it.
     run_plugin_install(&runtime, &bridge, &dsh_home, &logs)?;
+    // After the profile install (so pnpm never packs the link): give the
+    // extracted bridge its cordis peer (see ensure_bridge_cordis_link).
+    ensure_bridge_cordis_link(&bridge, &runtime);
 
     let port = free_port()?;
     let url = format!("http://127.0.0.1:{port}");
-    spawn_sidecar(&runtime, &dsh_home, &logs, port)?;
+    let sidecar_log = spawn_sidecar(&runtime, &dsh_home, port)?;
 
     if !wait_ready(port) {
         return Err(format!(
             "harness server at {url} did not answer GET / within {}s (see {})",
             PROBE_BUDGET.as_secs(),
-            logs.join("logs/sidecar.log").display()
+            sidecar_log.display()
         ));
     }
 
@@ -149,11 +216,16 @@ fn cli_command(runtime: &Runtime) -> Command {
     command
 }
 
-/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the assembled
-/// runtime/build/<sha> from runtime/revision.json, then the source checkout.
-fn find_runtime() -> Result<Runtime, String> {
+/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the release
+/// bundle's resources (extracted to ~/.dsh-desktop on first boot), then the
+/// repo-assembled runtime/build/<sha> from runtime/revision.json, then the
+/// source checkout (dev fallback).
+fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
     if let Ok(dir) = std::env::var("DSH_DESKTOP_RUNTIME") {
         return bundled_runtime(PathBuf::from(dir));
+    }
+    if let Some(dir) = release_runtime_dir(app)? {
+        return bundled_runtime(dir);
     }
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let revision_path = repo_root.join("runtime/revision.json");
@@ -171,6 +243,101 @@ fn find_runtime() -> Result<Runtime, String> {
     source_runtime()
 }
 
+/// The release bundle's runtime, extracted under the shell-private root:
+/// `~/.dsh-desktop/runtime/<sha>/{dsh,tools}` plus an `.ok` marker. Returns
+/// Ok(None) in dev builds (no bundled resources); extraction errors surface
+/// as Err so a corrupt bundle fails loud instead of silently falling through
+/// to a source checkout the user does not have.
+///
+/// Why tarball resources instead of loose directories: the runtime tree is a
+/// pnpm install (3k+ symlinks); tauri-bundler gives no symlink-preservation
+/// guarantee, and a dereferencing copy would explode the .pnpm store to GBs.
+/// A tar round-trip is link-aware; extraction also lands the tree on a
+/// writable volume (App Translocation mounts the .app read-only) and keeps
+/// the nested node Mach-O out of the notarization scan later.
+fn release_runtime_dir(app: &tauri::AppHandle) -> Result<Option<PathBuf>, String> {
+    let Some(resources) = app.path().resource_dir().ok() else {
+        return Ok(None);
+    };
+    let manifest = resources.join("resources/runtime-revision.json");
+    if !manifest.is_file() {
+        return Ok(None); // dev build: resources/ carries no bundled runtime
+    }
+    let text = fs::read_to_string(&manifest).map_err(|e| format!("read {}: {e}", manifest.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", manifest.display()))?;
+    let sha = value.get("sha").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    if sha.is_empty() {
+        return Err(format!("bundled runtime-revision.json has no sha: {}", manifest.display()));
+    }
+    // Content-addressed cache: the .ok marker stores the tarball's sha256,
+    // so a same-revision bundle with new content (assembly changes) forces
+    // re-extraction instead of booting a stale tree.
+    let tarball = value.get("runtimeTarball").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    let root = shell_root()?.join("runtime").join(&sha);
+    if !tarball.is_empty()
+        && root.join(".ok").is_file()
+        && fs::read_to_string(root.join(".ok")).map(|t| t.trim().to_string()).unwrap_or_default() == tarball
+    {
+        return Ok(Some(root)); // this exact bundle is already extracted
+    }
+    extract_bundle_tar(
+        &resources.join("resources/runtime.tar.gz"),
+        &root,
+        "dsh/node_modules/@deepseek-ai/dsh/lib/bin.js",
+        &tarball,
+    )?;
+    println!("dsh-desktop: extracted bundled runtime {sha} to {}", root.display());
+    Ok(Some(root))
+}
+
+/// Extract a bundled tarball into `dir` atomically: extract into a `.tmp`
+/// sibling, verify the sentinel entry exists, drop the `.ok` marker, then
+/// rename into place (same volume, so the promotion is atomic; an existing
+/// `dir` from an older bundle is removed first — last writer wins). A
+/// leftover `.tmp` from a crashed boot is removed before we start. The
+/// tarballs are generated by our own prepare-desktop-bundle from our own
+/// trees (entries never contain absolute paths or `..`), so no
+/// path-traversal scrubbing is needed here; the sentinel check catches
+/// truncation and corruption anyway.
+fn extract_bundle_tar(tar: &Path, dir: &Path, sentinel: &str, ok_content: &str) -> Result<(), String> {
+    if !tar.is_file() {
+        return Err(format!("bundled tarball missing: {}", tar.display()));
+    }
+    let parent = dir.parent().ok_or("extraction dir has no parent")?;
+    fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    let tmp = dir.with_extension("tmp");
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(tar)
+        .arg("-C")
+        .arg(&tmp)
+        .status()
+        .map_err(|e| format!("spawn tar for {}: {e}", tar.display()))?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(format!("tar -xzf {} exited {status}", tar.display()));
+    }
+    if !tmp.join(sentinel).is_file() {
+        let _ = fs::remove_dir_all(&tmp);
+        return Err(format!(
+            "extracted {} lacks the expected {} — bundled tarball corrupt?",
+            tar.display(),
+            sentinel
+        ));
+    }
+    fs::write(tmp.join(".ok"), format!("{ok_content}\n"))
+        .map_err(|e| format!("write {}: {e}", tmp.join(".ok").display()))?;
+    if dir.exists() {
+        // Older bundle content at the same path: swap it out.
+        fs::remove_dir_all(dir).map_err(|e| format!("remove old {}: {e}", dir.display()))?;
+    }
+    fs::rename(&tmp, dir).map_err(|e| format!("promote {} to {}: {e}", tmp.display(), dir.display()))?;
+    Ok(())
+}
+
 /// The assembled prebuilt runtime tree (prepare-runtime.mjs output).
 fn bundled_runtime(dir: PathBuf) -> Result<Runtime, String> {
     let cli = dir.join("dsh/node_modules/@deepseek-ai/dsh/lib/bin.js");
@@ -183,7 +350,11 @@ fn bundled_runtime(dir: PathBuf) -> Result<Runtime, String> {
     }
     Ok(Runtime {
         node,
-        args_prefix: Vec::new(),
+        // Same tsx loader as the source runtime: profiles may carry
+        // source-distributed plugins (.ts entries) that plain Node refuses
+        // to type-strip under node_modules (ERR_UNSUPPORTED_NODE_MODULES_
+        // TYPE_STRIPPING). Resolved from the runtime tree's own tsx dep.
+        args_prefix: vec!["--import".to_string(), "tsx/esm".to_string()],
         cli,
         cwd: dir.join("dsh"),
         path_prepend: vec![dir.join("tools/node_modules/.bin"), dir.join("tools/node_modules/node/bin")],
@@ -203,8 +374,9 @@ fn source_runtime() -> Result<Runtime, String> {
     })
 }
 
-/// The bridge package directory: $DSH_DESKTOP_BRIDGE, then the dev checkout layout.
-fn find_bridge() -> Result<PathBuf, String> {
+/// The bridge package directory: $DSH_DESKTOP_BRIDGE, then the release
+/// bundle's extracted resources, then the dev checkout layout.
+fn find_bridge(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Ok(from_env) = std::env::var("DSH_DESKTOP_BRIDGE") {
         let p = PathBuf::from(from_env);
         if p.join("package.json").is_file() {
@@ -212,7 +384,29 @@ fn find_bridge() -> Result<PathBuf, String> {
         }
         return Err(format!("DSH_DESKTOP_BRIDGE={} has no package.json", p.display()));
     }
-    // Dev builds bake the crate directory; release packaging rewrites this discovery.
+    // Release: extract the bundled bridge tarball (package.json + lib/ +
+    // cordis.patch.yml) under the shell-private root, next to the runtime.
+    // Same content-hash cache as the runtime: a rebuilt bridge (new lib/)
+    // re-extracts instead of booting stale code.
+    if let Ok(resources) = app.path().resource_dir() {
+        let tar = resources.join("resources/bridge.tar.gz");
+        if tar.is_file() {
+            let dir = shell_root()?.join("bridge");
+            let hash = fs::read_to_string(resources.join("resources/runtime-revision.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|v| v.get("bridgeTarball").and_then(|s| s.as_str()).map(str::to_string));
+            let fresh = hash.as_deref().filter(|h| !h.is_empty())
+                .map(|h| dir.join(".ok").is_file() && fs::read_to_string(dir.join(".ok")).map(|t| t.trim() == h).unwrap_or(false))
+                .unwrap_or_else(|| !dir.join("package.json").is_file()); // no hash in manifest: presence-only
+            if !fresh {
+                extract_bundle_tar(&tar, &dir, "package.json", hash.as_deref().unwrap_or(""))?;
+                println!("dsh-desktop: extracted bundled bridge to {}", dir.display());
+            }
+            return Ok(dir);
+        }
+    }
+    // Dev builds bake the crate directory.
     let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin/dsh-desktop-bridge");
     if dev.join("package.json").is_file() {
         return Ok(dev);
@@ -223,7 +417,84 @@ fn find_bridge() -> Result<PathBuf, String> {
     ))
 }
 
-/// The shell-private root (`~/.dsh-desktop/`): logs only.
+/// The bridge host half imports `@deepseek-ai/cordis` as a value
+/// (`Logger.format` in the log-sink), so Node must resolve that peer from
+/// the bridge directory itself. A dev checkout carries the link through
+/// devDependencies (`link:dsh/vendor/cordis`); the extracted bundle does
+/// not, so point it at the runtime tree's own cordis — the same real path
+/// the plugin loader resolves to, hence one module instance, not a second
+/// copy. Runs after the profile install so pnpm never packs the link, and
+/// before the sidecar spawns so the loader import resolves. Idempotent and
+/// self-healing: a link already resolving to the current runtime's cordis
+/// is left alone; one pointing elsewhere (a previous revision's runtime
+/// whose directory still exists after an upgrade) or dangling (revision
+/// directory deleted) is re-created; a real directory (dev layout's pnpm
+/// install) is never touched.
+#[cfg(unix)]
+fn ensure_bridge_cordis_link(bridge: &Path, runtime: &Runtime) {
+    let Some(root) = runtime.cwd.parent() else { return };
+    let Ok(entries) = fs::read_dir(root.join("dsh/node_modules/.pnpm")) else {
+        return; // source runtime without .pnpm: nothing sane to link
+    };
+    let mut matches: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { return false };
+            name.starts_with("@deepseek-ai+cordis@")
+        })
+        .map(|e| e.path().join("node_modules/@deepseek-ai/cordis"))
+        .filter(|p| p.is_dir())
+        .collect();
+    if matches.len() > 1 {
+        eprintln!(
+            "dsh-desktop: multiple cordis copies in the runtime ({}), linking the first",
+            matches.len()
+        );
+    }
+    let Some(target) = matches.pop() else { return };
+    let Ok(target) = fs::canonicalize(&target) else {
+        eprintln!("dsh-desktop: bridge cordis link failed: cannot resolve {}", target.display());
+        return;
+    };
+    let link = bridge.join("node_modules/@deepseek-ai/cordis");
+    // An existing symlink is correct only while it resolves to the same
+    // real path as the current runtime's cordis; otherwise re-point it.
+    if let Ok(existing) = fs::read_link(&link) {
+        let existing_abs = if existing.is_absolute() {
+            existing
+        } else {
+            link.parent().expect("link path always has a parent").join(existing)
+        };
+        if let Ok(existing_real) = fs::canonicalize(&existing_abs) {
+            if existing_real == target {
+                return; // already the current runtime's cordis
+            }
+        }
+        if let Err(e) = fs::remove_file(&link) {
+            eprintln!("dsh-desktop: bridge cordis link replace failed: {e}");
+            return;
+        }
+    } else if link.exists() {
+        return; // a real directory (dev layout), not ours to manage
+    }
+    let parent = link.parent().expect("link path always has a parent");
+    if let Err(e) = fs::create_dir_all(parent)
+        .map_err(|e| e.to_string())
+        .and_then(|()| {
+            std::os::unix::fs::symlink(&target, &link).map_err(|e| format!("link {} -> {}: {e}", link.display(), target.display()))
+        })
+    {
+        eprintln!("dsh-desktop: bridge cordis link failed: {e}");
+    }
+}
+
+#[cfg(not(unix))]
+fn ensure_bridge_cordis_link(_bridge: &Path, _runtime: &Runtime) {}
+
+/// The shell-private root (`~/.dsh-desktop/`): only the shell's own
+/// orchestration log (`logs/install.log`) lives here — the sidecar's harness
+/// output goes to the shared `$DSH_HOME/logs` (see `sidecar_log_path`).
 fn shell_root() -> Result<PathBuf, String> {
     let user_home = std::env::var("HOME").map_err(|_| "$HOME is not set".to_string())?;
     let root = Path::new(&user_home).join(".dsh-desktop");
@@ -321,24 +592,313 @@ fn free_port() -> Result<u16, String> {
     Ok(port)
 }
 
-/// Spawn the harness web server as a direct node child (no pnpm layer).
-fn spawn_sidecar(runtime: &Runtime, dsh_home: &Path, logs: &Path, port: u16) -> Result<(), String> {
+/// Resolve this boot's sidecar log file, following the harness `web:log`
+/// convention: one `desktop-<yyyymmdd-HHMMSS>.log` per boot under the shared
+/// log directory, with a `desktop-latest.log` symlink alongside always naming
+/// the newest. `DSH_WEB_LOG_DIR` overrides the directory; the default is
+/// `$DSH_HOME/logs` — the same directory terminal `web:log` boots write
+/// (`web-*` names), so both faces of the account share one log home.
+fn sidecar_log_path(dsh_home: &Path) -> Result<PathBuf, String> {
+    let dir = match std::env::var("DSH_WEB_LOG_DIR") {
+        Ok(from_env) if !from_env.is_empty() => PathBuf::from(from_env),
+        _ => dsh_home.join("logs"),
+    };
+    fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let log = dir.join(format!("desktop-{stamp}.log"));
+    // `ln -sfn`: replace whatever desktop-latest.log pointed at before this
+    // boot. Unix-only; Windows gets plain per-boot files for now (M3).
+    #[cfg(unix)]
+    {
+        let latest = dir.join("desktop-latest.log");
+        let _ = fs::remove_file(&latest);
+        std::os::unix::fs::symlink(&log, &latest).map_err(|e| format!("link {}: {e}", latest.display()))?;
+    }
+    Ok(log)
+}
+
+/// Spawn the harness web server as a direct node child (no pnpm layer),
+/// in its own process group so termination reaches the harness's own
+/// children with one atomic signal, returning the per-boot log file its
+/// output lands in.
+fn spawn_sidecar(runtime: &Runtime, dsh_home: &Path, port: u16) -> Result<PathBuf, String> {
+    let log_path = sidecar_log_path(dsh_home)?;
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(logs.join("logs/sidecar.log"))
+        .open(&log_path)
         .map_err(|e| format!("open sidecar log: {e}"))?;
-    let child = cli_command(runtime)
+    let mut command = cli_command(runtime);
+    command
         .arg("web")
         .arg("--port")
         .arg(port.to_string())
         .env("DSH_HOME", dsh_home)
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone sidecar log: {e}"))?))
-        .stderr(Stdio::from(log))
-        .spawn()
-        .map_err(|e| format!("spawn sidecar: {e}"))?;
+        .stderr(Stdio::from(log));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // Own process group: `kill(-pgid)` later reaches the whole sidecar
+        // tree atomically, and terminal Ctrl+C no longer hits the sidecar
+        // directly — the shell's handler owns its shutdown ordering.
+        command.process_group(0);
+    }
+    let child = command.spawn().map_err(|e| format!("spawn sidecar: {e}"))?;
+    let pid = child.id();
+    // Register the sidecar so a later boot can reap it if this shell dies
+    // without running its exit path (SIGKILL, crash). Registration is
+    // best-effort: without start times the sweep could not tell a recycled
+    // pid from the real sidecar, so an unrecordable sidecar simply stays
+    // outside the sweep's protection.
+    #[cfg(unix)]
+    if let (Some(registry), Some(sidecar_lstart), Some(shell_lstart)) =
+        (REGISTRY.get(), ps_lstart(pid), ps_lstart(std::process::id()))
+    {
+        add_registry_entry(
+            registry,
+            &SidecarEntry {
+                sidecar_pid: pid,
+                sidecar_lstart,
+                shell_pid: std::process::id(),
+                shell_lstart,
+                port,
+                log: log_path.display().to_string(),
+            },
+        );
+    }
     SIDECAR.lock().map_err(|e| e.to_string())?.replace(child);
-    Ok(())
+    Ok(log_path)
+}
+
+// ---------------------------------------------------------------------------
+// Supervision: the stale-sidecar registry and the reaping sweep.
+//
+// Why this exists: `tauri dev`'s file watcher restarts the app by calling
+// `Child::kill()` on it — SIGKILL on Unix, uncatchable — and never touches
+// the app's descendants (its only child-tree kill covers the
+// beforeDevCommand process, which this app does not use). So every watcher
+// restart leaves the sidecar orphaned: reparented to launchd, still holding
+// a random loopback port and the shared `~/.dsh`, with any resumed agents
+// alive inside it.
+//
+// The registry turns "orphaned forever" into "orphaned until the next boot
+// reaps it": each shell records the sidecar it spawned, and every boot
+// starts by reaping registered sidecars whose shell is provably gone. The
+// sweep only ever acts on registered pids — it never scans the process
+// table by name — so a terminal's own `dsh web` cannot be collateral
+// damage. Pid recycling is guarded by comparing `ps lstart` strings
+// recorded at spawn time (a recycled pid shows a new start time).
+
+/// One registered sidecar: enough to identify its process across reboots
+/// (pid + start time), its owner (the shell, same guard), and enough
+/// context to log a reap usefully (port, log file).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+struct SidecarEntry {
+    sidecar_pid: u32,
+    sidecar_lstart: String,
+    shell_pid: u32,
+    shell_lstart: String,
+    port: u16,
+    log: String,
+}
+
+/// What the sweep does with one registry entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SweepDecision {
+    /// Shell and sidecar both live — another running shell owns it.
+    Keep,
+    /// Sidecar live, shell gone — orphan; terminate it through the ladder.
+    Reap,
+    /// Sidecar gone (exited, or its pid was recycled) — drop the record.
+    Forget,
+}
+
+/// The sweep's decision for one entry, given resolved liveness of the
+/// shell and the sidecar it points at.
+fn sweep_decision(shell_alive: bool, sidecar_alive: bool) -> SweepDecision {
+    match (shell_alive, sidecar_alive) {
+        (true, true) => SweepDecision::Keep,
+        (_, false) => SweepDecision::Forget,
+        (false, true) => SweepDecision::Reap,
+    }
+}
+
+/// The registry file: `~/.dsh-desktop/sidecars.json`.
+fn registry_path(shell_root: &Path) -> PathBuf {
+    shell_root.join("sidecars.json")
+}
+
+/// Load all registered entries; a missing or corrupt registry reads as
+/// empty (fail-open: a broken bookkeeping file must not brick the boot,
+/// the worst case is one unsupervised sidecar).
+fn load_registry(path: &Path) -> Vec<SidecarEntry> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    match serde_json::from_str(&text) {
+        Ok(entries) => entries,
+        Err(error) => {
+            eprintln!("dsh-desktop: sidecar registry {} unreadable ({error}); starting it fresh", path.display());
+            Vec::new()
+        }
+    }
+}
+
+/// Atomically replace the registry (write a temp file, rename over).
+fn store_registry(path: &Path, entries: &[SidecarEntry]) {
+    let tmp = path.with_extension("json.tmp");
+    let Ok(json) = serde_json::to_string_pretty(entries) else {
+        return;
+    };
+    if let Err(error) = fs::write(&tmp, json.as_bytes()).and_then(|_| fs::rename(&tmp, path)) {
+        eprintln!("dsh-desktop: writing sidecar registry {} failed: {error}", path.display());
+    }
+}
+
+/// Append (or replace-by-pid) one entry, preserving the other entries
+/// as-is. Concurrent writers race last-wins; the loser's entry goes
+/// unsupervised — never falsely reaped — which is the safe direction.
+fn add_registry_entry(path: &Path, entry: &SidecarEntry) {
+    let mut entries = load_registry(path);
+    entries.retain(|existing| existing.sidecar_pid != entry.sidecar_pid);
+    entries.push(entry.clone());
+    store_registry(path, &entries);
+}
+
+/// Remove our entry on a graceful exit.
+#[cfg(unix)]
+fn unregister_sidecar(pid: u32) {
+    let Some(path) = REGISTRY.get().cloned() else {
+        return;
+    };
+    let mut entries = load_registry(&path);
+    let before = entries.len();
+    entries.retain(|existing| existing.sidecar_pid != pid);
+    if entries.len() != before {
+        store_registry(&path, &entries);
+    }
+}
+
+/// A pid's start time from `ps`, or `None` when the pid no longer exists.
+/// The string is only ever compared for equality against the value
+/// recorded when the entry was written.
+#[cfg(unix)]
+fn ps_lstart(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .arg("-o")
+        .arg("lstart=")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// True only when `pid` is alive AND is the same process instance the
+/// entry was written for (same start time). A recycled pid reads as dead.
+#[cfg(unix)]
+fn pid_matches(pid: u32, recorded_lstart: &str) -> bool {
+    ps_lstart(pid).as_deref() == Some(recorded_lstart)
+}
+
+/// Terminate a process this shell does not own (an orphaned sidecar):
+/// SIGTERM to its whole process group first, SIGKILL after the grace
+/// period. Reparented orphans are reaped by launchd, so there is nothing
+/// to wait for here.
+#[cfg(unix)]
+fn term_then_kill(pid: u32) {
+    let target = signal_target(pid);
+    unsafe { libc::kill(target, libc::SIGTERM) };
+    let deadline = Instant::now() + TERM_GRACE;
+    while Instant::now() < deadline {
+        if ps_lstart(pid).is_none() {
+            return;
+        }
+        std::thread::sleep(LADDER_TICK);
+    }
+    unsafe { libc::kill(target, libc::SIGKILL) };
+}
+
+/// Where to aim a sidecar's termination signal: the whole process group
+/// when the pid leads one — our spawn puts each sidecar in its own group,
+/// so the harness's own children (running tool commands, watchers) are
+/// reached by one atomic kernel signal — else the bare pid (registry
+/// entries written by pre-process-group builds). Group members that called
+/// `setsid` themselves escape; the next-boot sweep remains the last net.
+#[cfg(unix)]
+fn signal_target(pid: u32) -> libc::pid_t {
+    let pid = pid as libc::pid_t;
+    let pgid = unsafe { libc::getpgid(pid) };
+    if pgid == pid {
+        -pid
+    } else {
+        pid
+    }
+}
+
+/// Reap registry entries whose shell is gone; keep the rest; persist what
+/// survives. Returns the entries it reaped so the caller can log them.
+#[cfg(unix)]
+fn sweep_stale_sidecars(path: &Path) -> Vec<SidecarEntry> {
+    let entries = load_registry(path);
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    let mut kept = Vec::new();
+    let mut reaped = Vec::new();
+    for entry in entries {
+        match sweep_decision(
+            pid_matches(entry.shell_pid, &entry.shell_lstart),
+            pid_matches(entry.sidecar_pid, &entry.sidecar_lstart),
+        ) {
+            SweepDecision::Keep => kept.push(entry),
+            SweepDecision::Forget => {}
+            SweepDecision::Reap => {
+                term_then_kill(entry.sidecar_pid);
+                reaped.push(entry);
+            }
+        }
+    }
+    store_registry(path, &kept);
+    reaped
+}
+
+/// Handle SIGINT/SIGTERM/SIGHUP the same way as a graceful exit. This
+/// covers `kill <app>`, and the case of tauri-cli itself dying without
+/// killing the app — SIGKILL (a watcher restart) stays beyond reach and
+/// is exactly what the next boot's sweep cleans up. The handler only
+/// publishes an atomic; a poller thread does the real shutdown.
+#[cfg(unix)]
+fn install_terminate_signals() {
+    extern "C" fn on_terminate_signal(signal: libc::c_int) {
+        SIGNALED.store(signal, std::sync::atomic::Ordering::SeqCst);
+    }
+    unsafe {
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = on_terminate_signal as *const () as usize;
+            action.sa_flags = 0;
+            libc::sigaction(signal, &action, std::ptr::null_mut());
+        }
+    }
+    std::thread::spawn(|| loop {
+        let signal = SIGNALED.swap(0, std::sync::atomic::Ordering::SeqCst);
+        if signal != 0 {
+            println!("dsh-desktop: signal {signal} received, shutting the sidecar down");
+            kill_sidecar();
+            std::process::exit(128 + signal);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    });
 }
 
 /// Poll `GET /` until the webserver answers 2xx, within the budget.
@@ -387,13 +947,25 @@ fn open_main_window(app: &tauri::AppHandle, url: &str, e2e: bool) -> Result<(), 
     let load_url = if e2e { format!("{url}/?e2e=1") } else { url.to_string() };
     let load_parsed: tauri::Url = load_url.parse().map_err(|e| format!("parse {load_url}: {e}"))?;
     app.run_on_main_thread(move || {
-        let window = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(load_parsed))
+        let builder = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(load_parsed))
             .title("DeepSeek Harness")
             .inner_size(1400.0, 900.0)
-            .initialization_script(&init_script)
-            .build();
+            .initialization_script(&init_script);
+        // macOS: the traffic lights float over the page and no native title
+        // bar is painted — the bridge plugin lets the columns run edge to
+        // edge under the lights (titlebar.ts) and provides the drag region.
+        // Other platforms keep the native bar.
+        #[cfg(target_os = "macos")]
+        let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+        let window = builder.build();
         match window {
             Ok(window) => {
+                #[cfg(target_os = "macos")]
+                {
+                    hide_painted_title(&window);
+                    inset_traffic_lights(&window);
+                    observe_titlebar_layout(&window);
+                }
                 println!("dsh-desktop: window built, loading {load_url}");
                 if e2e {
                     eval_when_loaded(&handle, &window);
@@ -404,6 +976,161 @@ fn open_main_window(app: &tauri::AppHandle, url: &str, e2e: bool) -> Result<(), 
         }
     })
     .map_err(|e| format!("schedule window creation: {e}"))
+}
+
+/// Stop the Overlay titlebar from painting the window title. Tauri's
+/// `TitleBarStyle::Overlay` sets `fullSizeContentView` +
+/// `titlebarAppearsTransparent` and nothing more — the title string still
+/// draws into the floating band, duplicating the page's own branding.
+/// `NSWindowTitleVisibility::Hidden` is AppKit's switch for exactly this:
+/// it paints no title while keeping the string where the system surfaces
+/// (Mission Control, the Window menu) read it from.
+///
+/// Must run on the main thread (called right after window build inside
+/// `run_on_main_thread`).
+#[cfg(target_os = "macos")]
+fn hide_painted_title(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowTitleVisibility};
+    match window.ns_window() {
+        Ok(raw) => {
+            // The pointer is the live NSWindow this WebviewWindow owns.
+            let ns_window: &NSWindow = unsafe { &*(raw as *const NSWindow) };
+            ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+        }
+        Err(error) => eprintln!("dsh-desktop: hiding the painted title failed: {error}"),
+    }
+}
+
+/// Reposition the traffic lights the way Electron's `WindowButtonsProxy`
+/// does: move the **titleBarContainer** (close.superview.superview) so it
+/// stays pinned to the window's top edge, then place the three buttons
+/// inside it. Only moving the buttons themselves loses to AppKit's layout
+/// pass during zoom — the container rides the window height, so the lights
+/// do not snap after the animation.
+///
+/// Targets match the bridge band: circle center y19 (`top:8` / height 22),
+/// close circle left edge x16 (sidebar content line).
+///
+/// Must run on the main thread.
+#[cfg(target_os = "macos")]
+fn inset_traffic_lights(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+    use objc2_foundation::NSPoint;
+    const BUTTON_SIZE: f64 = 14.0;
+    const MARGIN_X: f64 = 15.0;
+    const CENTER_Y_FROM_TOP: f64 = 19.0;
+    const CONTAINER_HEIGHT: f64 = 28.0;
+    match window.ns_window() {
+        Ok(raw) => {
+            let ns_window: &NSWindow = unsafe { &*(raw as *const NSWindow) };
+            let Some(close) = ns_window.standardWindowButton(NSWindowButton::CloseButton) else {
+                return;
+            };
+            let Some(mini) = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton) else {
+                return;
+            };
+            let Some(zoom) = ns_window.standardWindowButton(NSWindowButton::ZoomButton) else {
+                return;
+            };
+            let Some(title_bar) = (unsafe { close.superview().and_then(|view| view.superview()) }) else {
+                return;
+            };
+            let window_height = ns_window.frame().size.height;
+            let spacing = mini.frame().origin.x - close.frame().origin.x;
+            let spacing = if spacing > 0.0 { spacing } else { 23.0 };
+            let mut container = title_bar.frame();
+            container.size.height = CONTAINER_HEIGHT;
+            container.origin.y = window_height - CONTAINER_HEIGHT;
+            title_bar.setFrame(container);
+            let button_y = CONTAINER_HEIGHT - CENTER_Y_FROM_TOP - BUTTON_SIZE / 2.0;
+            close.setFrameOrigin(NSPoint::new(MARGIN_X, button_y));
+            mini.setFrameOrigin(NSPoint::new(MARGIN_X + spacing, button_y));
+            zoom.setFrameOrigin(NSPoint::new(MARGIN_X + spacing * 2.0, button_y));
+        }
+        Err(error) => eprintln!("dsh-desktop: insetting the traffic lights failed: {error}"),
+    }
+}
+
+/// Hide the titleBarContainer for the duration of a fullscreen transition
+/// so the lights do not jump (Electron `WindowButtonsProxy setVisible:NO`
+/// on will-leave). Shown again by `inset_traffic_lights` after the
+/// transition.
+#[cfg(target_os = "macos")]
+fn set_titlebar_container_hidden(window: &tauri::WebviewWindow, hidden: bool) {
+    use objc2_app_kit::{NSWindow, NSWindowButton};
+    let Ok(raw) = window.ns_window() else { return };
+    let ns_window: &NSWindow = unsafe { &*(raw as *const NSWindow) };
+    let Some(close) = ns_window.standardWindowButton(NSWindowButton::CloseButton) else {
+        return;
+    };
+    if let Some(title_bar) = unsafe { close.superview().and_then(|view| view.superview()) } {
+        title_bar.setHidden(hidden);
+    }
+}
+
+/// Subscribe to AppKit window notifications that fire **during** zoom /
+/// fullscreen, not just when Tauri emits `Resized` at the end. Each callback
+/// re-runs `inset_traffic_lights` on the main thread. Tokens are leaked for
+/// the process lifetime (one main window).
+#[cfg(target_os = "macos")]
+fn observe_titlebar_layout(window: &tauri::WebviewWindow) {
+    use block2::RcBlock;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{
+        NSWindowDidEndLiveResizeNotification, NSWindowDidEnterFullScreenNotification,
+        NSWindowDidExitFullScreenNotification, NSWindowDidResizeNotification,
+        NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification,
+    };
+    use objc2_foundation::{NSNotification, NSNotificationCenter};
+    use std::ptr::NonNull;
+
+    let Ok(raw) = window.ns_window() else {
+        eprintln!("dsh-desktop: titlebar layout observer: no ns_window");
+        return;
+    };
+    let ns_window_obj = raw as *const AnyObject;
+    let center = NSNotificationCenter::defaultCenter();
+
+    let redraw = {
+        let window = window.clone();
+        RcBlock::new(move |_: NonNull<NSNotification>| {
+            set_titlebar_container_hidden(&window, false);
+            inset_traffic_lights(&window);
+        })
+    };
+    let hide = {
+        let window = window.clone();
+        RcBlock::new(move |_: NonNull<NSNotification>| {
+            set_titlebar_container_hidden(&window, true);
+        })
+    };
+
+    let object = unsafe { ns_window_obj.as_ref() };
+    let redraw_names = unsafe {
+        [
+            NSWindowDidResizeNotification,
+            NSWindowDidEndLiveResizeNotification,
+            NSWindowDidEnterFullScreenNotification,
+            NSWindowDidExitFullScreenNotification,
+        ]
+    };
+    for name in redraw_names {
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(Some(name), object, None, &redraw)
+        };
+        std::mem::forget(observer);
+    }
+    let hide_names = unsafe {
+        [NSWindowWillEnterFullScreenNotification, NSWindowWillExitFullScreenNotification]
+    };
+    for name in hide_names {
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(Some(name), object, None, &hide)
+        };
+        std::mem::forget(observer);
+    }
+    std::mem::forget(redraw);
+    std::mem::forget(hide);
 }
 
 /// Inject the e2e probe by eval once the SPA has had time to settle: init
@@ -581,6 +1308,84 @@ fn dsh_desktop_e2e_report(verdict: String) -> Result<(), String> {
     Ok(())
 }
 
+/// IPC: version info for the About settings section (app version + bundled
+/// runtime ref + harness package version from the extracted runtime).
+#[tauri::command]
+fn dsh_desktop_version_info(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let manifest_value = app
+        .path()
+        .resource_dir()
+        .ok()
+        .and_then(|d| fs::read_to_string(d.join("resources/runtime-revision.json")).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    let runtime_ref = manifest_value
+        .as_ref()
+        .and_then(|v| v.get("ref").and_then(|s| s.as_str()))
+        .unwrap_or("dev")
+        .to_string();
+    // The harness version lives in the extracted runtime's CLI package; in
+    // dev (no bundled manifest) or before extraction, fall back to the ref.
+    let harness_version = manifest_value
+        .as_ref()
+        .and_then(|v| v.get("sha").and_then(|s| s.as_str()).map(str::to_string))
+        .and_then(|sha| {
+            shell_root().ok().map(|root| {
+                root.join("runtime").join(sha).join("dsh/node_modules/@deepseek-ai/dsh/package.json")
+            })
+        })
+        .filter(|p| p.is_file())
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(str::to_string))
+        .unwrap_or_else(|| runtime_ref.clone());
+    Ok(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "runtimeRef": runtime_ref,
+        "harnessVersion": harness_version,
+    }))
+}
+
+/// IPC: check the updater endpoint for a newer release.
+/// Returns {version, notes} when an update exists, null when current, and a
+/// plain-English error when the updater is unconfigured or unreachable
+/// (dev builds, offline) so the About popover can show a soft failure.
+#[tauri::command]
+async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    use tauri_plugin_updater::UpdaterExt as _;
+    let updater = app.updater().map_err(|e| format!("updater unavailable: {e}"))?;
+    match updater.check().await {
+        Ok(Some(update)) => Ok(serde_json::json!({
+            "update": { "version": update.version, "notes": update.body.unwrap_or_default() },
+        })),
+        Ok(None) => Ok(serde_json::json!({ "update": null })),
+        Err(e) => Err(format!("check failed: {e}")),
+    }
+}
+
+/// IPC: download + install + relaunch. The process is replaced on success,
+/// so a successful call never resolves on the client side; failures return
+/// a plain-English error for the About popover.
+#[tauri::command]
+async fn dsh_desktop_apply_update(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt as _;
+    let updater = app.updater().map_err(|e| format!("updater unavailable: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("check failed: {e}"))?
+        .ok_or_else(|| "no update available".to_string())?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("download/install failed: {e}"))?;
+    // Never returns: the process is replaced by the new version.
+    #[allow(unreachable_code)]
+    {
+        tauri::process::restart(&app.env());
+        Ok(())
+    }
+}
+
 /// IPC: open a URL in the system browser (scheme-whitelisted).
 #[tauri::command]
 fn dsh_desktop_open_external(url: String) -> Result<(), String> {
@@ -665,4 +1470,136 @@ fn unique_path(dir: &Path, name: &str) -> PathBuf {
         }
     }
     unreachable!("the loop returns on the first free candidate")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(sidecar_pid: u32, shell_pid: u32) -> SidecarEntry {
+        SidecarEntry {
+            sidecar_pid,
+            sidecar_lstart: "sidecar-lstart".into(),
+            shell_pid,
+            shell_lstart: "shell-lstart".into(),
+            port: 39000,
+            log: "/tmp/desktop-test.log".into(),
+        }
+    }
+
+    fn scratch_registry(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("dsh-desktop-test-{}-{name}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn sweep_decision_truth_table() {
+        use SweepDecision::{Forget, Keep, Reap};
+        assert_eq!(sweep_decision(true, true), Keep, "a live shell owns it");
+        assert_eq!(sweep_decision(false, true), Reap, "orphan: shell gone, sidecar alive");
+        assert_eq!(sweep_decision(true, false), Forget, "sidecar exited on its own");
+        assert_eq!(sweep_decision(false, false), Forget, "both gone; stale record");
+    }
+
+    #[test]
+    fn registry_add_load_and_replace_by_pid() {
+        let path = scratch_registry("roundtrip");
+        add_registry_entry(&path, &entry(101, 201));
+        add_registry_entry(&path, &entry(102, 202));
+        assert_eq!(load_registry(&path).len(), 2);
+
+        // Re-registering the same sidecar pid replaces, never duplicates.
+        let mut again = entry(101, 201);
+        again.port = 39001;
+        add_registry_entry(&path, &again);
+        let entries = load_registry(&path);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|e| e.sidecar_pid == 101 && e.port == 39001));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn registry_load_fails_open() {
+        let path = scratch_registry("fail-open");
+        assert!(load_registry(&path).is_empty(), "missing file reads as empty");
+        fs::write(&path, b"{not json").unwrap();
+        assert!(load_registry(&path).is_empty(), "corrupt file reads as empty");
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ps_lstart_matches_only_the_same_process_instance() {
+        let pid = std::process::id();
+        let lstart = ps_lstart(pid).expect("ps must see this test process");
+        assert!(pid_matches(pid, &lstart), "fresh lstart matches");
+        assert!(!pid_matches(pid, "recorded-before-a-reboot"), "stale lstart reads as dead");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn term_then_kill_terminates_a_scratch_process() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("spawn sleep");
+        let pid = child.id();
+        // `sleep` dies on SIGTERM immediately, so the ladder returns fast.
+        term_then_kill(pid);
+        let status = child.wait().expect("wait for sleep");
+        assert!(!status.success(), "the scratch process must be terminated, not alive");
+        assert!(ps_lstart(pid).is_none(), "the pid must be gone after the ladder");
+    }
+
+    /// The coverage contract of the process-group design: one group signal
+    /// must reach the sidecar's own children (the "grandchildren" from the
+    /// shell's point of view), with no tree enumeration.
+    #[test]
+    #[cfg(unix)]
+    fn process_group_signal_reaches_grandchildren() {
+        use std::os::unix::process::CommandExt as _;
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30 & sleep 30 & wait")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("spawn sh");
+        let pid = child.id();
+        // The sidecar spawn pattern: the child leads its own group, so the
+        // signal target is the group, not the pid.
+        assert_eq!(unsafe { libc::getpgid(pid as libc::pid_t) }, pid as libc::pid_t);
+        assert_eq!(signal_target(pid), -(pid as libc::pid_t));
+        // Wait until the group really holds sh + the two sleeps.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = std::process::Command::new("pgrep")
+                .arg("-g")
+                .arg(pid.to_string())
+                .output()
+                .expect("pgrep");
+            let alive = String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.trim().is_empty()).count();
+            if alive >= 3 || Instant::now() > deadline {
+                assert!(alive >= 3, "expected sh + 2 sleeps in the group, saw {alive}");
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // One atomic group signal — no per-pid enumeration anywhere.
+        unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
+        let _ = child.wait();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let out = std::process::Command::new("pgrep")
+                .arg("-g")
+                .arg(pid.to_string())
+                .output()
+                .expect("pgrep");
+            let alive = String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.trim().is_empty()).count();
+            if alive == 0 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{alive} grandchildren survived the group signal");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
