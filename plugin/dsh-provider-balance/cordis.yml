@@ -1,0 +1,36 @@
+# dsh-provider-balance local overlay.
+#
+# Mount beside the harness checkout's web profile (note: --patch must precede
+# the web app's own flags such as --port, because the launcher passes
+# everything after the first unknown flag through to the app):
+#
+#   cd ~/workspace/coding-study/deepseek-harness
+#   pnpm dsh web --patch ~/workspace/dsh-provider-balance/cordis.yml
+#
+# The row resolves the `dsh-provider-balance` package from the profile
+# directory. One-time setup (a file: dependency plus install; a plain
+# node_modules symlink works too):
+#
+#   ~/.dsh/profiles/web/package.json dependencies:
+#     "dsh-provider-balance": "file:/Users/danielwei_zhang/workspace/dsh-provider-balance"
+#   cd ~/.dsh/profiles/web && pnpm install
+#
+# The entry id doubles as the browser client-bundle id, so the browser half
+# is served at /plugins/dsh-provider-balance/client.js.
+#
+# `config` is optional — defaults target the zai-coding-cn provider with the
+# ZAI_CODING_CN_API_KEY credential and the open.bigmodel.cn quota host.
+- insert:
+    - id: dsh-provider-balance
+      name: dsh-provider-balance
+      inject:
+        - webServer
+      # config:
+      #   sources:
+      #     - id: zai-coding-cn
+      #       kind: zai-coding
+      #       apiKeyEnv: ZAI_CODING_CN_API_KEY
+      #       quotaBase: https://open.bigmodel.cn
+      #   refreshMinIntervalMs: 60000
+      #   requestTimeoutMs: 15000
+      #   route: /provider-balance/quota
