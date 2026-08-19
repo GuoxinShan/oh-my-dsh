@@ -660,9 +660,29 @@ window.__ModuleLoader__.load({
           var provider = parseProviderFromEditLabel(button.getAttribute('aria-label') || '')
           var actions = button.parentElement
           if (provider === undefined || actions === null || actions.parentElement === null) continue
+          /* Idempotence across watcher instances: hosts that re-apply this
+           * plugin in place (the desktop shell's client-HMR receiver
+           * re-evaluates the bundle on file change WITHOUT disposing the
+           * previous instance's foreign DOM) leave earlier seats standing.
+           * Seat presence — not the button element, which only this
+           * instance's entries map knows — is the dedupe key, so N applies
+           * produce exactly one seat per row. A stale seat keeps rendering
+           * through its own root (the quota route is process-level), so
+           * skipping it is safe; a full page reload resets everything. */
+          var head = actions.parentElement
+          var siblings = head.children
+          var seated = false
+          for (var j = 0; j < siblings.length; j++) {
+            var sibling = siblings[j]
+            if (sibling.dataset !== undefined && sibling.dataset.dpbRowSeat !== undefined) {
+              seated = true
+              break
+            }
+          }
+          if (seated) continue
           var container = document.createElement('span')
           container.dataset.dpbRowSeat = provider
-          actions.parentElement.insertBefore(container, actions)
+          head.insertBefore(container, actions)
           var root = createRoot(container)
           root.render(createElement(ProviderBalanceRowBadge, { provider: provider, t: t }))
           entries.set(button, { container: container, root: root, actions: actions })
