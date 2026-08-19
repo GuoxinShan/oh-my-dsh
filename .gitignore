@@ -31,8 +31,11 @@ src-tauri/resources/
 *.certSigningRequest
 *.mobileprovision
 *.key
+*.pfx
 AuthKey_*
 tauri-keys/
+src-tauri/tauri.windows-sign.json
+src-tauri/tauri.local-unsigned.json
 
 # Logs & local
 *.log

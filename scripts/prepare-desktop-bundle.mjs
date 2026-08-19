@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, mkdirSync, writeFileSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { pnpm } from './cli-bins.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
@@ -38,7 +39,25 @@ const bridgeTar = resolve(resourcesDir, 'bridge.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 
 function run(cmd, args, opts = {}) {
-  execFileSync(cmd, args, { stdio: 'inherit', ...opts })
+  const shell = opts.shell ?? (process.platform === 'win32' && /\.cmd$/i.test(String(cmd)))
+  execFileSync(cmd, args, { stdio: 'inherit', ...opts, shell })
+}
+
+/** GNU tar needs `--force-local` for `C:\...`; Windows 11 bsdtar 3.8.4 rejects it. */
+function tarSupportsForceLocal() {
+  try {
+    return execFileSync('tar', ['--help'], { encoding: 'utf8' }).includes('--force-local')
+  } catch (error) {
+    const text = `${error.stdout ?? ''}${error.stderr ?? ''}`
+    return text.includes('--force-local')
+  }
+}
+
+function tarCreate(archive, changeDir, entries) {
+  const args = []
+  if (tarSupportsForceLocal()) args.push('--force-local')
+  args.push('--exclude', '.DS_Store', '-czf', archive, '-C', changeDir, ...entries)
+  run('tar', args, { cwd: repoRoot })
 }
 
 function mb(path) {
@@ -54,15 +73,16 @@ function sha256(path) {
 
 // 1. Bridge plugin: typecheck + tests + build (lib/ is what gets tarballed).
 console.log('prepare-desktop-bundle: building bridge plugin...')
-run('pnpm', ['run', 'plugin:check'], { cwd: repoRoot })
+run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
 
 // 2. Runtime tree (SHA-keyed cache; seconds when warm).
 console.log('prepare-desktop-bundle: assembling runtime...')
 run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
 
 const runtimeCli = resolve(runtimeDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
-const runtimeNode = resolve(runtimeDir, 'tools/node_modules/node/bin/node')
-if (!existsSync(runtimeCli) || !existsSync(runtimeNode)) {
+const runtimeNodeUnix = resolve(runtimeDir, 'tools/node_modules/node/bin/node')
+const runtimeNodeWin = resolve(runtimeDir, 'tools/node_modules/node/bin/node.exe')
+if (!existsSync(runtimeCli) || (!existsSync(runtimeNodeUnix) && !existsSync(runtimeNodeWin))) {
   console.error(`prepare-desktop-bundle: runtime tree incomplete at ${runtimeDir} (missing CLI entry or node binary)`)
   process.exit(1)
 }
@@ -125,13 +145,13 @@ if (existsSync(runtimeTar) && existsSync(runtimeShaMarker) && readFileSync(runti
   console.log(`prepare-desktop-bundle: runtime.tar.gz cached for ${revision.sha.slice(0, 12)} (assembly r${scriptRev})`)
 } else {
   console.log(`prepare-desktop-bundle: packing runtime.tar.gz (~500MB tree, this takes a minute)...`)
-  run('tar', ['--exclude', '.DS_Store', '-czf', runtimeTar, '-C', runtimeDir, 'dsh', 'tools'], { cwd: repoRoot })
+  tarCreate(runtimeTar, runtimeDir, ['dsh', 'tools'])
   writeFileSync(runtimeShaMarker, tarCacheKey + '\n')
 }
 console.log(`prepare-desktop-bundle: runtime.tar.gz ${mb(runtimeTar)} MB`)
 
 // 4. Bridge tarball: tiny, rebuilt every time (must track the lib/ just built).
-run('tar', ['--exclude', '.DS_Store', '-czf', bridgeTar, '-C', bridgeDir, 'package.json', 'cordis.patch.yml', 'lib'], { cwd: repoRoot })
+tarCreate(bridgeTar, bridgeDir, ['package.json', 'cordis.patch.yml', 'lib'])
 console.log(`prepare-desktop-bundle: bridge.tar.gz ${mb(bridgeTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,

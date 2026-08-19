@@ -19,6 +19,9 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(windows)]
+mod win;
+
 /// Ready-probe cadence and budget (tsx cold start is slow).
 const PROBE_INTERVAL: Duration = Duration::from_millis(500);
 const PROBE_BUDGET: Duration = Duration::from_secs(120);
@@ -33,7 +36,6 @@ const LADDER_TICK: Duration = Duration::from_millis(100);
 static SIDECAR: Mutex<Option<Child>> = Mutex::new(None);
 
 /// The stale-sidecar registry path for this process (set once during boot).
-#[cfg(unix)]
 static REGISTRY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// The termination signal caught by the handler, published for the poller
@@ -110,12 +112,12 @@ fn kill_sidecar() {
         // one last group sweep. An empty group is a harmless ESRCH no-op.
         unsafe { libc::kill(target, libc::SIGKILL) };
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = child.kill();
+        crate::win::terminate_job();
+        crate::win::taskkill_tree(pid, true);
         let _ = child.wait();
     }
-    #[cfg(unix)]
     unregister_sidecar(pid);
 }
 
@@ -130,7 +132,6 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
     // a `tauri dev` watcher restart SIGKILLs the app outright (see the
     // supervision section below), so the previous boot's exit path never
     // ran and its sidecar is still out there holding a port and ~/.dsh.
-    #[cfg(unix)]
     {
         let registry = registry_path(&logs);
         let _ = REGISTRY.set(registry.clone());
@@ -171,8 +172,9 @@ fn find_checkout() -> Result<PathBuf, String> {
     if let Ok(from_env) = std::env::var("DSH_CHECKOUT") {
         candidates.push(PathBuf::from(from_env));
     }
-    if let Ok(home) = std::env::var("HOME") {
-        candidates.push(Path::new(&home).join("workspace/deepseek-harness"));
+    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deepseek-harness"));
+    if let Ok(home) = user_home() {
+        candidates.push(home.join("workspace/deepseek-harness"));
     }
     for candidate in &candidates {
         if candidate.join("docs/architecture.md").is_file() && candidate.join("apps/cli/src/bin.ts").is_file() {
@@ -209,10 +211,25 @@ fn cli_command(runtime: &Runtime) -> Command {
     command.current_dir(&runtime.cwd);
     if !runtime.path_prepend.is_empty() {
         let existing = std::env::var("PATH").unwrap_or_default();
-        let prepend = runtime.path_prepend.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(":");
-        command.env("PATH", format!("{prepend}:{existing}"));
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let prepend = runtime.path_prepend.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(sep);
+        command.env("PATH", format!("{prepend}{sep}{existing}"));
     }
+    hide_console(&mut command);
     command
+}
+
+/// Keep child consoles off the desktop. Windows `node.exe` is a console
+/// subsystem binary; without this flag every sidecar/plugin-install spawn
+/// would flash (or leave) a cmd window. No-op on Unix.
+pub(crate) fn hide_console(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = command;
 }
 
 /// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the release
@@ -234,7 +251,7 @@ fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
         let sha = value.get("sha").and_then(|s| s.as_str()).unwrap_or("");
         if !sha.is_empty() {
             let dir = repo_root.join("runtime/build").join(sha);
-            if dir.join("dsh/lib/bin.js").is_file() {
+            if dir.join("dsh/node_modules/@deepseek-ai/dsh/lib/bin.js").is_file() {
                 return bundled_runtime(dir);
             }
         }
@@ -308,11 +325,16 @@ fn extract_bundle_tar(tar: &Path, dir: &Path, sentinel: &str, ok_content: &str) 
     let tmp = dir.with_extension("tmp");
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
-    let status = Command::new("tar")
-        .arg("-xzf")
-        .arg(tar)
-        .arg("-C")
-        .arg(&tmp)
+    let mut tar_cmd = Command::new("tar");
+    // GNU tar / older bsdtar treat `C:` in `-f C:\...` as a remote host and
+    // need `--force-local`. Windows 11 bsdtar 3.8.4 rejects that flag and
+    // accepts drive-letter paths as local. Probe `tar --help` once.
+    if tar_supports_force_local() {
+        tar_cmd.arg("--force-local");
+    }
+    tar_cmd.arg("-xzf").arg(tar).arg("-C").arg(&tmp);
+    hide_console(&mut tar_cmd);
+    let status = tar_cmd
         .status()
         .map_err(|e| format!("spawn tar for {}: {e}", tar.display()))?;
     if !status.success() {
@@ -337,16 +359,32 @@ fn extract_bundle_tar(tar: &Path, dir: &Path, sentinel: &str, ok_content: &str) 
     Ok(())
 }
 
+fn tar_supports_force_local() -> bool {
+    let mut cmd = Command::new("tar");
+    cmd.arg("--help");
+    hide_console(&mut cmd);
+    match cmd.output() {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            stdout.contains("--force-local") || stderr.contains("--force-local")
+        }
+        Err(_) => false,
+    }
+}
+
 /// The assembled prebuilt runtime tree (prepare-runtime.mjs output).
 fn bundled_runtime(dir: PathBuf) -> Result<Runtime, String> {
     let cli = dir.join("dsh/node_modules/@deepseek-ai/dsh/lib/bin.js");
     if !cli.is_file() {
         return Err(format!("bundled runtime missing CLI entry: {}", cli.display()));
     }
-    let node = dir.join("tools/node_modules/node/bin/node");
-    if !node.is_file() {
-        return Err(format!("bundled runtime missing node binary: {}", node.display()));
-    }
+    let Some(node) = bundled_node(&dir) else {
+        return Err(format!(
+            "bundled runtime missing node binary under {}/tools/node_modules/node",
+            dir.display()
+        ));
+    };
     Ok(Runtime {
         node,
         // Same tsx loader as the source runtime: profiles may carry
@@ -358,6 +396,20 @@ fn bundled_runtime(dir: PathBuf) -> Result<Runtime, String> {
         cwd: dir.join("dsh"),
         path_prepend: vec![dir.join("tools/node_modules/.bin"), dir.join("tools/node_modules/node/bin")],
     })
+}
+
+/// The `node` npm package lays the binary out differently per OS:
+/// Unix `bin/node`, Windows `bin/node.exe` (and a `node.exe` next to
+/// `bin/` on some versions).
+fn bundled_node(dir: &Path) -> Option<PathBuf> {
+    let tools = dir.join("tools/node_modules/node");
+    for rel in ["bin/node.exe", "bin/node", "node.exe"] {
+        let candidate = tools.join(rel);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// The source checkout (dev): tsx-run CLI from the fork working tree.
@@ -429,36 +481,21 @@ fn find_bridge(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// whose directory still exists after an upgrade) or dangling (revision
 /// directory deleted) is re-created; a real directory (dev layout's pnpm
 /// install) is never touched.
-#[cfg(unix)]
 fn ensure_bridge_cordis_link(bridge: &Path, runtime: &Runtime) {
-    let Some(root) = runtime.cwd.parent() else { return };
-    let Ok(entries) = fs::read_dir(root.join("dsh/node_modules/.pnpm")) else {
-        return; // source runtime without .pnpm: nothing sane to link
-    };
-    let mut matches: Vec<PathBuf> = entries
-        .flatten()
-        .filter(|e| {
-            let name = e.file_name();
-            let Some(name) = name.to_str() else { return false };
-            name.starts_with("@deepseek-ai+cordis@")
-        })
-        .map(|e| e.path().join("node_modules/@deepseek-ai/cordis"))
-        .filter(|p| p.is_dir())
-        .collect();
-    if matches.len() > 1 {
+    let Some(target) = resolve_runtime_cordis(runtime) else {
         eprintln!(
-            "dsh-desktop: multiple cordis copies in the runtime ({}), linking the first",
-            matches.len()
+            "dsh-desktop: bridge cordis link failed: no @deepseek-ai/cordis under {}",
+            runtime.cwd.display()
         );
-    }
-    let Some(target) = matches.pop() else { return };
+        return;
+    };
     let Ok(target) = fs::canonicalize(&target) else {
         eprintln!("dsh-desktop: bridge cordis link failed: cannot resolve {}", target.display());
         return;
     };
     let link = bridge.join("node_modules/@deepseek-ai/cordis");
-    // An existing symlink is correct only while it resolves to the same
-    // real path as the current runtime's cordis; otherwise re-point it.
+    // An existing symlink/junction is correct only while it resolves to
+    // the same real path as the current runtime's cordis; otherwise re-point it.
     if let Ok(existing) = fs::read_link(&link) {
         let existing_abs = if existing.is_absolute() {
             existing
@@ -470,7 +507,7 @@ fn ensure_bridge_cordis_link(bridge: &Path, runtime: &Runtime) {
                 return; // already the current runtime's cordis
             }
         }
-        if let Err(e) = fs::remove_file(&link) {
+        if let Err(e) = remove_dir_link(&link) {
             eprintln!("dsh-desktop: bridge cordis link replace failed: {e}");
             return;
         }
@@ -480,23 +517,105 @@ fn ensure_bridge_cordis_link(bridge: &Path, runtime: &Runtime) {
     let parent = link.parent().expect("link path always has a parent");
     if let Err(e) = fs::create_dir_all(parent)
         .map_err(|e| e.to_string())
-        .and_then(|()| {
-            std::os::unix::fs::symlink(&target, &link).map_err(|e| format!("link {} -> {}: {e}", link.display(), target.display()))
-        })
+        .and_then(|()| link_dir(&target, &link))
     {
         eprintln!("dsh-desktop: bridge cordis link failed: {e}");
     }
 }
 
-#[cfg(not(unix))]
-fn ensure_bridge_cordis_link(_bridge: &Path, _runtime: &Runtime) {}
+/// Locate `@deepseek-ai/cordis` in the sidecar runtime. Hoisted Windows
+/// trees (and Unix isolated trees that still hoist the name) keep it at
+/// `node_modules/@deepseek-ai/cordis`. Isolated `.pnpm` layouts keep it
+/// under `@deepseek-ai+cordis@*` — look there only when the hoisted path
+/// is missing (silent return here used to skip the link entirely on
+/// Windows hoisted installs, and log-sink then killed the plugin tree).
+fn resolve_runtime_cordis(runtime: &Runtime) -> Option<PathBuf> {
+    let hoisted = runtime.cwd.join("node_modules/@deepseek-ai/cordis");
+    if hoisted.is_dir() {
+        return Some(hoisted);
+    }
+    let entries = fs::read_dir(runtime.cwd.join("node_modules/.pnpm")).ok()?;
+    let mut matches: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| {
+            e.file_name().to_str().is_some_and(|name| name.starts_with("@deepseek-ai+cordis@"))
+        })
+        .map(|e| e.path().join("node_modules/@deepseek-ai/cordis"))
+        .filter(|p| p.is_dir())
+        .collect();
+    if matches.len() > 1 {
+        eprintln!(
+            "dsh-desktop: multiple cordis copies in the runtime ({}), linking the first",
+            matches.len()
+        );
+    }
+    matches.pop()
+}
+
+/// Directory symlink (Unix) or directory symlink / junction (Windows).
+fn link_dir(target: &Path, link: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+            .map_err(|e| format!("link {} -> {}: {e}", link.display(), target.display()))
+    }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return Ok(());
+        }
+        // Junctions do not need Developer Mode / elevation.
+        let link_s = link.to_string_lossy().into_owned();
+        let target_s = target.to_string_lossy().into_owned();
+        let mut command = Command::new("cmd");
+        command.args(["/C", "mklink", "/J", &link_s, &target_s]);
+        hide_console(&mut command);
+        let status = command.status().map_err(|e| format!("mklink /J spawn: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("mklink /J {} -> {} exited {status}", link.display(), target.display()))
+        }
+    }
+}
+
+/// Remove a symlink or Windows junction. `remove_file` fails on directory
+/// reparse points; try `remove_dir` first on Windows.
+fn remove_dir_link(link: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        fs::remove_dir(link).or_else(|_| fs::remove_file(link))
+    }
+    #[cfg(unix)]
+    {
+        fs::remove_file(link)
+    }
+}
+
+/// User home: `%USERPROFILE%` on Windows (native path; Git Bash `$HOME`
+/// is `/c/Users/...` and is not a valid Win32 path), `$HOME` elsewhere.
+fn user_home() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        if let Ok(value) = std::env::var("USERPROFILE") {
+            if !value.is_empty() {
+                return Ok(PathBuf::from(value));
+            }
+        }
+    }
+    if let Ok(value) = std::env::var("HOME") {
+        if !value.is_empty() {
+            return Ok(PathBuf::from(value));
+        }
+    }
+    Err("$HOME / %USERPROFILE% is not set".into())
+}
 
 /// The shell-private root (`~/.dsh-desktop/`): only the shell's own
 /// orchestration log (`logs/install.log`) lives here — the sidecar's harness
 /// output goes to the shared `$DSH_HOME/logs` (see `sidecar_log_path`).
 fn shell_root() -> Result<PathBuf, String> {
-    let user_home = std::env::var("HOME").map_err(|_| "$HOME is not set".to_string())?;
-    let root = Path::new(&user_home).join(".dsh-desktop");
+    let root = user_home()?.join(".dsh-desktop");
     fs::create_dir_all(root.join("logs")).map_err(|e| format!("create {}: {e}", root.join("logs").display()))?;
     Ok(root)
 }
@@ -514,8 +633,8 @@ fn dsh_home() -> Result<PathBuf, String> {
             return Ok(PathBuf::from(from_env));
         }
     }
-    let user_home = std::env::var("HOME").map_err(|_| "$HOME is not set".to_string())?;
-    Ok(Path::new(&user_home).join(".dsh"))
+    let home = user_home()?;
+    Ok(home.join(".dsh"))
 }
 
 /// Idempotently ensure the bridge row is installed in the web profile.
@@ -523,6 +642,10 @@ fn dsh_home() -> Result<PathBuf, String> {
 /// fails on the store-mismatch error, relink the profile with a plain
 /// `pnpm install` through the dsh CLI's own recovery and retry once.
 fn run_plugin_install(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+    if bridge_already_in_profile(bridge, dsh_home) {
+        println!("dsh-desktop: bridge already in web profile, skip plugin add");
+        return Ok(());
+    }
     match plugin_install_once(runtime, bridge, dsh_home, logs) {
         Ok(()) => Ok(()),
         Err(first) => {
@@ -530,6 +653,18 @@ fn run_plugin_install(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &
             relink_profile(runtime, dsh_home, logs)?;
             plugin_install_once(runtime, bridge, dsh_home, logs)
         }
+    }
+}
+
+/// True when the web profile already points at this extracted bridge.
+/// Skipping `plugin add` avoids a pnpm major-store mismatch (bundled pnpm
+/// 10 vs a terminal profile built with pnpm 11) that recreates
+/// `~/.dsh/profiles/web/node_modules` on a first-fail retry.
+fn bridge_already_in_profile(bridge: &Path, dsh_home: &Path) -> bool {
+    let linked = dsh_home.join("profiles/web/node_modules/dsh-desktop-bridge");
+    match (fs::canonicalize(&linked), fs::canonicalize(bridge)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
     }
 }
 
@@ -613,6 +748,15 @@ fn sidecar_log_path(dsh_home: &Path) -> Result<PathBuf, String> {
         let _ = fs::remove_file(&latest);
         std::os::unix::fs::symlink(&log, &latest).map_err(|e| format!("link {}: {e}", latest.display()))?;
     }
+    #[cfg(windows)]
+    {
+        // Best-effort file symlink; junctions are dirs-only. Failure is
+        // fine: per-boot files remain, matching the previous unix-only
+        // latest-link gap.
+        let latest = dir.join("desktop-latest.log");
+        let _ = fs::remove_file(&latest);
+        let _ = std::os::windows::fs::symlink_file(&log, &latest);
+    }
     Ok(log)
 }
 
@@ -643,14 +787,24 @@ fn spawn_sidecar(runtime: &Runtime, dsh_home: &Path, port: u16) -> Result<PathBu
         // directly — the shell's handler owns its shutdown ordering.
         command.process_group(0);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+    }
     let child = command.spawn().map_err(|e| format!("spawn sidecar: {e}"))?;
+    #[cfg(windows)]
+    if let Err(error) = crate::win::assign_sidecar_to_job(&child) {
+        eprintln!("dsh-desktop: job-object assign skipped ({error}); falling back to taskkill /T + registry");
+    }
     let pid = child.id();
     // Register the sidecar so a later boot can reap it if this shell dies
     // without running its exit path (SIGKILL, crash). Registration is
     // best-effort: without start times the sweep could not tell a recycled
     // pid from the real sidecar, so an unrecordable sidecar simply stays
     // outside the sweep's protection.
-    #[cfg(unix)]
     if let (Some(registry), Some(sidecar_lstart), Some(shell_lstart)) =
         (REGISTRY.get(), ps_lstart(pid), ps_lstart(std::process::id()))
     {
@@ -766,7 +920,6 @@ fn add_registry_entry(path: &Path, entry: &SidecarEntry) {
 }
 
 /// Remove our entry on a graceful exit.
-#[cfg(unix)]
 fn unregister_sidecar(pid: u32) {
     let Some(path) = REGISTRY.get().cloned() else {
         return;
@@ -802,9 +955,13 @@ fn ps_lstart(pid: u32) -> Option<String> {
     }
 }
 
+#[cfg(windows)]
+fn ps_lstart(pid: u32) -> Option<String> {
+    crate::win::start_token(pid)
+}
+
 /// True only when `pid` is alive AND is the same process instance the
 /// entry was written for (same start time). A recycled pid reads as dead.
-#[cfg(unix)]
 fn pid_matches(pid: u32, recorded_lstart: &str) -> bool {
     ps_lstart(pid).as_deref() == Some(recorded_lstart)
 }
@@ -827,6 +984,19 @@ fn term_then_kill(pid: u32) {
     unsafe { libc::kill(target, libc::SIGKILL) };
 }
 
+#[cfg(windows)]
+fn term_then_kill(pid: u32) {
+    crate::win::taskkill_tree(pid, false);
+    let deadline = Instant::now() + TERM_GRACE;
+    while Instant::now() < deadline {
+        if ps_lstart(pid).is_none() {
+            return;
+        }
+        std::thread::sleep(LADDER_TICK);
+    }
+    crate::win::taskkill_tree(pid, true);
+}
+
 /// Where to aim a sidecar's termination signal: the whole process group
 /// when the pid leads one — our spawn puts each sidecar in its own group,
 /// so the harness's own children (running tool commands, watchers) are
@@ -846,7 +1016,6 @@ fn signal_target(pid: u32) -> libc::pid_t {
 
 /// Reap registry entries whose shell is gone; keep the rest; persist what
 /// survives. Returns the entries it reaped so the caller can log them.
-#[cfg(unix)]
 fn sweep_stale_sidecars(path: &Path) -> Vec<SidecarEntry> {
     let entries = load_registry(path);
     if entries.is_empty() {
@@ -1359,11 +1528,14 @@ fn dsh_desktop_open_external(url: String) -> Result<(), String> {
     }
     let opener = match std::env::consts::OS {
         "macos" => ("open", vec![url]),
-        "windows" => ("cmd", vec!["/C".to_string(), "start".to_string(), url]),
+        // Empty title arg so `start` does not treat a quoted URL as the window title.
+        "windows" => ("cmd", vec!["/C".to_string(), "start".to_string(), String::new(), url]),
         _ => ("xdg-open", vec![url]),
     };
-    Command::new(opener.0)
-        .args(opener.1)
+    let mut command = Command::new(opener.0);
+    command.args(opener.1);
+    hide_console(&mut command);
+    command
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("open external: {e}"))
@@ -1378,6 +1550,7 @@ fn dsh_desktop_notify(title: String, body: String) -> Result<(), String> {
             .arg("-e")
             .arg(format!("display notification \"{}\" with title \"{}\"", esc(&body), esc(&title)))
             .status(),
+        "windows" => windows_toast(&title, &body),
         _ => Command::new("notify-send")
             .arg(title)
             .arg(body)
@@ -1388,6 +1561,46 @@ fn dsh_desktop_notify(title: String, body: String) -> Result<(), String> {
         Ok(status) => Err(format!("notify exited {status}")),
         Err(e) => Err(format!("notify spawn: {e}")),
     }
+}
+
+#[cfg(windows)]
+fn windows_toast(title: &str, body: &str) -> std::io::Result<std::process::ExitStatus> {
+    let xml_esc = |s: &str| {
+        s.replace(['\r', '\n'], " ")
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
+        xml_esc(title),
+        xml_esc(body)
+    );
+    let script = format!(
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null\n\
+         [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null\n\
+         $xml = New-Object Windows.Data.Xml.Dom.XmlDocument\n\
+         $xml.LoadXml(@'\n{xml}\n'@)\n\
+         $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)\n\
+         [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('dev.dsh.desktop').Show($toast)\n"
+    );
+    let encoded = utf16_le_base64(&script);
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]);
+    hide_console(&mut command);
+    command.status()
+}
+
+#[cfg(windows)]
+fn utf16_le_base64(script: &str) -> String {
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+}
+
+#[cfg(not(windows))]
+fn windows_toast(_title: &str, _body: &str) -> std::io::Result<std::process::ExitStatus> {
+    unreachable!("windows_toast is only called on Windows")
 }
 
 /// IPC: write base64 bytes into the user's Downloads directory.
@@ -1409,8 +1622,8 @@ fn dsh_desktop_save_file(name: String, base64: String) -> Result<String, String>
 
 /// The user's Downloads directory ($HOME/Downloads, created on demand).
 fn downloads_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "$HOME is not set".to_string())?;
-    let dir = Path::new(&home).join("Downloads");
+    let home = user_home()?;
+    let dir = home.join("Downloads");
     fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     Ok(dir)
 }
@@ -1563,5 +1776,27 @@ mod tests {
             assert!(Instant::now() < deadline, "{alive} grandchildren survived the group signal");
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn ps_lstart_matches_only_the_same_process_instance() {
+        let pid = std::process::id();
+        let lstart = ps_lstart(pid).expect("GetProcessTimes must see this test process");
+        assert!(pid_matches(pid, &lstart), "fresh token matches");
+        assert!(!pid_matches(pid, "0"), "stale token reads as dead");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn term_then_kill_terminates_a_scratch_process() {
+        let mut command = std::process::Command::new("ping");
+        command.args(["-n", "30", "127.0.0.1"]).stdout(Stdio::null()).stderr(Stdio::null());
+        hide_console(&mut command);
+        let mut child = command.spawn().expect("spawn ping");
+        let pid = child.id();
+        term_then_kill(pid);
+        let _ = child.wait();
+        assert!(ps_lstart(pid).is_none(), "the pid must be gone after the ladder");
     }
 }

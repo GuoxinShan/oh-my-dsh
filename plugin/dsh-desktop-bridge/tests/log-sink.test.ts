@@ -9,7 +9,7 @@ import { linkLatest, logStamp, resolveLogDir, toRecord } from '../src/log-sink.t
 describe('resolveLogDir', () => {
   it('lets DSH_WEB_LOG_DIR win and falls to $DSH_HOME/logs', () => {
     assert.equal(resolveLogDir({ DSH_WEB_LOG_DIR: '/custom', DSH_HOME: '/home' }), '/custom')
-    assert.equal(resolveLogDir({ DSH_WEB_LOG_DIR: '', DSH_HOME: '/home' }), '/home/logs')
+    assert.equal(resolveLogDir({ DSH_WEB_LOG_DIR: '', DSH_HOME: '/home' }), join('/home', 'logs'))
     assert.equal(resolveLogDir({}), join(homedir(), '.dsh', 'logs'))
   })
 })
@@ -26,7 +26,9 @@ function message(args: unknown[]): Message {
 }
 
 describe('linkLatest', () => {
-  it('swaps an existing pointer — even a dangling one — without throwing and leaves no staging behind', () => {
+  it('swaps an existing pointer — even a dangling one — without throwing and leaves no staging behind', {
+    skip: process.platform === 'win32' && 'unix-only symlink pointer; Windows uses per-boot files',
+  }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-log-sink-'))
     try {
       // A previous boot's pointer, left dangling by a crashed successor.

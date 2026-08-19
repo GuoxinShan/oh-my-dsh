@@ -20,10 +20,12 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 2
+const SCRIPT_REV = 3
+const cacheToken = `${SCRIPT_REV} ${process.platform} ${process.arch}`
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
@@ -35,10 +37,13 @@ const buildMarker = resolve(srcDir, '.prepare-runtime-ok')
 const cachedRev = existsSync(resolve(outDir, '.script-rev'))
   ? readFileSync(resolve(outDir, '.script-rev'), 'utf8').trim()
   : ''
+const cachedNode = process.platform === 'win32'
+  ? resolve(outDir, 'tools/node_modules/node/bin/node.exe')
+  : resolve(outDir, 'tools/node_modules/node/bin/node')
 if (
-  cachedRev === String(SCRIPT_REV)
+  cachedRev === cacheToken
   && existsSync(resolve(outDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'))
-  && existsSync(resolve(outDir, 'tools/node_modules/node/bin/node'))
+  && existsSync(cachedNode)
 ) {
   console.log(`prepare-runtime: cached ${revision.sha.slice(0, 12)} -> ${outDir}`)
   process.exit(0)
@@ -64,9 +69,9 @@ if (actual !== revision.sha) {
 // 2. Install + build, cached per SHA.
 if (!existsSync(buildMarker) || readFileSync(buildMarker, 'utf8').trim() !== revision.sha) {
   console.log('prepare-runtime: pnpm install (frozen)...')
-  execFileSync('pnpm', ['install', '--frozen-lockfile'], { cwd: srcDir, stdio: 'inherit' })
+  execPnpm( ['install', '--frozen-lockfile'], { cwd: srcDir, stdio: 'inherit' })
   console.log('prepare-runtime: pnpm build...')
-  execFileSync('pnpm', ['run', 'build'], { cwd: srcDir, stdio: 'inherit' })
+  execPnpm( ['run', 'build'], { cwd: srcDir, stdio: 'inherit' })
   writeFileSync(buildMarker, revision.sha + '\n')
 } else {
   console.log('prepare-runtime: install+build cached for this SHA')
@@ -78,7 +83,7 @@ if (!existsSync(buildMarker) || readFileSync(buildMarker, 'utf8').trim() !== rev
 rmSync(tarballDir, { recursive: true, force: true })
 mkdirSync(tarballDir, { recursive: true })
 const packages = JSON.parse(
-  execFileSync('pnpm', ['-r', 'ls', '--depth', '-1', '--json'], { cwd: srcDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
+  execPnpm( ['-r', 'ls', '--depth', '-1', '--json'], { cwd: srcDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
 )
 const overrides = {}
 let cliTarball
@@ -106,7 +111,7 @@ for (const pkg of packages) {
   // prepare verification off-target; skip them — overrides then leaves them
   // to the official npm build, which is the same artifact either way.
   try {
-    execFileSync('pnpm', ['pack', '--pack-destination', tarballDir], { cwd: pkg.path, stdio: 'pipe' })
+    execPnpm( ['pack', '--pack-destination', tarballDir], { cwd: pkg.path, stdio: 'pipe' })
   } catch {
     if (FORK_MODIFIED.has(pkg.name)) {
       console.error(`prepare-runtime: fork-modified package failed to pack: ${pkg.name}`)
@@ -140,6 +145,7 @@ if (cliTarball === undefined) {
   process.exit(1)
 }
 const runtimeDir = resolve(outDir, 'dsh')
+rmSync(runtimeDir, { recursive: true, force: true })
 mkdirSync(runtimeDir, { recursive: true })
 writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
   private: true,
@@ -161,20 +167,31 @@ writeFileSync(resolve(runtimeDir, 'pnpm-workspace.yaml'), [
   '  node-addon-require-builtin: false',
   '',
 ].join('\n'))
+// Windows bsdtar follows NTFS junctions into copies, which breaks pnpm's
+// nested .pnpm layout (tsx then cannot resolve sibling esbuild). Hoist so
+// the tree is real directories and survives the tar round-trip. Unix keeps
+// the default isolated linker — tar preserves POSIX symlinks.
+if (process.platform === 'win32') {
+  writeFileSync(resolve(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
+}
 console.log('prepare-runtime: installing runtime tree...')
 rmSync(resolve(runtimeDir, 'pnpm-lock.yaml'), { force: true })
-execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+execPnpm( ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
 
 // 5. Runtime tools: node + pnpm binaries.
 const toolsDir = resolve(outDir, 'tools')
+rmSync(toolsDir, { recursive: true, force: true })
 mkdirSync(toolsDir, { recursive: true })
 writeFileSync(resolve(toolsDir, 'package.json'), JSON.stringify({
   private: true,
   dependencies: { node: '24.9.0', pnpm: '^10.28.0' },
 }, null, 2) + '\n')
 writeFileSync(resolve(toolsDir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  node: true\n')
+if (process.platform === 'win32') {
+  writeFileSync(resolve(toolsDir, '.npmrc'), 'node-linker=hoisted\n')
+}
 rmSync(resolve(toolsDir, 'pnpm-lock.yaml'), { force: true })
-execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: toolsDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
-writeFileSync(resolve(outDir, '.script-rev'), `${SCRIPT_REV}\n`)
+execPnpm( ['install', '--no-frozen-lockfile'], { cwd: toolsDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+writeFileSync(resolve(outDir, '.script-rev'), `${cacheToken}\n`)
 
 console.log(`prepare-runtime: done -> ${outDir}`)

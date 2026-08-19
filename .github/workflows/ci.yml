@@ -48,6 +48,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Placeholder bundle resources for cargo check
+        run: |
+          mkdir -p src-tauri/resources
+          : > src-tauri/resources/runtime.tar.gz
+          : > src-tauri/resources/bridge.tar.gz
+          echo '{}' > src-tauri/resources/runtime-revision.json
       - name: cargo check
         working-directory: src-tauri
         run: cargo check
+
+  shell-windows:
+    name: Tauri shell Windows (cargo check + tests)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Placeholder bundle resources for cargo check
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          : > src-tauri/resources/runtime.tar.gz
+          : > src-tauri/resources/bridge.tar.gz
+          echo '{}' > src-tauri/resources/runtime-revision.json
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
