@@ -1,6 +1,6 @@
 {
   "name": "dsh-provider-balance",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "DSH web plugin: provider quota/balance badges — composer chip beside the context meter plus per-row badges on the Models settings page (GLM/Kimi/OpenCode/DeepSeek/Moonshot/xAI + Sub2API gateway auto-detect)",
   "type": "module",
@@ -18,8 +18,7 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-conversation"
       ]
     }
   }

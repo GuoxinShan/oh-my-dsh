@@ -15,23 +15,18 @@
  * (the same store ModelSelect renders from) and shows only that provider's
  * remaining quotas. A provider without a quota adapter renders nothing.
  *
- * Contribution two: an entry in the `settings.models.provider` list slot —
- * the accessory seat each configured provider row on the Models settings
- * page renders between its identity and its actions. The provider arrives
- * in the slot's owner share (the row's stable route id), so the badge is
- * stationary per row: one compact capsule per provider, popover downward.
- * The seat is declared by the built-in ui-settings-models plugin; when it
- * is absent (older harness) this registration simply waits and renders
- * nothing.
- *
- * Contribution two-prime (the stock-harness twin of contribution two): when
- * `settings.models.provider` is NOT declared (a harness without the fork's
- * row seat), the SAME ProviderBalanceRowBadge is mounted through its own
- * React root into a foreign container inserted next to each provider row's
- * actions. The row's provider route id is parsed from the edit button's
- * accessible name ("编辑 {displayName} ({provider})"), the page's React
- * tree is never modified, and the two surfaces are mutually exclusive —
- * the watcher is armed only while the seat is absent.
+ * Contribution two: one badge per configured provider row on the Models
+ * settings page, mounted by DOM injection — no host slot required, so the
+ * plugin runs identically on a stock upstream harness. A MutationObserver
+ * watches for provider rows; for each one, the row's provider route id is
+ * parsed from the edit button's accessible name ("编辑 {displayName}
+ * ({provider})"), a foreign container is inserted next to the row's
+ * actions, and ProviderBalanceRowBadge mounts into it through its own
+ * react-dom/client root. The page's React tree is never modified: the
+ * sweep re-asserts container positions after host reconciliations and
+ * unmounts a badge's root the moment its row leaves the DOM. A provider
+ * without a quota adapter renders nothing, so a misparsed or adapterless
+ * row shows an invisible empty seat only.
  *
  * Data comes from the host half's same-origin JSON route
  * (`/provider-balance/quota?provider=<route-id>`); the API key never crosses
@@ -592,11 +587,11 @@ window.__ModuleLoader__.load({
       return createElement(ProviderBalanceBadge, { provider: provider, t: props.t })
     }
 
-    /* The Models settings row badge: the provider route id arrives in the
-     * slot's owner share (settings.models.provider), so the badge is
-     * stationary per row and needs no subscription. The row's displayName
-     * is not consumed: the panel already names the plan or falls back to
-     * the route label. */
+    /* The Models settings row badge: the provider route id arrives from the
+     * row's edit-button accessible name (see the watcher below), so the
+     * badge is stationary per row and needs no subscription. The row's
+     * displayName is not consumed: the panel already names the plan or
+     * falls back to the route label. */
     function ProviderBalanceRowBadge(props) {
       return createElement(ProviderBalanceBadge, {
         provider: props.provider,
@@ -607,14 +602,12 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
-    /* Stock-harness row badges: the same ProviderBalanceRowBadge mounted  */
-    /* through its own React root into a container inserted next to each   */
-    /* provider row's actions. Armed ONLY while the settings.models.       */
-    /* provider slot is not declared (a harness without the fork's row     */
-    /* seat); on such a host this is the only way to put UI inside the     */
-    /* Models page rows, and it must not touch the host React tree: the   */
-    /* container is a foreign node the page never manages, the badge       */
-    /* inside is a self-contained root.                                    */
+    /* Models-page row badges via DOM injection: ProviderBalanceRowBadge   */
+    /* mounted through its own React root into a container inserted next   */
+    /* to each provider row's actions. This is the plugin's only row-badge */
+    /* path — no host slot is required, and it must never touch the host   */
+    /* React tree: the container is a foreign node the page never manages, */
+    /* the badge inside is a self-contained root.                          */
     /* ------------------------------------------------------------------ */
 
     /* The edit button's accessible name is providerCopy(t('editProvider')) =
@@ -698,7 +691,8 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
-    /* Cordis plugin: dictionaries + both slot entries.                   */
+    /* Cordis plugin: dictionaries, the composer slot entry, and the      */
+    /* row-badge watcher.                                                 */
     /* ------------------------------------------------------------------ */
     module.exports = {
       name: 'dsh-provider-balance',
@@ -722,42 +716,13 @@ window.__ModuleLoader__.load({
           }, ProviderBalanceChip)
         })
 
-        /* Models settings page: one badge per configured provider row. The
-         * `t` seat comes from the locale namespace on the registration; the
-         * provider route id comes from the slot's owner share. */
-        ctx.slots.inject('settings.models.provider', function () {
-          return ctx.slots.register({
-            name: 'settings.models.provider',
-            id: 'provider-balance',
-            order: 10,
-            locale: NS,
-          }, ProviderBalanceRowBadge)
-        })
-
-        /* Stock harness (no settings.models.provider seat): the same badge
-         * per row, mounted through its own React root into a foreign
-         * container inserted next to the row's actions. Armed only while
-         * the seat is not declared — ctx.slots.spec is the point-in-time
-         * probe covering boot order, and the inject callback below flips
-         * the watcher off when the seat declares later (and back on if its
-         * owner ever collapses), so the two surfaces never coexist. */
-        var disposeWatcher = null
-        var armWatcher = function () {
-          if (disposeWatcher !== null) return
-          disposeWatcher = createRowBadgeWatcher(ctx.locale.bind(NS))
-        }
-        var disarmWatcher = function () {
-          if (disposeWatcher === null) return
-          disposeWatcher()
-          disposeWatcher = null
-        }
-
-        if (ctx.slots.spec('settings.models.provider') === undefined) armWatcher()
-
-        ctx.slots.inject('settings.models.provider', function () {
-          disarmWatcher()
-          return function () { armWatcher() }
-        })
+        /* Models settings page: one badge per configured provider row,
+         * DOM-injected (see createRowBadgeWatcher). No host slot is
+         * required, so this runs on stock and forked harnesses alike and
+         * the plugin never needs source changes upstream. */
+        ctx.effect(function () {
+          return createRowBadgeWatcher(ctx.locale.bind(NS))
+        }, 'provider-balance: row badges')
       },
     }
 
