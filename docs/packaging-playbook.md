@@ -26,6 +26,15 @@ pnpm desktop:build
 
 注意：`src-tauri/resources/` 是 gitignored 的再生产物；**裸 `cargo build` 会因 build.rs 校验资源缺失而失败**，必须经 `pnpm desktop:build`（或先 `pnpm run desktop:prepare`）。单独 `cargo check` 前也要先跑一次 prepare。
 
+### 安装窗口外观（DMG 背景与布局）
+
+DMG 窗口的观感由两处共同决定，改任何一处必须同步另一处：
+
+- `src-tauri/dmg/background.png` —— 窗口背景（标题文案 + 拖拽箭头 + 柔和底纹）。**由 `scripts/generate-dmg-background.py` 生成**（PIL；`pip install --user pillow`），不要手改 PNG。画布按 point 布局（660×400）以 2x 渲染（1320×800），保存时写 144 DPI 元数据——Finder 按 DPI 把背景映射回 point 尺寸（与 DropDMG「72/144 dpi」约定一致），Retina 下文字不糊；只画 1x 会糊，只画 2x 不写 DPI 会被放大裁切。
+- `tauri.conf.json` 的 `bundle.macOS.dmg` —— `windowSize` / `appPosition` / `applicationFolderPosition`。图标锚点（app 180,196 / Applications 480,196，图标尺寸 128 为 create-dmg 脚本默认值）与背景里的箭头两端严格对齐；改坐标要重新生成背景。
+
+已知现象：挂载窗口里可能看到 `.VolumeIcon.icns`——它是 create-dmg 放的卷图标 dotfile，默认隐藏，只有 Finder 开了「显示隐藏文件」（Cmd+Shift+.）才会现身，属正常现象，所有 create-dmg 系安装包（含 tauri 默认）皆然。
+
 ## 2. 包结构与首启解压（原理）
 
 runtime 与桥插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案还规避两个问题：App Translocation 把 .app 挂到只读卷（解压到 home 后树恒可写）；将来公证时嵌套 node Mach-O 不进 notarytool 扫描（藏在数据 tarball 里）。

@@ -26,7 +26,22 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "macOS": {
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "dmg": {
+        "background": "dmg/background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 196
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 196
+        }
+      }
     },
     "resources": [
       "resources/runtime.tar.gz",
