@@ -81,21 +81,52 @@ const packages = JSON.parse(
   execFileSync('pnpm', ['-r', 'ls', '--depth', '-1', '--json'], { cwd: srcDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
 )
 const overrides = {}
-let cliTarball
 let packed = 0
 const skipped = []
-// Fork-modified packages MUST pack from our tree — falling back to the npm
-// build for any of these would silently ship the unpatched runtime.
+// Fork-modified packages ship as npm releases under the fork scope (FORK.md
+// 「发布纪律」); the runtime consumes those published versions instead of
+// packing the clone — same bytes the world can install, one provenance.
+// Source of truth: fork repo FORK.md (the source packages of
+// `git diff upstream/master..master`). `dsh-client-ui-settings-models` was
+// retired by revert ffffaf39 and removed here on 2026-08-20.
 const FORK_MODIFIED = new Set([
   '@deepseek-ai/dsh-agent-default-model',
   '@deepseek-ai/dsh-client-modules',
   '@deepseek-ai/dsh-client-ui-model-selection',
-  '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-host-apiproxy',
+  '@deepseek-ai/dsh-host-frontend-static',
   '@deepseek-ai/dsh-mcp-client',
+  '@deepseek-ai/dsh-session-persistence',
+  '@deepseek-ai/dsh-todo-completion-guard',
+  '@deepseek-ai/dsh',
 ])
+const FORK_NPM_SCOPE = process.env.FORK_NPM_SCOPE ?? '@crazx'
+// revision.ref spells v<upstream-baseline>+zw.<N>; npm versions are
+// <upstream-baseline>.zw.<N>.
+const zwMatch = /^(v[^+]+)\+zw\.(\d+)$/.exec(revision.ref)
+if (zwMatch === null) {
+  console.error(`prepare-runtime: revision.ref carries no zw layer: ${revision.ref}`)
+  process.exit(1)
+}
+const forkBaseVersion = zwMatch[1].slice(1)
+const forkNpmVersion = `${forkBaseVersion}.zw.${zwMatch[2]}`
+for (const name of FORK_MODIFIED) {
+  const forkName = `${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`
+  // Fail loud before a long install: a missing npm release means the tag was
+  // pushed without the fork's npm-release workflow finishing (or failing).
+  try {
+    execFileSync('npm', ['view', `${forkName}@${forkNpmVersion}`, 'version'], { stdio: 'pipe' })
+  } catch {
+    console.error(`prepare-runtime: fork npm release not on the registry: ${forkName}@${forkNpmVersion}`)
+    console.error('  publish it in the fork repo (tag v*+zw.* -> npm release workflow), then re-run')
+    process.exit(1)
+  }
+  overrides[name] = `npm:${forkName}@${forkNpmVersion}`
+}
+console.log(`prepare-runtime: fork-modified set -> npm ${FORK_NPM_SCOPE}/* @ ${forkNpmVersion}`)
 for (const pkg of packages) {
   if (!pkg.name?.startsWith('@deepseek-ai/')) continue
+  if (FORK_MODIFIED.has(pkg.name)) continue // consumed from npm via overrides
   const manifestPath = resolve(pkg.path, 'package.json')
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (manifest.private === true) {
@@ -108,10 +139,6 @@ for (const pkg of packages) {
   try {
     execFileSync('pnpm', ['pack', '--pack-destination', tarballDir], { cwd: pkg.path, stdio: 'pipe' })
   } catch {
-    if (FORK_MODIFIED.has(pkg.name)) {
-      console.error(`prepare-runtime: fork-modified package failed to pack: ${pkg.name}`)
-      process.exit(1)
-    }
     skipped.push(pkg.name)
     continue
   }
@@ -123,28 +150,24 @@ for (const pkg of packages) {
     process.exit(1)
   }
   overrides[pkg.name] = `file:${tarball}`
-  if (pkg.name === '@deepseek-ai/dsh') cliTarball = tarball
   packed += 1
 }
 console.log(`prepare-runtime: packed ${packed} fork packages` + (skipped.length > 0 ? ` (skipped to npm: ${skipped.join(', ')})` : ''))
 
-// 4. Runtime manifest: CLI from our tarball, every @deepseek-ai/* pinned to
+// 4. Runtime manifest: the CLI rides the fork npm release (the
+// `npm:@crazx/dsh` override above); every other @deepseek-ai/* is pinned to
 // our tarballs via overrides, plus the node/pnpm tools the sidecar needs.
 // tsx is a first-class runtime dep, not a dev nicety: profiles may install
 // source-distributed plugins (.ts entries under their node_modules), which
 // plain Node refuses to type-strip — the terminal source runtime loads them
 // via `node --import tsx/esm`, and the bundled runtime must match (the shell
 // passes the same --import for bundled runs).
-if (cliTarball === undefined) {
-  console.error('prepare-runtime: @deepseek-ai/dsh tarball not found among packed packages')
-  process.exit(1)
-}
 const runtimeDir = resolve(outDir, 'dsh')
 mkdirSync(runtimeDir, { recursive: true })
 writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
   private: true,
   dependencies: {
-    '@deepseek-ai/dsh': `file:${cliTarball}`,
+    '@deepseek-ai/dsh': forkBaseVersion,
     tsx: '^4.19.2',
   },
   pnpm: { overrides },

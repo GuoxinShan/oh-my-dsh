@@ -2,7 +2,7 @@
 
 dsh-desktop 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）的桌面化 monorepo：出树插件与 Tauri 壳同仓、独立发版。两个平面：
 
-- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。成员：`dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）、`dsh-mcp-settings`（2026-08-19 subtree 迁入）、`dsh-provider-balance`（2026-08-19 subtree 迁入，纯 DOM 注入）、`dsh-reasoning-efforts`（2026-08-20 新写，host-only：给手写 llm-pi-ai 模型补 `reasoningEfforts` 声明，契约见包内 README，决策见 `docs/notes/2026-08-20-reasoning-efforts.md`）。
+- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。成员：`dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）、`dsh-mcp-settings`（2026-08-19 subtree 迁入）、`dsh-provider-balance`（2026-08-19 subtree 迁入，纯 DOM 注入）、`dsh-reasoning-efforts`（2026-08-20 新写，host-only：给手写 llm-pi-ai 模型补 `reasoningEfforts` 声明，契约见包内 README，决策见 `docs/notes/2026-08-20-reasoning-efforts.md`）、`dsh-web-search-toggle`（2026-08-20 新写，双面：通用设置页「原生网页搜索」开关——DEEPSEEK_API_KEY 状态提示 + home patch 层受管块禁用 tool-web 行，契约见包内 README，决策见 `docs/notes/2026-08-20-web-search-toggle.md`）。
 - **Tauri 2 Rust 壳** —— spawn harness sidecar、端口分配、就绪检测、窗口加载。壳层不含业务逻辑；harness 不感知壳的存在。壳只特殊对待桥插件（gate + IPC）；其余插件对壳不可见。
 
 规范层级：[README.md](README.md) 记录「为什么」（技术选型）；本文件记录「契约与约定」（怎么做）；代码是实现。冲突时以本文件为准。改契约必须同 PR 改本文件。
@@ -40,7 +40,7 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 - 插件与桌面**锁步禁止**。各包 `package.json` 的 `version` 独立走动。
 - **版本号策略（0.2.0-rc.1 起，学 harness 的 rc 节奏）**：桌面走 semver 预发布段——大功能进 `0.N.0-rc.x`，稳定后摘 `-rc` 出 `0.N.0`，纯修复走 `0.N.M+1`；插件各自 semver，同样允许 `-rc.N`；fork 标识走 `+zw.N` build metadata（semver §10，排序忽略不影响升级链）。**刻意不**在桌面版本里嵌 harness 基线（`0.1.0-rc.7.desktop.1` 这类嵌套段合法但小于已发的 0.1.3，首个新版即断更新链）；基线由 `runtime/revision.json` 记录。**GitHub Release 不勾 prerelease**——`releases/latest` 端点排除 prerelease，勾了 latest.json 即 404、自动更新断链；`-rc` 只体现在版本号语义。release.yml 有防呆：tag 版本 ≠ `tauri.conf.json`/`package.json` 版本即 fail。
 - Git tag 无斜杠三分家：桌面 `v<semver>`（例 `v0.2.0-rc.2`，经典风格）；插件 `<包名>-v<semver>`（例 `dsh-provider-balance-v0.4.2`；包名都是 `dsh-*` 起，天然不与 `v*` 冲突，workflow 按「最后一个 `-v`」切名与版本）；**runtime fork 标签 `v<基线>+zw.<补丁>`**（例 `v0.1.0-rc.7+zw.1`——semver build metadata 标识 zw fork，行业标准做法，基线升级时 `+zw.N` 递增；历史 `desktop/v0.1.0/1` 标签仍有效可fetch，revision.json 钉 ref 字符串）。GitHub Release 按 tag 分流，互不覆盖附件。**latest 指针纪律**：桌面自动更新端点 `releases/latest/download/latest.json` 依赖 latest 指针——desktop Release `make_latest: true` 独占，插件 Release 一律 `make_latest: false`（release.yml 已内置；网页手动发插件 Release 时同样不得设为 latest）。
-- 安装面保持 `dsh plugin --profile web add <repo>/plugin/<name>`（file: / git 路径均可）。本仓不把出树插件发到 npm——和 runtime「不发 npm、fork 是事实源」同一条线；要分发就打 git tag，让 `dsh plugin add` 指向该 tag。
+- 安装面保持 `dsh plugin --profile web add <repo>/plugin/<name>`（file: / git 路径均可）。本仓不把出树插件发到 npm——桌面插件走 git tag 分发；**对 harness 的依赖**则一律 npm（「npm 依赖纪律」一节），与 fork 的 npm 发布纪律（fork FORK.md）互为两面。
 - 壳的 release 打包（`bridge.tar.gz` → `~/.dsh-desktop/bridge/` → 幂等 `plugin add`）今天只覆盖桥。迁入其他插件后，prepare 脚本对 `plugin/*` 循环打包/add；那是打包链的后续 PR，不在搬家当天改壳。
 
 ### 迁入既有插件仓
@@ -50,12 +50,21 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 - 迁入后源仓 archive 为只读，不再双写。
 - 迁入当天**不上**仓根 `pnpm-workspace.yaml`：桥锁 pnpm 10，mcp-settings 锁 pnpm 11。各包继续自己的 `pnpm install`；workspace 收敛是独立 PR。
 - 迁入当天不统一测试/构建工具链。第二步再把裸 `client.js` 分发（provider-balance）收进桥的 tsdown 纯度门。
-- **harness 值依赖必须物化进包内 node_modules**：构建产物 lib 里保留的 `@deepseek-ai/*` 值 import（type-only 不算）以 devDependencies `link:../deepseek-harness/<pkg>` 声明（锚由根 `plugin:setup` 建），`pnpm install` 后可解析。不能指望 tsx 套用 checkout 的 tsconfig paths——桌面 runtime 的 tsx 4.23+ 只对 tsconfig include 内的文件生效，bare specifier 走纯 Node 上溯解析（2026-08-19 桌面崩溃循环的根因，见 `docs/notes/2026-08-19-log-sink-race-and-plugin-peer-resolution.md`）。
+- **harness 依赖一律 npm**（「npm 依赖纪律」一节）：插件 devDependencies 钉 registry 版本（`@deepseek-ai/*` 官方包在公共 npm；fork 修改面包的自有 scope 版，见 fork FORK.md「发布纪律」）。**源码 link: 依赖是仅限本地调试的显式 posture**，只能经 `pnpm run link:source` / `unlink:source`（`scripts/source-deps.mjs`）进出，不得提交、不得作为默认形态。不能指望 tsx 套用 checkout 的 tsconfig paths——桌面 runtime 的 tsx 4.23+ 只对 tsconfig include 内的文件生效，bare specifier 走纯 Node 上溯解析（2026-08-19 桌面崩溃循环的根因，见 `docs/notes/2026-08-19-log-sink-race-and-plugin-peer-resolution.md`；这也解释了为何 link posture 仍需包内 node_modules 物化）。
 
 ### 跨包纪律
 
 - 跨插件只走 slot 与 ctx 服务，禁止 import 另一插件的实现符号；harness 包只做 type-only import（构建时擦除）。
 - 决策记录一律 `docs/notes/`（仓根），不跟包走。包内 README 只写该包的安装与行为。
+
+## npm 依赖纪律
+
+npm 版本依赖是**唯一常态**；源码依赖仅限本地调试，且只能经专门命令进出：
+
+- **默认（提交态）**：所有包的 `@deepseek-ai/*` 依赖钉 registry 版本。上游未修改包直接用官方 `@deepseek-ai/*`（公共 npm 已发布到 `0.1.0-rc.7`，含 `lib/types`）；fork 修改面包用其自有 scope 的发布版（版本形如 `0.1.0-rc.7.zw.1`，见 fork 仓 FORK.md「发布纪律」——首个 fork 包发布前，改动面相关依赖暂以官方版本 + fork runtime 兜底）。
+- **调试（本地态）**：`pnpm run link:source [pkg ...]` 把受管插件的 `@deepseek-ai/*` devDeps 重写为 `link:../deepseek-harness/<subpath>`（锚由 `plugin:setup` 建）并重装；`pnpm run unlink:source` 恢复 registry 版本。映射表（registry 版本 ↔ 源码子路径）在 `scripts/source-deps.mjs` 单点维护，新依赖进映射表才算受管。
+- **禁止**：手写 link:/file:/`../` 依赖并提交；以源码 posture 发版；绕过映射表私接源码。发布与 CI 检查在 registry posture 下进行。
+- 遗留迁移：`dsh-desktop-bridge`（自有 `dsh` 锚）与 `dsh-mcp-settings`（tsconfig references）尚在 link 形态，按本纪律迁入 `source-deps.mjs` 受管后删除各自 setup 锚——迁移完成前不得新增同类形态。
 
 ## 插件契约（dsh-desktop-bridge）
 
@@ -92,7 +101,7 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 
 ### 壳实现要点（M1，`src-tauri/`）
 
-- **sidecar 启动**：直接 `node --import tsx/esm apps/cli/src/bin.ts web --port <N>`（cwd = DSH checkout），不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。运行时发现顺序：`DSH_CHECKOUT` env → `~/workspace/deepseek-harness`（校验 `docs/architecture.md`）。
+- **sidecar 启动**：按 `find_runtime` 解析出的 runtime 启动 sidecar——`node [<--import tsx/esm>] <cli> web --port <N>`，`<cli>` 为 runtime 树的 `dsh/lib/bin.js`（release 解压树与 `runtime/build/<sha>` 同款，无需 tsx），仅源码兜底才是 `apps/cli/src/bin.ts`（tsx 预载）。不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。**runtime 解析顺序见「运行时分发决策·壳的 sidecar 解析顺序」**（`$DSH_DESKTOP_RUNTIME` → 资源解压树 → `runtime/revision.json` 钉的 `runtime/build/<sha>`＝dev 主路径 → 源码 checkout 兜底）；源码兜底的 checkout 发现：`$DSH_CHECKOUT` → 本仓同级 `../deepseek-harness` → `~/workspace/deepseek-harness` 惯例位（校验 `docs/architecture.md` + `apps/cli/src/bin.ts`），与 `scripts/setup-plugins.mjs`/各包 `scripts/setup.mjs` 的候选序一致。
 - **DSH_HOME 所有权**：默认共享真实 `~/.dsh`——桌面与终端是同一账号的两个面（会话历史、工作区、settings、credentials 全部同源可见）。`$DSH_HOME` env 可强制隔离。`~/.dsh-desktop/` 只放壳的编排日志（`logs/install.log`）；**sidecar 的 harness 输出走 fork 的 `web:log` 约定**：每次启动一个 `$DSH_HOME/logs/desktop-<yyyymmdd-HHMMSS>.log` + `desktop-latest.log` 软链（与终端 `web-*` 同目录、前缀区分，`DSH_WEB_LOG_DIR` 可覆盖目录；软链 unix-only）。⚠️ 并发注意：harness 对同一 DSH_HOME 没有多进程锁；单用户下基本安全（会话是 per-session JSONL，JSON storages 是整文件 last-wins 原子写），但同一会话同时被两个面驱动是未定义行为；协调式单实例是壳 M2 项。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），桥及其 bundle 层进 web profile。
 - **端口**：`TcpListener::bind("127.0.0.1:0")` 取随机口，就绪探测 `GET /`（webserver 的 SPA index 路由）状态 2xx（500ms 间隔，120s 超时；tsx 冷启动慢）。
 - **WKWebView 已知坑（已修）**：webserver 对 loopback 并发 **chunked** 响应（无 content-length）会被 WKWebView 随机挂死/加载失败（39 个 boot bundle 突发时必现；Chrome 无此问题）。修复在 harness `packages/client/modules/src/index.ts` 的 serveBundle 显式 `content-length`；sidecar 从源码运行改源即生效，值得上游到 fork。
@@ -135,11 +144,13 @@ M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
 ## Commands
 
-前置：Node 22+、pnpm；类型检查与构建另需 DSH 源码 checkout（默认 `~/workspace/deepseek-harness`，可用 `DSH_CHECKOUT` 覆盖，验证标准 `$DSH/docs/architecture.md` 存在）。
+前置：Node 22+、pnpm；类型检查与构建另需 DSH 源码 checkout（发现顺序：`$DSH_CHECKOUT` → 本仓同级 `../deepseek-harness` → `~/workspace/deepseek-harness` 惯例位，验证标准 `$DSH/docs/architecture.md` 存在）。
 
 ```sh
-pnpm run plugin:setup     # 根级：建 plugin/deepseek-harness 锚（mcp-settings tsconfig 用）+ 桥自己的 dsh 锚
+pnpm run plugin:setup     # 根级：建 plugin/deepseek-harness 锚（link:source 与 mcp-settings 用）+ 桥自己的 dsh 锚
 pnpm run plugins:check    # 全树：plugin/* 每包跑自己的 typecheck/test/build（--if-present，跳过 symlink 锚）
+pnpm run link:source      # 调试：受管插件 devDeps 切 link: 源码（见「npm 依赖纪律」；不可提交）
+pnpm run unlink:source    # 恢复 registry 版本（提交态）
 
 cd plugin/dsh-desktop-bridge
 pnpm install          # 安装 devDeps（tsdown/typescript/tsx/react 类型）
@@ -190,7 +201,7 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 
 ### 运行时分发决策（已定，M3 实现）
 
-不发 npm 包。fork 的 GitHub 仓库（`aka-danielZhang/deepseek-harness` master）是 dsh 运行时的唯一事实源，永远带着我们的补丁。发包以 **`v<基线>+zw.<补丁>` 标签**为锚（semver build metadata 标识 zw fork；历史 `desktop/vX.Y.Z` 标签等价有效）：`runtime/revision.json` 钉 `{repo, ref: v<基线>+zw.<n>, sha}`，fork 侧 `git tag v<基线>+zw.<n> <sha> && git push origin <tag>` 后更新本文件。当前：`v0.1.0-rc.7+zw.1`（harness 基线 0.1.0-rc.7，zw 补丁层 1）。
+**runtime 整树不发 npm**（它是自包含安装产物：CLI 树 + node/pnpm 二进制）。fork 的 GitHub 仓库仍是源码事实源，但**对 fork 修改面的消费走 npm**（fork FORK.md「发布纪律」：修改包以自有 scope 发 `<上游版本>.zw.<N>`）：`prepare-runtime.mjs` 对 FORK_MODIFIED 集合的 overrides 指向 `npm:@crazx/<pkg>@<版本>.zw.<N>`（npm 上不存在时 fail loud，先在 fork 仓发 zw 版再组装），其余包仍从 fork clone 打 tarball 钉本地。发包以 **`v<基线>+zw.<补丁>` 标签**为锚（semver build metadata 标识 zw fork；历史 `desktop/vX.Y.Z` 标签等价有效）：`runtime/revision.json` 钉 `{repo, ref: v<基线>+zw.<n>, sha}`，fork 侧 `git tag v<基线>+zw.<n> <sha> && git push origin <tag>` 后更新本文件。当前：`v0.1.0-rc.7+zw.2`（harness 基线 0.1.0-rc.7，zw 层 2＝frontend-static 静态路由 content-length 修复，WKWebView 黑屏根因；首个走 npm 消费链的 runtime）。
 
 组装（`node scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）：持久部分克隆 fetch 标签 → `pnpm install --frozen-lockfile` + `pnpm run build`（`.prepare-runtime-ok` 标记缓存）→ **publish 路径打本地 tarball**（`pnpm pack` 全部 234 个 `@deepseek-ai/*` 包，workspace: 协议按发布规则重写；平台特定原生包 landlock-linux 跳过回退 npm；`FORK_MODIFIED` 名单内的包打包失败即中止）→ 生成的 runtime manifest 以 `pnpm.overrides` 把全树钉到本地 tarball（**必须 `--no-frozen-lockfile`，frozen 模式会静默忽略 overrides**；`pnpm deploy --legacy` 对本 workspace 丢 vendored 传递依赖，不可用）→ `runtime/build/<sha>/{dsh,tools}`（dsh = CLI 树，tools = node 24.9.0 + pnpm 二进制）。
 

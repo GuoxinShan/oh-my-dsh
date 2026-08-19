@@ -80,6 +80,16 @@ export function withToggleEntry(text: string | undefined, enabled: boolean): str
 
 /** Append the managed block to file text, separated by one blank line. */
 function appendBlock(current: string): string {
-  const base = current.endsWith('\n') ? current : `${current}\n`
+  // An `[]` empty-list line cannot precede block entries — YAML would read
+  // two documents and the loader's parse would reject the file. The harness
+  // creates exactly this shape, so the marker line is dropped when the list
+  // is empty (comments keep it company, they stay).
+  const withoutEmptyList = current.replace(/(^|\n)[ \t]*\[\][ \t]*(#[^\n]*)?(\n|$)/, '\n')
+  const listIsEmpty = withoutEmptyList
+    .split('\n')
+    .filter(line => line.trim() !== '' && !line.trim().startsWith('#'))
+    .length === 0
+  const base0 = listIsEmpty ? withoutEmptyList : current
+  const base = base0.endsWith('\n') ? base0 : `${base0}\n`
   return `${base}\n${MANAGED_BLOCK}`
 }

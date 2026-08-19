@@ -45,6 +45,7 @@ export default defineConfig([
     entry: {
       index: 'src/index.ts',
       gateway: 'src/gateway.ts',
+      'patch-file': 'src/patch-file.ts',
       'toggle-types': 'src/toggle-types.ts',
       'typert.remote-client': 'src/typert.remote-client.ts',
     },
@@ -67,7 +68,6 @@ export default defineConfig([
     dts: false,
     sourcemap: true,
     clean: false,
-    external: [...CLIENT_EXTERNALS],
     deps: {
       neverBundle: CLIENT_EXTERNALS as unknown as string[],
       alwaysBundle: (id: string) => ((CLIENT_EXTERNALS as readonly string[]).includes(id) ? undefined : true),

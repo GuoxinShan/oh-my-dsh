@@ -165,12 +165,17 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Locate the harness checkout: $DSH_CHECKOUT, then the conventional path.
+/// Locate the harness checkout (dev source fallback only — runtime/build and
+/// the release extraction take precedence in find_runtime): $DSH_CHECKOUT,
+/// then the sibling checkout beside this repo, then the conventional path —
+/// the same candidate order as scripts/setup-plugins.mjs.
 fn find_checkout() -> Result<PathBuf, String> {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(from_env) = std::env::var("DSH_CHECKOUT") {
         candidates.push(PathBuf::from(from_env));
     }
+    candidates.push(repo_root.join("../deepseek-harness"));
     if let Ok(home) = std::env::var("HOME") {
         candidates.push(Path::new(&home).join("workspace/deepseek-harness"));
     }
