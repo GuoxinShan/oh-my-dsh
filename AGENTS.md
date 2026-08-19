@@ -38,7 +38,8 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 ### 发版
 
 - 插件与桌面**锁步禁止**。各包 `package.json` 的 `version` 独立走动。
-- Git tag 前缀分家：桌面 `desktop/vX.Y.Z`（已有，钉 runtime revision）；插件 `plugin/<name>/vX.Y.Z`（例：`plugin/dsh-provider-balance/v0.4.0`）。GitHub Release 按 tag 分流，互不覆盖附件。**latest 指针纪律**：桌面自动更新端点 `releases/latest/download/latest.json` 依赖 latest 指针——desktop Release `make_latest: true` 独占，插件 Release 一律 `make_latest: false`（release.yml 已内置；网页手动发插件 Release 时同样不得设为 latest）。
+- **版本号策略（0.2.0-rc.1 起，学 harness 的 rc 节奏）**：桌面走 semver 预发布段——大功能进 `0.N.0-rc.x`，稳定后摘 `-rc` 出 `0.N.0`，纯修复走 `0.N.M+1`；插件各自 semver，同样允许 `-rc.N`。**刻意不**在桌面版本里嵌 harness 基线（`0.1.0-rc.7.desktop.1` 这类嵌套段合法但小于已发的 0.1.3，首个新版即断更新链）；基线由 `runtime/revision.json` 记录。**GitHub Release 不勾 prerelease**——`releases/latest` 端点排除 prerelease，勾了 latest.json 即 404、自动更新断链；`-rc` 只体现在版本号语义。release.yml 有防呆：tag 版本 ≠ `tauri.conf.json`/`package.json` 版本即 fail。
+- Git tag 前缀三分家（命名空间不撞）：桌面 `desktop/v<semver>`（例 `desktop/v0.2.0-rc.1`）；插件 `plugin/<name>/v<semver>`（例 `plugin/dsh-provider-balance/v0.4.2`）；**runtime fork 标签自下次升级起改 `runtime/v<基线>.<补丁>`**（例 `runtime/v0.1.0-rc.7.2`，编码 harness 基线 + 我们的补丁层；历史 `desktop/v0.1.0/1` 仍有效，revision.json 钉的是 ref 字符串不受影响）。GitHub Release 按 tag 分流，互不覆盖附件。**latest 指针纪律**：桌面自动更新端点 `releases/latest/download/latest.json` 依赖 latest 指针——desktop Release `make_latest: true` 独占，插件 Release 一律 `make_latest: false`（release.yml 已内置；网页手动发插件 Release 时同样不得设为 latest）。
 - 安装面保持 `dsh plugin --profile web add <repo>/plugin/<name>`（file: / git 路径均可）。本仓不把出树插件发到 npm——和 runtime「不发 npm、fork 是事实源」同一条线；要分发就打 git tag，让 `dsh plugin add` 指向该 tag。
 - 壳的 release 打包（`bridge.tar.gz` → `~/.dsh-desktop/bridge/` → 幂等 `plugin add`）今天只覆盖桥。迁入其他插件后，prepare 脚本对 `plugin/*` 循环打包/add；那是打包链的后续 PR，不在搬家当天改壳。
 

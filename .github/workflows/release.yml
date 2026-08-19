@@ -29,6 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Guard: the tag must carry exactly the version in tauri.conf.json —
+      # the classic "tag says X, code says Y" release mistake fails here.
+      - name: Assert tag matches the desktop version
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name || inputs.tag }}"
+          V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          [ "desktop/v$V" = "$TAG" ] || { echo "::error::tag $TAG != desktop/v$V (src-tauri/tauri.conf.json + Cargo.toml not bumped?)"; exit 1; }
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -160,6 +169,9 @@ jobs:
           NAME=$(printf '%s' "$TAG" | sed -E 's|^plugin/([^/]+)/v.*$|\1|')
           VERSION=$(printf '%s' "$TAG" | sed -E 's|^plugin/[^/]+/v(.*)$|\1|')
           [ -d "plugin/$NAME" ] || { echo "plugin/$NAME not found"; exit 1; }
+          # Guard: the tag must carry exactly the package's declared version.
+          PKG_V=$(node -p "JSON.parse(require('fs').readFileSync('plugin/$NAME/package.json','utf8')).version")
+          [ "v$PKG_V" = "v$VERSION" ] || { echo "::error::tag version $VERSION != package.json version $PKG_V for $NAME"; exit 1; }
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
