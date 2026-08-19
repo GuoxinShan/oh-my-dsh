@@ -172,7 +172,7 @@ fn find_checkout() -> Result<PathBuf, String> {
         candidates.push(PathBuf::from(from_env));
     }
     if let Ok(home) = std::env::var("HOME") {
-        candidates.push(Path::new(&home).join("workspace/coding-study/deepseek-harness"));
+        candidates.push(Path::new(&home).join("workspace/deepseek-harness"));
     }
     for candidate in &candidates {
         if candidate.join("docs/architecture.md").is_file() && candidate.join("apps/cli/src/bin.ts").is_file() {

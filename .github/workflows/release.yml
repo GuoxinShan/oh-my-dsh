@@ -1,8 +1,8 @@
 name: Release
 
-# 增量发布流水线，tag 前缀分家（见 AGENTS.md「发版」）：
-#   desktop/vX.Y.Z        → 桌面公证版（.app/.dmg + updater artifacts + latest.json）
-#   plugin/<name>/vX.Y.Z  → 插件源码 Release（git archive 附件，不发 npm）
+# 增量发布流水线，tag 分流（见 AGENTS.md「发版」，无斜杠命名）：
+#   v<semver>             → 桌面公证版（.app/.dmg + updater artifacts + latest.json）
+#   dsh-<name>-v<semver>  → 插件源码 Release（git archive 附件，不发 npm）
 #
 # ⚠️ latest 指针纪律：自动更新端点是 releases/latest/download/latest.json，
 # desktop Release 独占 latest 指针；插件 Release 一律 make_latest: false，
@@ -10,11 +10,11 @@ name: Release
 
 on:
   push:
-    tags: ['desktop/v*', 'plugin/*/v*']
+    tags: ['v*', 'dsh-*-v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. desktop/v0.1.2 or plugin/dsh-provider-balance/v0.4.0)'
+        description: 'Release tag (e.g. v0.2.0-rc.2 or dsh-provider-balance-v0.4.2)'
         required: true
 
 permissions:
@@ -23,7 +23,7 @@ permissions:
 jobs:
   desktop:
     name: Desktop (sign, notarize, publish)
-    if: startsWith(github.ref_name, 'desktop/v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'desktop/v'))
+    if: startsWith(github.ref_name, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))
     runs-on: macos-latest
     timeout-minutes: 90
     steps:
@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           TAG="${{ github.ref_name || inputs.tag }}"
           V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          [ "desktop/v$V" = "$TAG" ] || { echo "::error::tag $TAG != desktop/v$V (src-tauri/tauri.conf.json + Cargo.toml not bumped?)"; exit 1; }
+          [ "v$V" = "$TAG" ] || { echo "::error::tag $TAG != v$V (src-tauri/tauri.conf.json + Cargo.toml not bumped?)"; exit 1; }
 
       - uses: pnpm/action-setup@v4
 
@@ -150,7 +150,7 @@ jobs:
 
   plugin:
     name: Plugin (${{ github.ref_name }})
-    if: startsWith(github.ref_name, 'plugin/') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'plugin/'))
+    if: startsWith(github.ref_name, 'dsh-') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'dsh-'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -160,14 +160,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      # plugin/<name>/vX.Y.Z → name + version; fail loud on a malformed tag.
+      # dsh-<name>-v<semver>: split at the last '-v' (dashes in package names survive).
       - name: Resolve plugin name and version from the tag
         id: plugin
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name || inputs.tag }}"
-          NAME=$(printf '%s' "$TAG" | sed -E 's|^plugin/([^/]+)/v.*$|\1|')
-          VERSION=$(printf '%s' "$TAG" | sed -E 's|^plugin/[^/]+/v(.*)$|\1|')
+          # dsh-<name>-v<semver>: split at the LAST "-v" so dashes inside
+          # package names (dsh-mcp-settings) survive.
+          NAME=${TAG%-v*}
+          VERSION=${TAG##*-v}
+          case "$NAME" in dsh-*|v) ;; *) echo "::error::tag $TAG does not look like dsh-<name>-v<semver>"; exit 1;; esac
           [ -d "plugin/$NAME" ] || { echo "plugin/$NAME not found"; exit 1; }
           # Guard: the tag must carry exactly the package's declared version.
           PKG_V=$(node -p "JSON.parse(require('fs').readFileSync('plugin/$NAME/package.json','utf8')).version")

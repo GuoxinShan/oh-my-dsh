@@ -6,12 +6,13 @@
 
 | 发什么 | tag | Release 产物 | latest 指针 |
 |---|---|---|---|
-| 桌面公证版 | `desktop/v<semver>`（如 `desktop/v0.2.0-rc.1`） | dmg + app.tar.gz + .sig + latest.json | **独占**（`make_latest: true`） |
-| 插件 | `plugin/<name>/v<semver>`（如 `plugin/dsh-mcp-settings/v0.2.3`） | git archive 的插件源码 tarball + 安装说明 | **永不**（`make_latest: false`） |
+| 桌面公证版 | `v<semver>`（如 `v0.2.0-rc.2`） | dmg + app.tar.gz + .sig + latest.json | **独占**（`make_latest: true`） |
+| 插件 | `<包名>-v<semver>`（如 `dsh-mcp-settings-v0.2.3`） | git archive 的插件源码 tarball + 安装说明 | **永不**（`make_latest: false`） |
+| runtime fork | `v<基线>+zw.<补丁>`（如 `v0.1.0-rc.7+zw.1`，在 fork 仓库） | 无 Release，仅 git tag 供 revision.json 钉 | — |
 
 **版本号策略**（学 harness 的 rc 节奏）：桌面大功能走 `0.N.0-rc.x`，稳定摘 `-rc` 出 `0.N.0`，纯修复走 `0.N.M+1`；插件各自 semver 同样允许 `-rc.N`。两个红线：① **GitHub Release 不勾 prerelease**（`releases/latest` 端点排除 prerelease，勾了自动更新即 404）；② tag 版本必须与代码版本一致——release.yml 已内置防呆校验，不一致直接 fail。
 
-⚠️ **latest 指针纪律**：桌面自动更新端点是 `releases/latest/download/latest.json`——插件 Release 抢走 latest 会让桌面自动更新即刻 404。流水线已内置 `make_latest: false`；若手动在网页上发插件 Release，务必不勾 "Set as the latest release"。桌面版本号 = `tauri.conf.json` 与 `Cargo.toml` 两处同步；插件版本号 = 各包 `package.json`。runtime fork 标签自下次升级起用 `runtime/v<基线>.<补丁>`（如 `runtime/v0.1.0-rc.7.2`），与 `desktop/`、`plugin/` 命名空间分家。
+⚠️ **latest 指针纪律**：桌面自动更新端点是 `releases/latest/download/latest.json`——插件 Release 抢走 latest 会让桌面自动更新即刻 404。流水线已内置 `make_latest: false`；若手动在网页上发插件 Release，务必不勾 "Set as the latest release"。桌面版本号 = `tauri.conf.json` 与 `Cargo.toml` 两处同步；插件版本号 = 各包 `package.json`。runtime fork 标签用 `v<基线>+zw.<补丁>`（semver build metadata，行业标准的 fork 标识法）。
 
 ## 0.5 一次性配置：Secrets（Settings → Secrets and variables → Actions）
 
@@ -36,7 +37,7 @@
 ```sh
 # 1. 版本号两处同步：src-tauri/tauri.conf.json 的 version 与 src-tauri/Cargo.toml 的 version
 # 2. （可选）runtime 升级：fork 打 desktop/v* 标签 + 更新 runtime/revision.json
-git tag desktop/v0.2.0-rc.1 && git push origin desktop/v0.2.0-rc.1
+git tag v0.2.0-rc.2 && git push origin v0.2.0-rc.2
 ```
 
 推 tag 即触发 release.yml 的 desktop job：组装 runtime（缓存命中秒级）→ 构建 → Developer ID 签名（app + runtime 内 16 个 Mach-O）→ Apple 公证 → DMG 单独公证 → 上传 Release 附件（`dsh-desktop_<ver>_aarch64.dmg`、`dsh-desktop.app.tar.gz(+ .sig)`、`latest.json`，`make_latest: true`）。
@@ -48,7 +49,7 @@ git tag desktop/v0.2.0-rc.1 && git push origin desktop/v0.2.0-rc.1
 ```sh
 cd plugin/dsh-provider-balance
 # bump package.json version，提交后：
-git tag plugin/dsh-provider-balance/v0.4.0 && git push origin plugin/dsh-provider-balance/v0.4.0
+git tag dsh-provider-balance-v0.4.2 && git push origin dsh-provider-balance-v0.4.2
 ```
 
 触发 plugin job（ubuntu，秒级）：`git archive` 打插件子树 tarball → Release 附件 + 安装说明（`dsh plugin add <repo>#plugin/<name>:<tag>`），`make_latest: false`。测试仍在 ci.yml 的 push/PR 里跑；插件 Release 不重复跑测试（快照已由 tag 锚定）。

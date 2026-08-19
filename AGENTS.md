@@ -38,8 +38,8 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 ### 发版
 
 - 插件与桌面**锁步禁止**。各包 `package.json` 的 `version` 独立走动。
-- **版本号策略（0.2.0-rc.1 起，学 harness 的 rc 节奏）**：桌面走 semver 预发布段——大功能进 `0.N.0-rc.x`，稳定后摘 `-rc` 出 `0.N.0`，纯修复走 `0.N.M+1`；插件各自 semver，同样允许 `-rc.N`。**刻意不**在桌面版本里嵌 harness 基线（`0.1.0-rc.7.desktop.1` 这类嵌套段合法但小于已发的 0.1.3，首个新版即断更新链）；基线由 `runtime/revision.json` 记录。**GitHub Release 不勾 prerelease**——`releases/latest` 端点排除 prerelease，勾了 latest.json 即 404、自动更新断链；`-rc` 只体现在版本号语义。release.yml 有防呆：tag 版本 ≠ `tauri.conf.json`/`package.json` 版本即 fail。
-- Git tag 前缀三分家（命名空间不撞）：桌面 `desktop/v<semver>`（例 `desktop/v0.2.0-rc.1`）；插件 `plugin/<name>/v<semver>`（例 `plugin/dsh-provider-balance/v0.4.2`）；**runtime fork 标签自下次升级起改 `runtime/v<基线>.<补丁>`**（例 `runtime/v0.1.0-rc.7.2`，编码 harness 基线 + 我们的补丁层；历史 `desktop/v0.1.0/1` 仍有效，revision.json 钉的是 ref 字符串不受影响）。GitHub Release 按 tag 分流，互不覆盖附件。**latest 指针纪律**：桌面自动更新端点 `releases/latest/download/latest.json` 依赖 latest 指针——desktop Release `make_latest: true` 独占，插件 Release 一律 `make_latest: false`（release.yml 已内置；网页手动发插件 Release 时同样不得设为 latest）。
+- **版本号策略（0.2.0-rc.1 起，学 harness 的 rc 节奏）**：桌面走 semver 预发布段——大功能进 `0.N.0-rc.x`，稳定后摘 `-rc` 出 `0.N.0`，纯修复走 `0.N.M+1`；插件各自 semver，同样允许 `-rc.N`；fork 标识走 `+zw.N` build metadata（semver §10，排序忽略不影响升级链）。**刻意不**在桌面版本里嵌 harness 基线（`0.1.0-rc.7.desktop.1` 这类嵌套段合法但小于已发的 0.1.3，首个新版即断更新链）；基线由 `runtime/revision.json` 记录。**GitHub Release 不勾 prerelease**——`releases/latest` 端点排除 prerelease，勾了 latest.json 即 404、自动更新断链；`-rc` 只体现在版本号语义。release.yml 有防呆：tag 版本 ≠ `tauri.conf.json`/`package.json` 版本即 fail。
+- Git tag 无斜杠三分家：桌面 `v<semver>`（例 `v0.2.0-rc.2`，经典风格）；插件 `<包名>-v<semver>`（例 `dsh-provider-balance-v0.4.2`；包名都是 `dsh-*` 起，天然不与 `v*` 冲突，workflow 按「最后一个 `-v`」切名与版本）；**runtime fork 标签 `v<基线>+zw.<补丁>`**（例 `v0.1.0-rc.7+zw.1`——semver build metadata 标识 zw fork，行业标准做法，基线升级时 `+zw.N` 递增；历史 `desktop/v0.1.0/1` 标签仍有效可fetch，revision.json 钉 ref 字符串）。GitHub Release 按 tag 分流，互不覆盖附件。**latest 指针纪律**：桌面自动更新端点 `releases/latest/download/latest.json` 依赖 latest 指针——desktop Release `make_latest: true` 独占，插件 Release 一律 `make_latest: false`（release.yml 已内置；网页手动发插件 Release 时同样不得设为 latest）。
 - 安装面保持 `dsh plugin --profile web add <repo>/plugin/<name>`（file: / git 路径均可）。本仓不把出树插件发到 npm——和 runtime「不发 npm、fork 是事实源」同一条线；要分发就打 git tag，让 `dsh plugin add` 指向该 tag。
 - 壳的 release 打包（`bridge.tar.gz` → `~/.dsh-desktop/bridge/` → 幂等 `plugin add`）今天只覆盖桥。迁入其他插件后，prepare 脚本对 `plugin/*` 循环打包/add；那是打包链的后续 PR，不在搬家当天改壳。
 
@@ -92,7 +92,7 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 
 ### 壳实现要点（M1，`src-tauri/`）
 
-- **sidecar 启动**：直接 `node --import tsx/esm apps/cli/src/bin.ts web --port <N>`（cwd = DSH checkout），不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。运行时发现顺序：`DSH_CHECKOUT` env → `~/workspace/coding-study/deepseek-harness`（校验 `docs/architecture.md`）。
+- **sidecar 启动**：直接 `node --import tsx/esm apps/cli/src/bin.ts web --port <N>`（cwd = DSH checkout），不经 pnpm——pnpm 会插一层孙进程导致 SIGKILL 孤儿 node；直接 node 子进程可干净回收。运行时发现顺序：`DSH_CHECKOUT` env → `~/workspace/deepseek-harness`（校验 `docs/architecture.md`）。
 - **DSH_HOME 所有权**：默认共享真实 `~/.dsh`——桌面与终端是同一账号的两个面（会话历史、工作区、settings、credentials 全部同源可见）。`$DSH_HOME` env 可强制隔离。`~/.dsh-desktop/` 只放壳的编排日志（`logs/install.log`）；**sidecar 的 harness 输出走 fork 的 `web:log` 约定**：每次启动一个 `$DSH_HOME/logs/desktop-<yyyymmdd-HHMMSS>.log` + `desktop-latest.log` 软链（与终端 `web-*` 同目录、前缀区分，`DSH_WEB_LOG_DIR` 可覆盖目录；软链 unix-only）。⚠️ 并发注意：harness 对同一 DSH_HOME 没有多进程锁；单用户下基本安全（会话是 per-session JSONL，JSON storages 是整文件 last-wins 原子写），但同一会话同时被两个面驱动是未定义行为；协调式单实例是壳 M2 项。每次启动幂等执行 `node … plugin --profile web add <bridge>`（已装时 ~600ms），桥及其 bundle 层进 web profile。
 - **端口**：`TcpListener::bind("127.0.0.1:0")` 取随机口，就绪探测 `GET /`（webserver 的 SPA index 路由）状态 2xx（500ms 间隔，120s 超时；tsx 冷启动慢）。
 - **WKWebView 已知坑（已修）**：webserver 对 loopback 并发 **chunked** 响应（无 content-length）会被 WKWebView 随机挂死/加载失败（39 个 boot bundle 突发时必现；Chrome 无此问题）。修复在 harness `packages/client/modules/src/index.ts` 的 serveBundle 显式 `content-length`；sidecar 从源码运行改源即生效，值得上游到 fork。
@@ -135,7 +135,7 @@ M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
 ## Commands
 
-前置：Node 22+、pnpm；类型检查与构建另需 DSH 源码 checkout（默认 `~/workspace/coding-study/deepseek-harness`，可用 `DSH_CHECKOUT` 覆盖，验证标准 `$DSH/docs/architecture.md` 存在）。
+前置：Node 22+、pnpm；类型检查与构建另需 DSH 源码 checkout（默认 `~/workspace/deepseek-harness`，可用 `DSH_CHECKOUT` 覆盖，验证标准 `$DSH/docs/architecture.md` 存在）。
 
 ```sh
 pnpm run plugin:setup     # 根级：建 plugin/deepseek-harness 锚（mcp-settings tsconfig 用）+ 桥自己的 dsh 锚
@@ -190,7 +190,7 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev; echo "exit=$?"
 
 ### 运行时分发决策（已定，M3 实现）
 
-不发 npm 包。fork 的 GitHub 仓库（`aka-danielZhang/deepseek-harness` master）是 dsh 运行时的唯一事实源，永远带着我们的补丁。发包以 **`desktop/v*` 标签**为锚：`runtime/revision.json` 钉 `{repo, ref: desktop/vX.Y.Z, sha}`，fork 侧 `git tag desktop/vX.Y.Z <sha> && git push origin desktop/vX.Y.Z` 后更新本文件。
+不发 npm 包。fork 的 GitHub 仓库（`aka-danielZhang/deepseek-harness` master）是 dsh 运行时的唯一事实源，永远带着我们的补丁。发包以 **`v<基线>+zw.<补丁>` 标签**为锚（semver build metadata 标识 zw fork；历史 `desktop/vX.Y.Z` 标签等价有效）：`runtime/revision.json` 钉 `{repo, ref: v<基线>+zw.<n>, sha}`，fork 侧 `git tag v<基线>+zw.<n> <sha> && git push origin <tag>` 后更新本文件。当前：`v0.1.0-rc.7+zw.1`（harness 基线 0.1.0-rc.7，zw 补丁层 1）。
 
 组装（`node scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）：持久部分克隆 fetch 标签 → `pnpm install --frozen-lockfile` + `pnpm run build`（`.prepare-runtime-ok` 标记缓存）→ **publish 路径打本地 tarball**（`pnpm pack` 全部 234 个 `@deepseek-ai/*` 包，workspace: 协议按发布规则重写；平台特定原生包 landlock-linux 跳过回退 npm；`FORK_MODIFIED` 名单内的包打包失败即中止）→ 生成的 runtime manifest 以 `pnpm.overrides` 把全树钉到本地 tarball（**必须 `--no-frozen-lockfile`，frozen 模式会静默忽略 overrides**；`pnpm deploy --legacy` 对本 workspace 丢 vendored 传递依赖，不可用）→ `runtime/build/<sha>/{dsh,tools}`（dsh = CLI 树，tools = node 24.9.0 + pnpm 二进制）。
 

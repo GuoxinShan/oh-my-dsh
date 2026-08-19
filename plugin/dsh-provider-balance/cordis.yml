@@ -4,7 +4,7 @@
 # the web app's own flags such as --port, because the launcher passes
 # everything after the first unknown flag through to the app):
 #
-#   cd ~/workspace/coding-study/deepseek-harness
+#   cd ~/workspace/deepseek-harness
 #   pnpm dsh web --patch ~/workspace/dsh-provider-balance/cordis.yml
 #
 # The row resolves the `dsh-provider-balance` package from the profile

@@ -124,7 +124,7 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
 2. 从 harness checkout 启动（`--patch` 必须放在 web 应用自有 flag 如 `--port` 之前）：
 
    ```sh
-   cd ~/workspace/coding-study/deepseek-harness
+   cd ~/workspace/deepseek-harness
    pnpm dsh web --patch ~/workspace/dsh-provider-balance/cordis.yml
    ```
 

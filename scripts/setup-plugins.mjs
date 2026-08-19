@@ -9,11 +9,10 @@
  *                                      ("../deepseek-harness" from the package)
  *
  * Target precedence: $DSH_CHECKOUT, then the sibling checkout beside this
- * repo (../../coding-study/deepseek-harness), then ~/workspace/coding-study/
- * deepseek-harness. Validity requires <target>/docs/architecture.md. Fails
- * loud when nothing resolves.
+ * repo (../deepseek-harness), then ~/workspace/deepseek-harness. Validity
+ * requires <target>/docs/architecture.md. Fails loud when nothing resolves.
  */
-import { existsSync, lstatSync, symlinkSync, rmSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, symlinkSync, unlinkSync, realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -21,8 +20,8 @@ import { execFileSync } from 'node:child_process'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const candidates = [
   process.env.DSH_CHECKOUT,
-  resolve(repoRoot, '../coding-study/deepseek-harness'),
-  resolve(process.env.HOME ?? '', 'workspace/coding-study/deepseek-harness'),
+  resolve(repoRoot, '../deepseek-harness'),
+  resolve(process.env.HOME ?? '', 'workspace/deepseek-harness'),
 ].filter(Boolean)
 
 const target = candidates.find((c) => existsSync(resolve(c, 'docs/architecture.md')))
@@ -39,15 +38,23 @@ const anchors = [
   { link: resolve(repoRoot, 'plugin/deepseek-harness'), note: 'dsh-mcp-settings tsconfig anchor' },
 ]
 
+const resolved = realpathSync(target)
 for (const { link, note } of anchors) {
-  if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()
-      && realpathSync(link) === realpathSync(target)) {
-    console.log(`setup-plugins: ${link} already -> checkout (${note})`)
-    continue
+  const st = lstatSync(link, { throwIfNoEntry: false })
+  if (st?.isSymbolicLink()) {
+    let current
+    try { current = realpathSync(link) } catch { current = undefined }
+    if (current === resolved) {
+      console.log(`setup-plugins: ${link} already -> checkout (${note})`)
+      continue
+    }
+    unlinkSync(link)
+  } else if (st !== undefined) {
+    console.error(`setup-plugins: ${link} exists and is not a symlink — refusing to remove it`)
+    process.exit(1)
   }
-  rmSync(link, { force: true })
-  symlinkSync(realpathSync(target), link)
-  console.log(`setup-plugins: ${link} -> ${target} (${note})`)
+  symlinkSync(resolved, link)
+  console.log(`setup-plugins: ${link} -> ${resolved} (${note})`)
 }
 
 // The bridge keeps its own setup contract (dsh anchor + devDeps).
