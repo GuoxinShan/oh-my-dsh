@@ -24,6 +24,15 @@
  * is absent (older harness) this registration simply waits and renders
  * nothing.
  *
+ * Contribution two-prime (the stock-harness twin of contribution two): when
+ * `settings.models.provider` is NOT declared (a harness without the fork's
+ * row seat), the SAME ProviderBalanceRowBadge is mounted through its own
+ * React root into a foreign container inserted next to each provider row's
+ * actions. The row's provider route id is parsed from the edit button's
+ * accessible name ("编辑 {displayName} ({provider})"), the page's React
+ * tree is never modified, and the two surfaces are mutually exclusive —
+ * the watcher is armed only while the seat is absent.
+ *
  * Data comes from the host half's same-origin JSON route
  * (`/provider-balance/quota?provider=<route-id>`); the API key never crosses
  * to the browser.
@@ -40,6 +49,7 @@ window.__ModuleLoader__.load({
     var useEffect = React.useEffect
     var useRef = React.useRef
     var useCallback = React.useCallback
+    var createRoot = require('react-dom/client').createRoot
     var Tooltip = require('@deepseek-ai/dsh-client-ui-primitives').Tooltip
 
     /* ------------------------------------------------------------------ */
@@ -597,6 +607,97 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ */
+    /* Stock-harness row badges: the same ProviderBalanceRowBadge mounted  */
+    /* through its own React root into a container inserted next to each   */
+    /* provider row's actions. Armed ONLY while the settings.models.       */
+    /* provider slot is not declared (a harness without the fork's row     */
+    /* seat); on such a host this is the only way to put UI inside the     */
+    /* Models page rows, and it must not touch the host React tree: the   */
+    /* container is a foreign node the page never manages, the badge       */
+    /* inside is a self-contained root.                                    */
+    /* ------------------------------------------------------------------ */
+
+    /* The edit button's accessible name is providerCopy(t('editProvider')) =
+     * "编辑 {label}" / "Edit {label}" where label is "displayName (provider)"
+     * or bare "provider" — the row's stable route id rides inside, so no
+     * display-name guessing is involved. */
+    var EDIT_LABEL_PREFIXES = ['编辑 ', 'Edit ']
+    var ROUTE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+    function parseProviderFromEditLabel(label) {
+      for (var i = 0; i < EDIT_LABEL_PREFIXES.length; i++) {
+        var prefix = EDIT_LABEL_PREFIXES[i]
+        if (label.indexOf(prefix) !== 0) continue
+        var rest = label.slice(prefix.length)
+        var open = rest.lastIndexOf('(')
+        if (open >= 0 && rest.charAt(rest.length - 1) === ')') {
+          var inside = rest.slice(open + 1, rest.length - 1)
+          return ROUTE_ID_RE.test(inside) ? inside : undefined
+        }
+        return ROUTE_ID_RE.test(rest) ? rest : undefined
+      }
+      return undefined
+    }
+
+    /* Watch the page for provider rows and mount/dismount badges. The sweep
+     * is coalesced (one per 50ms burst) because host React mutations arrive
+     * in storms; each sweep re-asserts container positions so a host
+     * reconciliation that moved the row's children puts the seat back. */
+    function createRowBadgeWatcher(t) {
+      var entries = new Map() /* edit button → { container, root, actions } */
+      var timer = null
+      var disposed = false
+
+      var sweep = function () {
+        timer = null
+        if (disposed) return
+        entries.forEach(function (entry, button) {
+          if (!button.isConnected) {
+            entry.root.unmount()
+            if (entry.container.parentNode !== null) entry.container.remove()
+            entries.delete(button)
+          } else if (entry.container.nextSibling !== entry.actions) {
+            entry.actions.parentNode.insertBefore(entry.container, entry.actions)
+          }
+        })
+        var buttons = document.querySelectorAll('button[aria-label]')
+        for (var i = 0; i < buttons.length; i++) {
+          var button = buttons[i]
+          if (entries.has(button)) continue
+          var provider = parseProviderFromEditLabel(button.getAttribute('aria-label') || '')
+          var actions = button.parentElement
+          if (provider === undefined || actions === null || actions.parentElement === null) continue
+          var container = document.createElement('span')
+          container.dataset.dpbRowSeat = provider
+          actions.parentElement.insertBefore(container, actions)
+          var root = createRoot(container)
+          root.render(createElement(ProviderBalanceRowBadge, { provider: provider, t: t }))
+          entries.set(button, { container: container, root: root, actions: actions })
+        }
+      }
+
+      var schedule = function () {
+        if (disposed || timer !== null) return
+        timer = setTimeout(sweep, 50)
+      }
+
+      var observer = new MutationObserver(schedule)
+      observer.observe(document.body, { childList: true, subtree: true })
+      schedule()
+
+      return function dispose() {
+        disposed = true
+        observer.disconnect()
+        if (timer !== null) clearTimeout(timer)
+        entries.forEach(function (entry) {
+          entry.root.unmount()
+          if (entry.container.parentNode !== null) entry.container.remove()
+        })
+        entries.clear()
+      }
+    }
+
+    /* ------------------------------------------------------------------ */
     /* Cordis plugin: dictionaries + both slot entries.                   */
     /* ------------------------------------------------------------------ */
     module.exports = {
@@ -631,6 +732,31 @@ window.__ModuleLoader__.load({
             order: 10,
             locale: NS,
           }, ProviderBalanceRowBadge)
+        })
+
+        /* Stock harness (no settings.models.provider seat): the same badge
+         * per row, mounted through its own React root into a foreign
+         * container inserted next to the row's actions. Armed only while
+         * the seat is not declared — ctx.slots.spec is the point-in-time
+         * probe covering boot order, and the inject callback below flips
+         * the watcher off when the seat declares later (and back on if its
+         * owner ever collapses), so the two surfaces never coexist. */
+        var disposeWatcher = null
+        var armWatcher = function () {
+          if (disposeWatcher !== null) return
+          disposeWatcher = createRowBadgeWatcher(ctx.locale.bind(NS))
+        }
+        var disarmWatcher = function () {
+          if (disposeWatcher === null) return
+          disposeWatcher()
+          disposeWatcher = null
+        }
+
+        if (ctx.slots.spec('settings.models.provider') === undefined) armWatcher()
+
+        ctx.slots.inject('settings.models.provider', function () {
+          disarmWatcher()
+          return function () { armWatcher() }
         })
       },
     }

@@ -3,7 +3,9 @@
 在 DeepSeek Harness（DSH）Web 界面中显示模型供应商的剩余配额，两个入口：
 
 - **输入框旁的胶囊**：紧挨上下文用量圈圈，跟随当前会话选中的模型 —— 切到哪家供应商就显示哪家的余量（余额型显示金额，窗口型显示百分比）；无适配器的供应商不显示。
-- **模型设置页的行内徽标**：设置 → 模型 里每个已配置供应商的行上（名称与「编辑」按钮之间）一颗紧凑胶囊，点击向下展开详情面板；无适配器的供应商不渲染，卸载本插件后行恢复原样。
+- **模型设置页的行内徽标**：设置 → 模型 里每个已配置供应商的行上（名称与「编辑」按钮之间）一颗紧凑胶囊，点击向下展开详情面板；无适配器的供应商不渲染，卸载本插件后行恢复原样。两条实现路径运行期自动切换：
+  - **槽位路径**：宿主声明了 `settings.models.provider` 行级槽位时（配套 harness fork 分支 `feat/models-provider-row-slot`），经 `ctx.slots.register` 注册，徽标由宿主 React 树渲染；
+  - **DOM 注入路径（stock 宿主）**：宿主没有该槽位时（如未打补丁的上游原版），插件用 MutationObserver 监听页面，在每行「编辑」按钮所属操作区前插入一个外源容器，把**同一个** `ProviderBalanceRowBadge` 组件经独立 `react-dom/client` root 挂载进去 —— 供应商路由 id 从编辑按钮的无障碍名（`编辑 {displayName} ({provider})`）解析，宿主 React 树不被触碰，页面其余部分保持 stock 原样；两路径互斥，槽位出现时注入自动退场，消失时自动补位。误判防护：解析不出的行不注入；注入了但无适配器的供应商徽标渲染为空，视觉零影响。
 
 已接入六家供应商 + 一类自动判别网关：
 
@@ -237,8 +239,12 @@ cordis.yml          本地开发 overlay。
 扩展点中离它最近的是工具行右端列表槽 `conversation.input.right`（渲染于模型选择器之前、
 圈圈之后）。设置页的行级座位是 `settings.models.provider` —— 由内置 ui-settings-models
 插件在其 `settings.section` 注册的 children 中声明、类型放在 ui-settings 契约里；本插件经
-`ctx.slots.inject` 注册，ui-settings-models 缺席（较旧的 harness）时静默等待、不渲染，
-卸载后行恢复原样。配色复用 `--dsw-alias-*` / `--dsw-static-amber/red` 主题令牌，暗色模式自动适配。
+`ctx.slots.inject` 注册。宿主没有该座位时走 DOM 注入路径（见上文）：徽标组件经
+`react-dom/client`（冻结模块表内建可用）挂进外源容器，路由 id 取自编辑按钮 aria-label，
+MutationObserver 扫描合并为 50ms 一次、每轮重申容器位置以扛宿主 reconcile，行消失即卸载
+对应 root；门控由 `ctx.slots.spec('settings.models.provider')` 探测 + 槽位声明生命周期翻转
+驱动，两条路径运行期互斥。配色复用 `--dsw-alias-*` / `--dsw-static-amber/red` 主题令牌，
+暗色模式自动适配。
 
 ## 已知边界
 
