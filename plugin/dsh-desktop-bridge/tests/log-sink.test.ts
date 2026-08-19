@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { homedir } from 'node:os'
+import { existsSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { Logger, type Exporter, type Message } from '@deepseek-ai/cordis'
-import { logStamp, resolveLogDir, toRecord } from '../src/log-sink.ts'
+import { linkLatest, logStamp, resolveLogDir, toRecord } from '../src/log-sink.ts'
 
 describe('resolveLogDir', () => {
   it('lets DSH_WEB_LOG_DIR win and falls to $DSH_HOME/logs', () => {
@@ -23,6 +24,30 @@ describe('logStamp', () => {
 function message(args: unknown[]): Message {
   return { sn: 7, ts: Date.UTC(2026, 0, 2, 3, 4, 5), name: 'provider-balance', type: 'warn', level: 2, args }
 }
+
+describe('linkLatest', () => {
+  it('swaps an existing pointer — even a dangling one — without throwing and leaves no staging behind', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-log-sink-'))
+    try {
+      // A previous boot's pointer, left dangling by a crashed successor.
+      const stale = join(dir, 'logger-20260102-030405.log')
+      writeFileSync(stale, '{}\n')
+      symlinkSync(stale, join(dir, 'logger-latest.log'))
+      rmSync(stale)
+      const fresh = join(dir, 'logger-20260103-030405.log')
+      writeFileSync(fresh, '{}\n')
+      linkLatest(dir, fresh)
+      assert.equal(readlinkSync(join(dir, 'logger-latest.log')), fresh)
+      // A same-pid re-run (HMR state loss, recycled pid) must not trip over
+      // its own staging name either.
+      linkLatest(dir, fresh)
+      assert.equal(readlinkSync(join(dir, 'logger-latest.log')), fresh)
+      assert.equal(existsSync(join(dir, `logger-latest.log.${process.pid}`)), false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('toRecord', () => {
   const exporter: Exporter = { colors: false, export: () => {} }

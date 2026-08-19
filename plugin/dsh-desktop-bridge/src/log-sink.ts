@@ -12,7 +12,7 @@
  * this plugin mounted are backfilled with `backfill: true`.
  */
 
-import { appendFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { inspect } from 'node:util'
@@ -81,7 +81,16 @@ const PROCESS_STATE = Symbol.for('dsh-desktop.log-sink.state')
 
 function stateForProcess(): SinkState {
   const registry = globalThis as { [PROCESS_STATE]?: SinkState }
-  return registry[PROCESS_STATE] ??= { file: createLogFile(), flushedThrough: 0 }
+  if (registry[PROCESS_STATE] !== undefined) return registry[PROCESS_STATE]
+  try {
+    return registry[PROCESS_STATE] = { file: createLogFile(), flushedThrough: 0 }
+  } catch (error) {
+    // Same best-effort contract as per-write failures: report once on stderr
+    // (the shell's tee captures it) and go quiet — an unopenable log file
+    // must never take the plugin tree, and with it the whole boot, down.
+    console.error('[dsh-desktop-log-sink] could not open the log file; sink disabled:', error)
+    return registry[PROCESS_STATE] = { file: '', flushedThrough: 0, failed: true }
+  }
 }
 
 function createLogFile(): string {
@@ -90,11 +99,31 @@ function createLogFile(): string {
   const file = join(dir, `logger-${logStamp(new Date())}.log`)
   // `ln -sfn`: point logger-latest.log at this boot's file. Unix-only, like
   // the shell's desktop-latest.log; Windows gets plain per-boot files.
-  if (process.platform !== 'win32') {
-    rmSync(join(dir, 'logger-latest.log'), { force: true })
-    symlinkSync(file, join(dir, 'logger-latest.log'))
-  }
+  if (process.platform !== 'win32') linkLatest(dir, file)
   return file
+}
+
+/**
+ * Swap `logger-latest.log` to this boot's file via an atomic rename. The
+ * desktop sidecar and terminal `dsh web` boots share one log directory, so
+ * the swap must be atomic: an rm-then-symlink window lets a simultaneous
+ * boot's `symlinkSync` fail with EEXIST. Each boot stages its link under a
+ * pid-private name, so staging cannot collide either; whoever renames last
+ * wins, which is all a "latest" pointer promises. Best-effort like every
+ * other sink failure — losing the pointer never disables the per-boot file.
+ * @param dir - the shared log directory.
+ * @param file - this boot's log file, the link's target.
+ */
+export function linkLatest(dir: string, file: string): void {
+  try {
+    const link = join(dir, 'logger-latest.log')
+    const staging = `${link}.${process.pid}`
+    rmSync(staging, { force: true })
+    symlinkSync(file, staging)
+    renameSync(staging, link)
+  } catch (error) {
+    console.error('[dsh-desktop-log-sink] latest-pointer swap failed:', error)
+  }
 }
 
 export const name = 'dsh-desktop-log-sink'

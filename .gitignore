@@ -11,6 +11,9 @@ out/
 # dsh-desktop-bridge：类型解析锚（指向 DSH checkout 的符号链接）与构建产物
 plugin/dsh-desktop-bridge/dsh
 plugin/dsh-desktop-bridge/lib/
+# dsh-reasoning-efforts：同款类型锚与构建产物
+plugin/dsh-reasoning-efforts/dsh
+plugin/dsh-reasoning-efforts/lib/
 # dsh-mcp-settings 的同级 harness 锚（scripts/setup-plugins.mjs 再生）
 plugin/deepseek-harness
 

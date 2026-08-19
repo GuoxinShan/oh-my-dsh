@@ -15,6 +15,24 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: link:../deepseek-harness/vendor/cordis
+        version: link:../deepseek-harness/vendor/cordis
+      '@deepseek-ai/dsh-credentials':
+        specifier: link:../deepseek-harness/packages/credentials/credentials
+        version: link:../deepseek-harness/packages/credentials/credentials
+      '@deepseek-ai/dsh-mcp-client':
+        specifier: link:../deepseek-harness/packages/mcp/mcp-client
+        version: link:../deepseek-harness/packages/mcp/mcp-client
+      '@deepseek-ai/dsh-settings':
+        specifier: link:../deepseek-harness/packages/settings/settings
+        version: link:../deepseek-harness/packages/settings/settings
+      '@deepseek-ai/dsh-timeout':
+        specifier: link:../deepseek-harness/packages/util/timeout
+        version: link:../deepseek-harness/packages/util/timeout
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: link:../deepseek-harness/packages/typert/protocol
+        version: link:../deepseek-harness/packages/typert/protocol
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.30.0(zod@4.4.3)
