@@ -86,8 +86,15 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm desktop:build
+        # The updater key was generated with an EMPTY password; a whitespace
+        # secret value gets dropped by GitHub, and an empty-but-set var makes
+        # tauri prompt/fail. Keep the var unset unless the secret carries a
+        # real password.
+        run: |
+          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ] && [ "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" != " " ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          fi
+          pnpm desktop:build
 
       - name: Notarize the DMG (tauri notarizes the .app only)
         env:
