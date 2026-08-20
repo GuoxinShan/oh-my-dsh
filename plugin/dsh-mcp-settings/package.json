@@ -2,7 +2,6 @@
   "name": "dsh-mcp-settings",
   "version": "0.2.3",
   "description": "Settings-driven MCP server manager, inventory Remote, and Web settings UI for DeepSeek Harness",
-  "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -89,7 +88,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aka-danielZhang/dsh-mcp-settings.git"
+    "url": "git+https://github.com/aka-danielZhang/dsh-desktop.git",
+    "directory": "plugin/dsh-mcp-settings"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.0",

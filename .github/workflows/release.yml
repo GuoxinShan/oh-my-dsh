@@ -2,7 +2,9 @@ name: Release
 
 # 增量发布流水线，tag 分流（见 AGENTS.md「发版」，无斜杠命名）：
 #   v<semver>             → 桌面公证版（macOS .app/.dmg + Windows NSIS + updater artifacts + latest.json）
-#   dsh-<name>-v<semver>  → 插件源码 Release（git archive 附件，不发 npm）
+#   dsh-<name>-v<semver>  → 插件 Release（git archive 附件；allowlist 双通道插件
+#                           另发 npm——dsh-mcp-settings / dsh-provider-balance，见
+#                           plugin job 的 npm channel gate 与 AGENTS.md「发版」）
 #
 # ⚠️ latest 指针纪律：自动更新端点是 releases/latest/download/latest.json，
 # desktop Release 独占 latest 指针；插件 Release 一律 make_latest: false，
@@ -274,7 +276,7 @@ jobs:
     name: Plugin (${{ github.ref_name }})
     if: startsWith(github.ref_name, 'dsh-') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'dsh-'))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       # Full history: git archive needs the tagged tree, and workflow_dispatch
       # runs check out a branch (shallow) where tags are absent otherwise.
@@ -300,6 +302,123 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # npm dual channel (AGENTS.md 「发版」): only the allowlisted plugins
+      # publish to the registry; every plugin still ships the git-archive
+      # tarball below. The gate also records whether the package needs a
+      # build step before packing (mcp-settings builds lib/ against the
+      # harness sources).
+      - name: npm channel gate
+        id: npm
+        run: |
+          set -euo pipefail
+          NAME=${{ steps.plugin.outputs.name }}
+          case " dsh-mcp-settings dsh-provider-balance " in
+            *" $NAME "*) ON_NPM=true ;;
+            *) ON_NPM=false ;;
+          esac
+          HAS_BUILD=$(node -p "!!(JSON.parse(require('fs').readFileSync('plugin/$NAME/package.json','utf8')).scripts||{}).build")
+          {
+            echo "on_npm=$ON_NPM"
+            echo "has_build=$HAS_BUILD"
+          } >> "$GITHUB_OUTPUT"
+          echo "npm channel: $ON_NPM (build needed: $HAS_BUILD)"
+
+      - name: Resolve harness baseline from runtime/revision.json
+        if: steps.npm.outputs.has_build == 'true'
+        id: baseline
+        run: |
+          # Upstream tags keep the leading v (dsh-v0.1.0-rc.8); stripping it
+          # here fabricated dsh-0.1.0-rc.8 and checkout failed on fetch.
+          ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
+          base="${ref%+zw.*}"
+          case "$base" in
+            v*.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
+          esac
+
+      - name: Check out harness at the pinned baseline
+        if: steps.npm.outputs.has_build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ steps.baseline.outputs.tag }}
+          path: harness
+
+      # packageManager comes from the PLUGIN's package.json when the npm
+      # channel needs a build (mcp-settings locks pnpm 11; the repo root locks
+      # 10.28 — the two must not be crossed or install corrupts the lockfile).
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ${{ steps.npm.outputs.has_build == 'true' && format('plugin/{0}/package.json', steps.plugin.outputs.name) || 'package.json' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            harness/pnpm-lock.yaml
+            plugin/dsh-mcp-settings/pnpm-lock.yaml
+
+      # mcp-settings typechecks through tsconfig references into the harness
+      # tree, so the harness needs its node_modules and built lib/types first
+      # (same shape as the CI plugin job).
+      - name: Install harness (types the plugin typechecks against)
+        if: steps.npm.outputs.has_build == 'true'
+        run: pnpm --dir harness install --frozen-lockfile
+
+      - name: Build harness
+        if: steps.npm.outputs.has_build == 'true'
+        run: pnpm --dir harness run build
+
+      # devDeps resolve through the plugin/deepseek-harness anchor created by
+      # setup-plugins.mjs (same shape as the CI plugin job).
+      - name: Build the plugin (npm channel, when it has a build script)
+        if: steps.npm.outputs.has_build == 'true'
+        run: |
+          set -euo pipefail
+          NAME=${{ steps.plugin.outputs.name }}
+          DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" node scripts/setup-plugins.mjs
+          pnpm --dir "plugin/$NAME" install --no-frozen-lockfile
+          pnpm --dir "plugin/$NAME" run build
+
+      - name: Publish to npm (allowlisted plugins)
+        if: steps.npm.outputs.on_npm == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          NAME=${{ steps.plugin.outputs.name }}
+          VERSION=${{ steps.plugin.outputs.version }}
+          # Idempotence: a re-run over a version already on the registry skips.
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "npm: $NAME@$VERSION already published, skipping"
+            exit 0
+          fi
+          # npm needs the registry binding in .npmrc to pick NODE_AUTH_TOKEN
+          # up (the env var alone is not consulted for a bare npm publish).
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
+          cd "plugin/$NAME"
+          npm publish --access public
+          npm view "$NAME@$VERSION" version
+
+      - name: Compose release body
+        run: |
+          NAME=${{ steps.plugin.outputs.name }}
+          VERSION=${{ steps.plugin.outputs.version }}
+          TAG="${{ github.ref_name || inputs.tag }}"
+          {
+            echo "$NAME $VERSION"
+            echo
+            echo "安装："
+            if [ "${{ steps.npm.outputs.on_npm }}" = "true" ]; then
+              echo "- npm（dsh plugin 直接转发 pnpm，裸包名即可）：\`dsh plugin --profile web add $NAME\`"
+            fi
+            echo "- 从 monorepo tag：\`dsh plugin --profile web add https://github.com/${{ github.repository }}.git#plugin/$NAME:$TAG\`"
+            echo "- 或下载下方 tarball 解包后 \`dsh plugin --profile web add <目录>\`。"
+            echo
+            echo "变更见包内 CHANGELOG / README。"
+          } > /tmp/release-body.md
+
       - name: Package the plugin subtree (git archive)
         run: |
           set -euo pipefail
@@ -314,15 +433,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name || inputs.tag }}
           make_latest: false
-          body: |
-            ${{ steps.plugin.outputs.name }} ${{ steps.plugin.outputs.version }}
-
-            安装（从 monorepo tag）：
-            ```
-            dsh plugin --profile web add https://github.com/${{ github.repository }}.git#plugin/${{ steps.plugin.outputs.name }}:${{ github.ref_name || inputs.tag }}
-            ```
-            或下载下方 tarball 解包后 `dsh plugin --profile web add <目录>`。
-            变更见包内 CHANGELOG / README。
+          body_path: /tmp/release-body.md
           files: |
             dist/*.tar.gz
         env:
