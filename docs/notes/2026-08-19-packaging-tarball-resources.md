@@ -13,11 +13,11 @@ runtime 树（`runtime/build/<sha>/{dsh,tools}`，502MB）是 pnpm 安装产物�
 
 ## 布局与原子性
 
-资源三个固定名（不随 revision 变，`tauri.conf.json` 不用跟着 churn）：`resources/{runtime.tar.gz, runtime-revision.json, bridge.tar.gz}`，由 `scripts/prepare-desktop-bundle.mjs` 再生（gitignored，SHA 键控缓存：runtime tar 按 revision sha 跳过、bridge tar 每次重建跟 lib/）。
+资源固定名（不随 revision 变，`tauri.conf.json` 不用跟着 churn）：`resources/{runtime.tar.gz,runtime-revision.json,bridge.tar.gz,compaction-hierarchical.tar.gz}`，由 `scripts/prepare-desktop-bundle.mjs` 再生（gitignored，SHA 键控缓存：runtime tar 按 revision + assembly/signing posture 跳过，两个插件 tar 每次重建跟 lib/）。
 
-首启解压：`extract_bundle_tar` 解到 `<dir>.tmp` → sentinel 校验（runtime 为 `dsh/node_modules/@deepseek-ai/dsh/lib/bin.js`，bridge 为 `package.json`）→ 写 `.ok` 标记 → rename 原子晋升（同卷）。半截解压（断电/被杀）不会被当作完整 runtime；并发竞态败者丢掉自己的 tmp 保留赢家的。落地 `~/.dsh-desktop/runtime/<sha>/`（按 sha 分目录，升级即换目录）与 `~/.dsh-desktop/bridge/`。
+首启解压：`extract_bundle_tar` 解到 `<dir>.tmp` → sentinel 校验（runtime 为 `dsh/node_modules/@deepseek-ai/dsh/lib/bin.js`，两个插件为 `package.json`）→ 写 `.ok` 标记 → rename 原子晋升（同卷）。半截解压（断电/被杀）不会被当作完整 runtime；并发竞态败者丢掉自己的 tmp 保留赢家的。落地 `~/.dsh-desktop/runtime/<sha>/`、`~/.dsh-desktop/bridge/` 与 `~/.dsh-desktop/plugins/dsh-compaction-hierarchical/`。
 
-壳解析顺序变更（`find_runtime`/`find_bridge`）：env 覆盖 → **资源解压树（release）** → 编译期 repo 路径（dev）→ 源码 checkout（dev 兜底）。dev 下资源探测自然 miss（无 `runtime-revision.json`），行为不变。
+壳解析顺序变更（`find_runtime`/`find_bridge`/`find_compaction_plugin`）：env 覆盖 → **资源解压树（release）** → 编译期 repo 路径（dev）→ 源码 checkout（dev 兜底）。dev 下资源探测自然 miss（无 `runtime-revision.json`），行为不变。
 
 **构建机假阳性陷阱**：编译期路径在构建机上恒存在，会掩盖资源分支缺陷——验证必须 `mv runtime/build runtime/build.off` 强制 miss（playbook §4 固化为流程）。
 
@@ -29,7 +29,13 @@ runtime 树（`runtime/build/<sha>/{dsh,tools}`，502MB）是 pnpm 安装产物�
 
 强制资源分支 e2e 首跑失败：sidecar 120s 未就绪，日志 `Cannot find package '@deepseek-ai/cordis' imported from ~/.dsh-desktop/bridge/lib/log-sink.js`。根因：`lib/log-sink.js` 的 `import { Logger } from '@deepseek-ai/cordis'` 是**值引用**（`Logger.format` 展开 printf 占位），Node ESM 从桥目录向上解析 peer——dev 布局靠 `plugin/dsh-desktop-bridge/node_modules` 的 devDep 链接（`link:dsh/vendor/cordis`，`pnpm install` 装出），解压出的包没有这个锚。
 
-修复：`ensure_bridge_cordis_link`（unix-only）——plugin install **之后**（pnpm pack 遵循 `files` 字段不会带走 node_modules，且不让 pnpm 碰到运行时链接）、sidecar spawn **之前**，把 `bridge/node_modules/@deepseek-ai/cordis` 链到 runtime 树 `.pnpm` 里 cordis 的 real path（canonicalize 后比较）。Node ESM 默认 `preserveSymlinks=false`，经符号链接解析到与 plugin loader 相同的 real path ⇒ **同一模块实例**（不是第二份 cordis 副本——往包里再打一份 cordis 反而是错的：两份副本 = 两个模块实例，类身份分裂）。幂等且自愈：链接已解析到**当前** runtime 的 cordis（readlink + canonicalize 等值比较）则不动；指向别处（升级后旧 revision 目录仍残留——首版缺陷，`exists()` 为真即跳过会静默留用旧 cordis 配新 runtime）或悬空（revision 目录被手删）则重指/重建；真实目录（dev 布局 pnpm install 产物）绝不触碰；runtime 无 `.pnpm`（source 兜底）静默跳过。失败只 warn 不阻断——与日志汇「尽力而为」的契约一致。实测：预置指向旧 sha 的链接 → 启动后自动重指到当前 sha 且 e2e 通过。
+修复：`ensure_bridge_cordis_link`——plugin install **之后**（pnpm pack 遵循 `files` 字段不会带走 node_modules，且不让 pnpm 碰到运行时链接）、sidecar spawn **之前**，把 `bridge/node_modules/@deepseek-ai/cordis` 链到 runtime 树 cordis 的 real path（canonicalize 后比较）。Node ESM 默认 `preserveSymlinks=false`，经符号链接解析到与 plugin loader 相同的 real path ⇒ **同一模块实例**（不是第二份 cordis 副本——往包里再打一份 cordis 反而是错的：两份副本 = 两个模块实例，类身份分裂）。幂等且自愈：链接已解析到**当前** runtime 的 cordis（readlink + canonicalize 等值比较）则不动；指向别处（升级后旧 revision 目录仍残留——首版缺陷，`exists()` 为真即跳过会静默留用旧 cordis 配新 runtime）或悬空（revision 目录被手删）则重指/重建；真实目录（dev 布局 pnpm install 产物）绝不触碰。Unix 用 symlink，Windows 用 symlink/junction fallback。实测：预置指向旧 sha 的链接 → 启动后自动重指到当前 sha 且 e2e 通过。
+
+### 2026-08-20 扩展：层次压缩进入 desktop bundle
+
+`dsh-compaction-hierarchical` v0.1.0 的独立插件 Release 不能让既有 desktop 安装自动获得该 Provider，因此 desktop v0.2.0-rc.9 把它纳入桌面资源集合。archive 包含发布所需的 `package.json`、空 `cordis.patch.yml`、`preset-snippet.yml`、README 与 `lib/index.js`；空 patch 使启动时 `plugin add` 只保证包在 web Profile 可解析，不改变 shipped/default preset 的 compaction 所有权。
+
+该 host bundle 对六个 Harness peers 有值引用。通用 `ensure_runtime_package_link` 取代 Cordis 特例：先查 hoisted `node_modules/<package>`，再查排序后的 `.pnpm/<encoded>@*/node_modules/<package>`，把 shell-owned compaction 解压目录的 peers 全部链到 sidecar runtime realpath；任一 peer 缺失即在 sidecar 启动前 fail loud。Rust 单测覆盖 hoisted/isolated resolution、链接 canonical identity 与 Profile 幂等识别。
 
 ## 踩坑三：bundled runtime 丢了 tsx loader（用户实测暴露）
 

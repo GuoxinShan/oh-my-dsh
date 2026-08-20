@@ -1,21 +1,23 @@
 /**
  * Assemble the shell's bundled assets (release packaging): the self-contained
- * runtime tarball, the bridge plugin tarball, and the revision manifest, all
- * placed under src-tauri/resources/ for tauri.conf.json bundle.resources.
+ * runtime tarball, the desktop-owned plugin tarballs, and the revision
+ * manifest, all placed under src-tauri/resources/ for tauri.conf.json
+ * bundle.resources.
  *
  * Why tarballs instead of loose resource directories: the runtime tree is a
  * pnpm install (3k+ symlinks, two layers) and tauri-bundler gives no
  * guarantee that directory resources keep symlinks executable-bit-identical
  * (deref-copy would explode the .pnpm store to GBs). A tar round-trip is
- * link-aware, and the shell extracts it once into ~/.dsh-desktop (writable,
- * immune to App Translocation read-only volumes, and keeps nested Mach-O out
- * of the notarization scan later).
+ * link-aware, and the shell extracts it once into ~/.dsh-desktop (writable
+ * and immune to App Translocation read-only volumes). Apple's notary scanner
+ * still descends into archives, so every nested Mach-O is signed before pack.
  *
  * Fixed file names so tauri.conf.json never churns with revisions:
  *   src-tauri/resources/runtime.tar.gz          (dsh/ + tools/, keyed by SHA)
  *   src-tauri/resources/runtime.tar.gz.sha      (cache marker: revision sha)
  *   src-tauri/resources/bridge.tar.gz           (package.json + lib/ + patch)
- *   src-tauri/resources/runtime-revision.json   (the sha the shell extracts to)
+ *   src-tauri/resources/compaction-hierarchical.tar.gz (host plugin package)
+ *   src-tauri/resources/runtime-revision.json   (runtime + plugin hashes)
  *
  * `src-tauri/resources/` is gitignored — regenerated per build via
  * `pnpm desktop:prepare` (also wired as tauri beforeBuildCommand).
@@ -31,11 +33,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
 const runtimeDir = resolve(repoRoot, 'runtime/build', revision.sha)
 const bridgeDir = resolve(repoRoot, 'plugin/dsh-desktop-bridge')
+const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
 const resourcesDir = resolve(repoRoot, 'src-tauri/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
 const runtimeShaMarker = resolve(resourcesDir, 'runtime.tar.gz.sha')
 const bridgeTar = resolve(resourcesDir, 'bridge.tar.gz')
+const compactionTar = resolve(resourcesDir, 'compaction-hierarchical.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 
 function run(cmd, args, opts = {}) {
@@ -71,9 +75,12 @@ function sha256(path) {
   })
 }
 
-// 1. Bridge plugin: typecheck + tests + build (lib/ is what gets tarballed).
-console.log('prepare-desktop-bundle: building bridge plugin...')
+// 1. Desktop-owned plugins: verify and build the exact packages bundled below.
+console.log('prepare-desktop-bundle: building desktop plugins...')
 run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
+for (const script of ['typecheck', 'test', 'build']) {
+  run(pnpm, ['run', script], { cwd: compactionDir })
+}
 
 // 2. Runtime tree (SHA-keyed cache; seconds when warm).
 console.log('prepare-desktop-bundle: assembling runtime...')
@@ -150,18 +157,26 @@ if (existsSync(runtimeTar) && existsSync(runtimeShaMarker) && readFileSync(runti
 }
 console.log(`prepare-desktop-bundle: runtime.tar.gz ${mb(runtimeTar)} MB`)
 
-// 4. Bridge tarball: tiny, rebuilt every time (must track the lib/ just built).
+// 4. Plugin tarballs: tiny, rebuilt every time to track the lib/ just built.
 tarCreate(bridgeTar, bridgeDir, ['package.json', 'cordis.patch.yml', 'lib'])
 console.log(`prepare-desktop-bundle: bridge.tar.gz ${mb(bridgeTar)} MB`)
+tarCreate(compactionTar, compactionDir, [
+  'package.json',
+  'cordis.patch.yml',
+  'preset-snippet.yml',
+  'README.md',
+  'lib',
+])
+console.log(`prepare-desktop-bundle: compaction-hierarchical.tar.gz ${mb(compactionTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
-// plus content hashes of both tarballs — the shell's .ok marker stores these,
-// so a same-sha-but-new-content bundle (assembly changes, bridge rebuilds)
-// forces re-extraction instead of short-circuiting on a stale cache.
+// plus content hashes of every tarball. Each extraction .ok marker stores its
+// own hash, so same-runtime plugin rebuilds cannot boot stale code.
 const manifest = {
   ...revision,
   runtimeTarball: await sha256(runtimeTar),
   bridgeTarball: await sha256(bridgeTar),
+  compactionHierarchicalTarball: await sha256(compactionTar),
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)

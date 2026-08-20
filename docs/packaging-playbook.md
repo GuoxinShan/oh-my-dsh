@@ -19,9 +19,9 @@ pnpm desktop:build
 
 `tauri.conf.json` 的 `beforeBuildCommand` 会先跑 `pnpm run desktop:prepare`（`scripts/prepare-desktop-bundle.mjs`）：
 
-1. 构建桥插件（typecheck + 单测 + tsdown）；
+1. 构建桌面自有插件：bridge 跑 typecheck + 单测 + tsdown，hierarchical compaction 跑 typecheck + 22 个单测 + tsdown；
 2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）；
-3. 打 `src-tauri/resources/runtime.tar.gz`（`dsh/` + `tools/`，SHA 键控缓存）与 `bridge.tar.gz`（package.json + lib/ + cordis.patch.yml，每次重建），落 `runtime-revision.json` 副本；
+3. 打 `src-tauri/resources/runtime.tar.gz`（`dsh/` + `tools/`，SHA 键控缓存）、`bridge.tar.gz` 与 `compaction-hierarchical.tar.gz`，把三个内容哈希写入 `runtime-revision.json` 副本；
 4. cargo release 编译 → tauri-bundler 出平台包：macOS `.app` + `.dmg`（无签名证书时为 ad-hoc 签名）；Windows NSIS `*-setup.exe`（currentUser）。
 
 产物：
@@ -42,7 +42,7 @@ DMG 窗口的观感由两处共同决定，改任何一处必须同步另一处�
 
 ## 2. 包结构与首启解压（原理）
 
-runtime 与桥插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案还规避两个问题：App Translocation 把 .app 挂到只读卷（解压到 home 后树恒可写）；将来公证时嵌套 node Mach-O 不进 notarytool 扫描（藏在数据 tarball 里）。
+runtime 与两个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
 
 首次启动时壳把资源原子解压到 home：
 
@@ -50,13 +50,15 @@ runtime 与桥插件以 **tar.gz 资源**进包（不是散目录拷贝）：run
 ~/.dsh-desktop/
   runtime/<sha>/{dsh,tools}     ← runtime.tar.gz 解压，.ok 标记完整
   bridge/{package.json,lib,cordis.patch.yml}  ← bridge.tar.gz 解压
+  plugins/dsh-compaction-hierarchical/{package.json,lib,cordis.patch.yml,preset-snippet.yml,README.md}
+                                      ← compaction-hierarchical.tar.gz 解压
 ```
 
-解压是「临时目录 + sentinel 校验 + rename 原子晋升」——半截解压不会被当作完整 runtime。缓存是**内容寻址**的：`.ok` 标记存 tarball 的 sha256（哈希写进 `runtime-revision.json`），同 revision 但内容变了（组装变更、桥重建）会自动重解压整目录替换；哈希命中秒过。
+解压是「临时目录 + sentinel 校验 + rename 原子晋升」——半截解压不会被当作完整 runtime。缓存是**内容寻址**的：`.ok` 标记存 tarball 的 sha256（哈希写进 `runtime-revision.json`），同 revision 但内容变了（组装变更、任一插件重建）只会自动重解压对应目录；哈希命中秒过。
 
-桥包解压后壳会补一个 `bridge/node_modules/@deepseek-ai/cordis` → runtime 树 `.pnpm` 的符号链接：桥 host 半（`lib/log-sink.js`）对 cordis 是**值引用**（`Logger.format`），Node ESM 需从桥目录解析 peer；dev 布局靠 devDep 链接，解压包没有（首版实测即栽在这里，见 `docs/notes/2026-08-19-packaging-tarball-resources.md`）。链接在 plugin install 之后建（pnpm 不会碰到）、指向 loader 解析的同一 real path（单一模块实例——**不往包里打 cordis 副本**，副本会造成双实例类身份分裂），并在 runtime 升级后自动重指到新 revision 的 cordis。
+两个插件 archive 都刻意不带 `node_modules`。壳在 `plugin add` 之后补 runtime-owned peer 链接：bridge 链 `@deepseek-ai/cordis`；hierarchical compaction 链 package.json 声明的六个 Harness peers。目标优先取 runtime 的 hoisted 包，回退到排序后的 `.pnpm` 实例，并 canonicalize 到 loader 同一 real path；这样既解决 Node ESM peer 解析，又避免 Cordis/Service 注册表因模块副本分裂。链接指向旧 revision 或悬空时会自愈重指；真实 dev 依赖目录不动，且 compaction 只在 shell-owned `.ok` 目录上受管。
 
-sidecar runtime 解析顺序（`find_runtime`）：`$DSH_DESKTOP_RUNTIME` → 包内资源解压树（release）→ 仓库 `runtime/build/<sha>`（dev）→ DSH 源码 checkout（dev 兜底）。桥插件同理（`find_bridge`）。
+sidecar runtime 解析顺序（`find_runtime`）：`$DSH_DESKTOP_RUNTIME` → 包内资源解压树（release）→ 仓库 `runtime/build/<sha>`（dev）→ DSH 源码 checkout（dev 兜底）。桌面插件分别由 `find_bridge` 与 `find_compaction_plugin` 解析 env override → release resource → dev tree。
 
 ## 3. 体积参考（aarch64，runtime 734f65…/desktop v0.1.1）
 

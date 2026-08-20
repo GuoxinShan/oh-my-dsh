@@ -1,7 +1,7 @@
 //! Desktop shell for the DeepSeek Harness web UI (M1).
 //!
 //! One run: find the harness checkout, idempotently install the
-//! desktop-bridge plugin into the web profile, spawn `dsh web` on a random
+//! desktop-owned plugins into the web profile, spawn `dsh web` on a random
 //! loopback port with the user's real `~/.dsh` as DSH_HOME (the desktop IS
 //! another face of the same account), poll `GET /` until ready, then open the
 //! main window with the desktop gate signal injected. Sidecar output is teed
@@ -21,6 +21,17 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(windows)]
 mod win;
+
+const BRIDGE_PACKAGE: &str = "dsh-desktop-bridge";
+const COMPACTION_PACKAGE: &str = "dsh-compaction-hierarchical";
+const COMPACTION_RUNTIME_PEERS: &[&str] = &[
+    "@deepseek-ai/cordis",
+    "@deepseek-ai/dsh-agent",
+    "@deepseek-ai/dsh-compaction-basic",
+    "@deepseek-ai/dsh-llm",
+    "@deepseek-ai/dsh-token-meter",
+    "@deepseek-ai/schemastery",
+];
 
 /// Ready-probe cadence and budget (tsx cold start is slow).
 const PROBE_INTERVAL: Duration = Duration::from_millis(500);
@@ -125,6 +136,7 @@ fn kill_sidecar() {
 fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
     let runtime = find_runtime(app)?;
     let bridge = find_bridge(app)?;
+    let compaction = find_compaction_plugin(app)?;
     let logs = shell_root()?;
     let dsh_home = dsh_home()?;
 
@@ -143,11 +155,15 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    // The bridge row must be in the profile before the server scans it.
-    run_plugin_install(&runtime, &bridge, &dsh_home, &logs)?;
-    // After the profile install (so pnpm never packs the link): give the
-    // extracted bridge its cordis peer (see ensure_bridge_cordis_link).
+    // Desktop-owned packages must be in the profile before the server scans
+    // it. The compaction package has an install-only empty root patch; agent
+    // presets resolve it later inside their isolated compaction realm.
+    run_plugin_install(&runtime, &bridge, BRIDGE_PACKAGE, &dsh_home, &logs)?;
+    run_plugin_install(&runtime, &compaction, COMPACTION_PACKAGE, &dsh_home, &logs)?;
+    // Add runtime-owned peers only after profile installation so pnpm never
+    // packs managed links into the profile store.
     ensure_bridge_cordis_link(&bridge, &runtime);
+    ensure_bundled_plugin_runtime_links(&compaction, &runtime, COMPACTION_RUNTIME_PEERS)?;
 
     let port = free_port()?;
     let url = format!("http://127.0.0.1:{port}");
@@ -469,7 +485,7 @@ fn find_bridge(app: &tauri::AppHandle) -> Result<PathBuf, String> {
                 .and_then(|v| v.get("bridgeTarball").and_then(|s| s.as_str()).map(str::to_string));
             let fresh = hash.as_deref().filter(|h| !h.is_empty())
                 .map(|h| dir.join(".ok").is_file() && fs::read_to_string(dir.join(".ok")).map(|t| t.trim() == h).unwrap_or(false))
-                .unwrap_or_else(|| !dir.join("package.json").is_file()); // no hash in manifest: presence-only
+                .unwrap_or_else(|| dir.join("package.json").is_file()); // no hash in manifest: presence-only
             if !fresh {
                 extract_bundle_tar(&tar, &dir, "package.json", hash.as_deref().unwrap_or(""))?;
                 println!("dsh-desktop: extracted bundled bridge to {}", dir.display());
@@ -488,88 +504,131 @@ fn find_bridge(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     ))
 }
 
-/// The bridge host half imports `@deepseek-ai/cordis` as a value
-/// (`Logger.format` in the log-sink), so Node must resolve that peer from
-/// the bridge directory itself. A dev checkout carries the link through
-/// devDependencies (`link:dsh/vendor/cordis`); the extracted bundle does
-/// not, so point it at the runtime tree's own cordis — the same real path
-/// the plugin loader resolves to, hence one module instance, not a second
-/// copy. Runs after the profile install so pnpm never packs the link, and
-/// before the sidecar spawns so the loader import resolves. Idempotent and
-/// self-healing: a link already resolving to the current runtime's cordis
-/// is left alone; one pointing elsewhere (a previous revision's runtime
-/// whose directory still exists after an upgrade) or dangling (revision
-/// directory deleted) is re-created; a real directory (dev layout's pnpm
-/// install) is never touched.
+/// The hierarchical compaction package: an explicit override, the release
+/// resource extracted under the shell-private plugin root, or the dev tree.
+fn find_compaction_plugin(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(from_env) = std::env::var("DSH_DESKTOP_COMPACTION_PLUGIN") {
+        let path = PathBuf::from(from_env);
+        if path.join("package.json").is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "DSH_DESKTOP_COMPACTION_PLUGIN={} has no package.json",
+            path.display()
+        ));
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        let tar = resources.join("resources/compaction-hierarchical.tar.gz");
+        if tar.is_file() {
+            let dir = shell_root()?.join("plugins").join(COMPACTION_PACKAGE);
+            let hash = fs::read_to_string(resources.join("resources/runtime-revision.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|value| value.get("compactionHierarchicalTarball")
+                    .and_then(|item| item.as_str()).map(str::to_string));
+            let fresh = hash.as_deref().filter(|value| !value.is_empty())
+                .map(|value| dir.join(".ok").is_file()
+                    && fs::read_to_string(dir.join(".ok"))
+                        .map(|text| text.trim() == value).unwrap_or(false))
+                .unwrap_or_else(|| dir.join("package.json").is_file());
+            if !fresh {
+                extract_bundle_tar(&tar, &dir, "package.json", hash.as_deref().unwrap_or(""))?;
+                println!(
+                    "dsh-desktop: extracted bundled {} to {}",
+                    COMPACTION_PACKAGE,
+                    dir.display()
+                );
+            }
+            return Ok(dir);
+        }
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin/dsh-compaction-hierarchical");
+    if dev.join("package.json").is_file() {
+        return Ok(dev);
+    }
+    Err(format!(
+        "hierarchical compaction package not found at {} (set DSH_DESKTOP_COMPACTION_PLUGIN)",
+        dev.display()
+    ))
+}
+
+/// Point the bridge's value import at the runtime-owned Cordis instance. Dev
+/// packages already carry a real dependency tree and are left untouched.
 fn ensure_bridge_cordis_link(bridge: &Path, runtime: &Runtime) {
-    let Some(target) = resolve_runtime_cordis(runtime) else {
-        eprintln!(
-            "dsh-desktop: bridge cordis link failed: no @deepseek-ai/cordis under {}",
-            runtime.cwd.display()
-        );
-        return;
-    };
-    let Ok(target) = fs::canonicalize(&target) else {
-        eprintln!("dsh-desktop: bridge cordis link failed: cannot resolve {}", target.display());
-        return;
-    };
-    let link = bridge.join("node_modules/@deepseek-ai/cordis");
-    // An existing symlink/junction is correct only while it resolves to
-    // the same real path as the current runtime's cordis; otherwise re-point it.
+    if let Err(error) = ensure_runtime_package_link(bridge, runtime, "@deepseek-ai/cordis") {
+        eprintln!("dsh-desktop: bridge cordis link failed: {error}");
+    }
+}
+
+/// Release plugin archives intentionally omit node_modules. Link every
+/// declared Harness peer to the assembled runtime after `plugin add`, so Node
+/// sees the same physical modules as the sidecar. The `.ok` marker limits this
+/// mutation to shell-owned extracted packages; source/dev trees keep their own
+/// pnpm layout.
+fn ensure_bundled_plugin_runtime_links(
+    plugin: &Path,
+    runtime: &Runtime,
+    packages: &[&str],
+) -> Result<(), String> {
+    if !plugin.join(".ok").is_file() {
+        return Ok(());
+    }
+    for package in packages {
+        ensure_runtime_package_link(plugin, runtime, package)?;
+    }
+    Ok(())
+}
+
+/// Idempotently link one plugin dependency to the runtime package realpath.
+fn ensure_runtime_package_link(plugin: &Path, runtime: &Runtime, package: &str) -> Result<(), String> {
+    let target = resolve_runtime_package(runtime, package).ok_or_else(|| {
+        format!("no {package} package under {}", runtime.cwd.display())
+    })?;
+    let target = fs::canonicalize(&target)
+        .map_err(|error| format!("cannot resolve {}: {error}", target.display()))?;
+    let link = plugin.join("node_modules").join(package);
     if let Ok(existing) = fs::read_link(&link) {
         let existing_abs = if existing.is_absolute() {
             existing
         } else {
             link.parent().expect("link path always has a parent").join(existing)
         };
-        if let Ok(existing_real) = fs::canonicalize(&existing_abs) {
-            if existing_real == target {
-                return; // already the current runtime's cordis
-            }
+        if fs::canonicalize(&existing_abs).is_ok_and(|existing_real| existing_real == target) {
+            return Ok(());
         }
-        if let Err(e) = remove_dir_link(&link) {
-            eprintln!("dsh-desktop: bridge cordis link replace failed: {e}");
-            return;
-        }
+        remove_dir_link(&link)
+            .map_err(|error| format!("replace {}: {error}", link.display()))?;
     } else if link.exists() {
-        return; // a real directory (dev layout), not ours to manage
+        return Ok(()); // a real directory in a dev package is not shell-owned
     }
     let parent = link.parent().expect("link path always has a parent");
-    if let Err(e) = fs::create_dir_all(parent)
-        .map_err(|e| e.to_string())
-        .and_then(|()| link_dir(&target, &link))
-    {
-        eprintln!("dsh-desktop: bridge cordis link failed: {e}");
-    }
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    link_dir(&target, &link)
 }
 
-/// Locate `@deepseek-ai/cordis` in the sidecar runtime. Hoisted Windows
-/// trees (and Unix isolated trees that still hoist the name) keep it at
-/// `node_modules/@deepseek-ai/cordis`. Isolated `.pnpm` layouts keep it
-/// under `@deepseek-ai+cordis@*` — look there only when the hoisted path
-/// is missing (silent return here used to skip the link entirely on
-/// Windows hoisted installs, and log-sink then killed the plugin tree).
-fn resolve_runtime_cordis(runtime: &Runtime) -> Option<PathBuf> {
-    let hoisted = runtime.cwd.join("node_modules/@deepseek-ai/cordis");
+/// Locate a package in a hoisted runtime first, then in an isolated pnpm store.
+fn resolve_runtime_package(runtime: &Runtime, package: &str) -> Option<PathBuf> {
+    let hoisted = runtime.cwd.join("node_modules").join(package);
     if hoisted.is_dir() {
         return Some(hoisted);
     }
+    let encoded = package.replace('/', "+");
+    let prefix = format!("{encoded}@");
     let entries = fs::read_dir(runtime.cwd.join("node_modules/.pnpm")).ok()?;
     let mut matches: Vec<PathBuf> = entries
         .flatten()
-        .filter(|e| {
-            e.file_name().to_str().is_some_and(|name| name.starts_with("@deepseek-ai+cordis@"))
-        })
-        .map(|e| e.path().join("node_modules/@deepseek-ai/cordis"))
-        .filter(|p| p.is_dir())
+        .filter(|entry| entry.file_name().to_str().is_some_and(|name| name.starts_with(&prefix)))
+        .map(|entry| entry.path().join("node_modules").join(package))
+        .filter(|path| path.is_dir())
         .collect();
+    matches.sort();
     if matches.len() > 1 {
         eprintln!(
-            "dsh-desktop: multiple cordis copies in the runtime ({}), linking the first",
+            "dsh-desktop: multiple {package} copies in the runtime ({}), linking the first",
             matches.len()
         );
     }
-    matches.pop()
+    matches.into_iter().next()
 }
 
 /// Directory symlink (Unix) or directory symlink / junction (Windows).
@@ -657,39 +716,42 @@ fn dsh_home() -> Result<PathBuf, String> {
     Ok(home.join(".dsh"))
 }
 
-/// Idempotently ensure the bridge row is installed in the web profile.
-/// pnpm versions flap between machines (store v10 vs v11): when the install
-/// fails on the store-mismatch error, relink the profile with a plain
-/// `pnpm install` through the dsh CLI's own recovery and retry once.
-fn run_plugin_install(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
-    if bridge_already_in_profile(bridge, dsh_home) {
-        println!("dsh-desktop: bridge already in web profile, skip plugin add");
+/// Idempotently ensure one desktop-owned package is installed in the web
+/// profile. A store-major mismatch is repaired once through the DSH CLI.
+fn run_plugin_install(
+    runtime: &Runtime,
+    plugin: &Path,
+    package: &str,
+    dsh_home: &Path,
+    logs: &Path,
+) -> Result<(), String> {
+    if plugin_already_in_profile(plugin, package, dsh_home) {
+        println!("dsh-desktop: {package} already in web profile, skip plugin add");
         return Ok(());
     }
-    match plugin_install_once(runtime, bridge, dsh_home, logs) {
+    match plugin_install_once(runtime, plugin, dsh_home, logs) {
         Ok(()) => Ok(()),
         Err(first) => {
-            eprintln!("dsh-desktop: plugin install failed once ({first}); relinking the profile and retrying");
+            eprintln!(
+                "dsh-desktop: {package} install failed once ({first}); relinking the profile and retrying"
+            );
             relink_profile(runtime, dsh_home, logs)?;
-            plugin_install_once(runtime, bridge, dsh_home, logs)
+            plugin_install_once(runtime, plugin, dsh_home, logs)
         }
     }
 }
 
-/// True when the web profile already points at this extracted bridge.
-/// Skipping `plugin add` avoids a pnpm major-store mismatch (bundled pnpm
-/// 10 vs a terminal profile built with pnpm 11) that recreates
-/// `~/.dsh/profiles/web/node_modules` on a first-fail retry.
-fn bridge_already_in_profile(bridge: &Path, dsh_home: &Path) -> bool {
-    let linked = dsh_home.join("profiles/web/node_modules/dsh-desktop-bridge");
-    match (fs::canonicalize(&linked), fs::canonicalize(bridge)) {
+/// True when the profile package link already targets this exact package.
+fn plugin_already_in_profile(plugin: &Path, package: &str, dsh_home: &Path) -> bool {
+    let linked = dsh_home.join("profiles/web/node_modules").join(package);
+    match (fs::canonicalize(&linked), fs::canonicalize(plugin)) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
 }
 
 /// One plugin-install attempt.
-fn plugin_install_once(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+fn plugin_install_once(runtime: &Runtime, plugin: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -700,7 +762,7 @@ fn plugin_install_once(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: 
         .arg("--profile")
         .arg("web")
         .arg("add")
-        .arg(bridge)
+        .arg(plugin)
         .env("DSH_HOME", dsh_home)
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone log: {e}"))?))
         .stderr(Stdio::from(log))
@@ -1693,6 +1755,13 @@ mod tests {
         path
     }
 
+    fn scratch_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("dsh-desktop-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
     #[test]
     fn sweep_decision_truth_table() {
         use SweepDecision::{Forget, Keep, Reap};
@@ -1726,6 +1795,46 @@ mod tests {
         fs::write(&path, b"{not json").unwrap();
         assert!(load_registry(&path).is_empty(), "corrupt file reads as empty");
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bundled_plugin_links_runtime_owned_peers_and_profile_identity() {
+        let root = scratch_dir("plugin-runtime-links");
+        let runtime_cwd = root.join("runtime/dsh");
+        let peer = runtime_cwd.join("node_modules/@deepseek-ai/dsh-llm");
+        fs::create_dir_all(&peer).unwrap();
+        let isolated = runtime_cwd.join(
+            "node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.0/node_modules/@deepseek-ai/dsh-agent",
+        );
+        fs::create_dir_all(&isolated).unwrap();
+        let runtime = Runtime {
+            node: PathBuf::from("node"),
+            args_prefix: Vec::new(),
+            cli: PathBuf::from("dsh"),
+            cwd: runtime_cwd,
+            path_prepend: Vec::new(),
+        };
+        assert_eq!(
+            fs::canonicalize(resolve_runtime_package(&runtime, "@deepseek-ai/dsh-agent").unwrap()).unwrap(),
+            fs::canonicalize(&isolated).unwrap()
+        );
+
+        let plugin = root.join("plugin");
+        fs::create_dir_all(&plugin).unwrap();
+        fs::write(plugin.join(".ok"), "hash\n").unwrap();
+        ensure_bundled_plugin_runtime_links(&plugin, &runtime, &["@deepseek-ai/dsh-llm"]).unwrap();
+        assert_eq!(
+            fs::canonicalize(plugin.join("node_modules/@deepseek-ai/dsh-llm")).unwrap(),
+            fs::canonicalize(peer).unwrap()
+        );
+
+        let dsh_home = root.join("home");
+        let profile_link = dsh_home.join("profiles/web/node_modules").join(COMPACTION_PACKAGE);
+        fs::create_dir_all(profile_link.parent().unwrap()).unwrap();
+        link_dir(&plugin, &profile_link).unwrap();
+        assert!(plugin_already_in_profile(&plugin, COMPACTION_PACKAGE, &dsh_home));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

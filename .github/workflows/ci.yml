@@ -43,17 +43,25 @@ jobs:
           cache-dependency-path: |
             harness/pnpm-lock.yaml
             plugin/dsh-desktop-bridge/pnpm-lock.yaml
+            plugin/dsh-compaction-hierarchical/pnpm-lock.yaml
       - name: Install harness
         working-directory: harness
         run: pnpm install --frozen-lockfile
       - name: Build harness (lib/types the plugin typechecks against)
         working-directory: harness
         run: pnpm run build
-      - name: Plugin setup + checks
+      - name: Bridge setup + checks
         working-directory: plugin/dsh-desktop-bridge
         run: |
           pnpm install --no-frozen-lockfile
           DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm run setup
+          pnpm run typecheck
+          pnpm run test
+          pnpm run build
+      - name: Hierarchical compaction checks
+        working-directory: plugin/dsh-compaction-hierarchical
+        run: |
+          pnpm install --frozen-lockfile
           pnpm run typecheck
           pnpm run test
           pnpm run build
@@ -66,8 +74,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       # tauri_build validates src-tauri/resources exist at cargo-check time;
-      # they are gitignored and produced by desktop:prepare (bridge build +
-      # runtime assembly + tarballs). Bare cargo check on a fresh checkout
+      # they are gitignored and produced by desktop:prepare (desktop plugin
+      # builds + runtime assembly + tarballs). Bare cargo check on a fresh checkout
       # always failed — prepare first, doubling as a runtime-assembly smoke.
       # (The Windows job below uses placeholder resources instead: a full
       # hoisted runtime assembly on windows runners is not worth the minutes
@@ -96,8 +104,9 @@ jobs:
           cache-dependency-path: |
             harness/pnpm-lock.yaml
             plugin/dsh-desktop-bridge/pnpm-lock.yaml
-      # desktop:prepare typechecks the bridge (its step 1) before assembling
-      # the runtime, and the dsh anchor points here — the tree must carry
+            plugin/dsh-compaction-hierarchical/pnpm-lock.yaml
+      # desktop:prepare checks both bundled plugins before assembling the
+      # runtime, and the bridge's dsh anchor points here — the tree must carry
       # node_modules and built lib/types or every @deepseek-ai/* import fails
       # to resolve (the run red at 04:06 skipped these two steps).
       - name: Install harness
@@ -106,11 +115,11 @@ jobs:
       - name: Build harness (lib/types the bridge typechecks against)
         working-directory: harness
         run: pnpm run build
-      - name: Bridge deps + anchor (prepare builds the bridge tarball)
-        working-directory: plugin/dsh-desktop-bridge
+      - name: Desktop plugin deps + bridge anchor
         run: |
-          pnpm install --no-frozen-lockfile
-          DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm run setup
+          pnpm --dir plugin/dsh-desktop-bridge install --no-frozen-lockfile
+          DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm --dir plugin/dsh-desktop-bridge run setup
+          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
       - name: Prepare bundle resources
         run: pnpm run desktop:prepare
       - name: cargo check
@@ -130,6 +139,7 @@ jobs:
           mkdir -p src-tauri/resources
           : > src-tauri/resources/runtime.tar.gz
           : > src-tauri/resources/bridge.tar.gz
+          : > src-tauri/resources/compaction-hierarchical.tar.gz
           echo '{}' > src-tauri/resources/runtime-revision.json
       - name: cargo test
         working-directory: src-tauri

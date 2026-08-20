@@ -81,17 +81,17 @@ jobs:
           rm -f /tmp/devg2ca.cer
           security find-identity -v -p codesigning build.keychain
 
-      - name: Prepare deps and the bridge type anchor
+      - name: Prepare desktop plugin deps and bridge type anchor
         run: |
           set -euo pipefail
           pnpm install
           # Prime the fork clone (prepare-runtime is idempotent; cache hits
-          # make this seconds), then point the bridge's dsh symlink at it so
-          # plugin:check inside the bundle step typechecks against harness
-          # sources, and install its devDeps.
+          # make this seconds), then point the bridge's dsh symlink at it and
+          # install both desktop-owned plugins' devDeps before bundle checks.
           node scripts/prepare-runtime.mjs
           DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-desktop-bridge install
+          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
 
       - name: Build signed + notarized bundle
         env:
@@ -177,7 +177,7 @@ jobs:
           restore-keys: |
             runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-
 
-      - name: Prepare deps and the bridge type anchor
+      - name: Prepare desktop plugin deps and bridge type anchor
         shell: bash
         run: |
           set -euo pipefail
@@ -185,6 +185,7 @@ jobs:
           node scripts/prepare-runtime.mjs
           DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-desktop-bridge install
+          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
 
       # NOTE: the certificate presence check lives INSIDE the script — the
       # `secrets` context is not allowed in a step-level `if:` (GitHub rejects
