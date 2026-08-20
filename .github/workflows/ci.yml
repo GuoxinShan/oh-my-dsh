@@ -19,10 +19,12 @@ jobs:
       - name: Resolve harness baseline from runtime/revision.json
         id: baseline
         run: |
+          # Upstream tags keep the leading v (dsh-v0.1.0-rc.8); stripping it
+          # here fabricated dsh-0.1.0-rc.8 and checkout failed on fetch.
           ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
-          base="${ref%+zw.*}"; base="${base#v}"
+          base="${ref%+zw.*}"
           case "$base" in
-            *.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            v*.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
             *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
           esac
       - uses: actions/checkout@v4
@@ -70,10 +72,12 @@ jobs:
       - name: Resolve harness baseline from runtime/revision.json
         id: baseline
         run: |
+          # Upstream tags keep the leading v (dsh-v0.1.0-rc.8); stripping it
+          # here fabricated dsh-0.1.0-rc.8 and checkout failed on fetch.
           ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
-          base="${ref%+zw.*}"; base="${base#v}"
+          base="${ref%+zw.*}"
           case "$base" in
-            *.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            v*.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
             *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
           esac
       - uses: actions/checkout@v4
