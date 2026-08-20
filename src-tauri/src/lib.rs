@@ -1,13 +1,14 @@
 //! Desktop shell for the DeepSeek Harness web UI (M1).
 //!
 //! One run: find the harness checkout, idempotently install the
-//! desktop-bridge plugin into the web profile, spawn `dsh web` on a random
-//! loopback port with the user's real `~/.dsh` as DSH_HOME (the desktop IS
-//! another face of the same account), poll `GET /` until ready, then open the
-//! main window with the desktop gate signal injected. Sidecar output is teed
-//! to a per-boot `desktop-<timestamp>.log` under the shared harness log
-//! directory (the `web:log` convention). IPC command backends implement the
-//! contract table in the repository AGENTS.md.
+//! desktop-bridge plugin into the web profile (soft-degrade + user alert on
+//! failure — do not brick boot for a broken profile), spawn `dsh web` on a
+//! random loopback port with the user's real `~/.dsh` as DSH_HOME (the
+//! desktop IS another face of the same account), poll `GET /` until ready,
+//! then open the main window with the desktop gate signal injected. Sidecar
+//! output is teed to a per-boot `desktop-<timestamp>.log` under the shared
+//! harness log directory (the `web:log` convention). IPC command backends
+//! implement the contract table in the repository AGENTS.md.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -55,9 +56,15 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle().clone();
             std::thread::spawn(move || match boot_sequence(&app_handle) {
-                Ok(()) => {}
+                Ok(warnings) => {
+                    for warning in warnings {
+                        eprintln!("dsh-desktop: boot warning: {}", warning.message);
+                        alert_user(&warning.title, &warning.message);
+                    }
+                }
                 Err(error) => {
                     eprintln!("dsh-desktop: boot failed: {error}");
+                    alert_user("无法启动 DeepSeek Harness", &error);
                     app_handle.exit(1);
                 }
             });
@@ -121,12 +128,21 @@ fn kill_sidecar() {
     unregister_sidecar(pid);
 }
 
+/// Non-fatal boot issue: window still opens, but the user should know.
+struct BootWarning {
+    title: String,
+    message: String,
+}
+
 /// Boot to a ready window: sidecar spawn, readiness, window creation.
-fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
+/// Bridge install failures degrade (window still opens) instead of aborting —
+/// a broken web profile must not brick the whole desktop shell.
+fn boot_sequence(app: &tauri::AppHandle) -> Result<Vec<BootWarning>, String> {
     let runtime = find_runtime(app)?;
     let bridge = find_bridge(app)?;
     let logs = shell_root()?;
     let dsh_home = dsh_home()?;
+    let mut warnings = Vec::new();
 
     // Reap sidecars orphaned by a previous shell before adding our own:
     // a `tauri dev` watcher restart SIGKILLs the app outright (see the
@@ -143,11 +159,78 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
         }
     }
 
-    // The bridge row must be in the profile before the server scans it.
-    run_plugin_install(&runtime, &bridge, &dsh_home, &logs)?;
-    // After the profile install (so pnpm never packs the link): give the
-    // extracted bridge its cordis peer (see ensure_bridge_cordis_link).
-    ensure_bridge_cordis_link(&bridge, &runtime);
+    // Prefer the bridge in the profile before the server scans it. Failure is
+    // soft: offer a user-confirmed lockfile repair, else degrade and open
+    // the window (desktop-only affordances stay inert without the bridge).
+    match run_plugin_install(&runtime, &bridge, &dsh_home, &logs) {
+        Ok(()) => {
+            ensure_bridge_cordis_link(&bridge, &runtime);
+        }
+        Err(reason) => {
+            let detail = summarize_install_failure(&logs, &reason);
+            let plugins_line = if detail.implicated_plugins.is_empty() {
+                "涉及插件：dsh-desktop-bridge（桌面桥）".to_string()
+            } else {
+                format!(
+                    "涉及插件：dsh-desktop-bridge（桌面桥）。web profile 里还可能有问题的依赖：{}",
+                    detail.implicated_plugins.join("、")
+                )
+            };
+            let prompt = format!(
+                "{plugins_line}\n\n\
+                 原因：{}\n\n\
+                 「修复并重试」会刷新 web profile 的锁文件（不删除其它插件）后再装桌面桥。\n\
+                 「继续降级」则照常开窗，外链/通知/标题栏融合暂不可用。\n\n\
+                 详情：{}",
+                detail.summary,
+                logs.join("logs/install.log").display()
+            );
+            eprintln!(
+                "dsh-desktop: bridge install failed ({reason}); asking user to repair or degrade"
+            );
+            if alert_user_confirm(
+                "桌面桥未能启用",
+                &prompt,
+                "修复并重试",
+                "继续降级",
+            ) {
+                match repair_web_profile_and_retry_bridge(&runtime, &bridge, &dsh_home, &logs) {
+                    Ok(()) => {
+                        ensure_bridge_cordis_link(&bridge, &runtime);
+                        println!("dsh-desktop: bridge install recovered after user-confirmed repair");
+                    }
+                    Err(repair_err) => {
+                        let after = summarize_install_failure(&logs, &repair_err);
+                        warnings.push(BootWarning {
+                            title: "修复未成功（已降级启动）".into(),
+                            message: format!(
+                                "{plugins_line}\n\n\
+                                 已按你的选择尝试修复，仍然失败；其它功能照常。\n\n\
+                                 原因：{}\n\n\
+                                 详情：{}",
+                                after.summary,
+                                logs.join("logs/install.log").display()
+                            ),
+                        });
+                        eprintln!("dsh-desktop: repair failed ({repair_err}); continuing degraded");
+                    }
+                }
+            } else {
+                warnings.push(BootWarning {
+                    title: "桌面桥未能启用（已降级启动）".into(),
+                    message: format!(
+                        "{plugins_line}\n\n\
+                         外链路由、系统通知、标题栏融合等桌面能力暂不可用；其它功能照常。\n\n\
+                         原因：{}\n\n\
+                         详情：{}",
+                        detail.summary,
+                        logs.join("logs/install.log").display()
+                    ),
+                });
+                eprintln!("dsh-desktop: user chose degrade; continuing without desktop bridge");
+            }
+        }
+    }
 
     let port = free_port()?;
     let url = format!("http://127.0.0.1:{port}");
@@ -163,7 +246,7 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
 
     let e2e = std::env::var("DSH_DESKTOP_E2E_PROBE").ok().as_deref() == Some("1");
     open_main_window(app, &url, e2e)?;
-    Ok(())
+    Ok(warnings)
 }
 
 /// Locate the harness checkout (dev source fallback only — runtime/build and
@@ -661,6 +744,9 @@ fn dsh_home() -> Result<PathBuf, String> {
 /// pnpm versions flap between machines (store v10 vs v11): when the install
 /// fails on the store-mismatch error, relink the profile with a plain
 /// `pnpm install` through the dsh CLI's own recovery and retry once.
+///
+/// On final failure returns `Err(reason)` so the caller can degrade (open
+/// the window without the bridge) instead of aborting the whole boot.
 fn run_plugin_install(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &Path) -> Result<(), String> {
     if bridge_already_in_profile(bridge, dsh_home) {
         println!("dsh-desktop: bridge already in web profile, skip plugin add");
@@ -670,10 +756,313 @@ fn run_plugin_install(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: &
         Ok(()) => Ok(()),
         Err(first) => {
             eprintln!("dsh-desktop: plugin install failed once ({first}); relinking the profile and retrying");
-            relink_profile(runtime, dsh_home, logs)?;
-            plugin_install_once(runtime, bridge, dsh_home, logs)
+            if let Err(relink_err) = relink_profile(runtime, dsh_home, logs) {
+                return Err(format!("{first}; then relink failed: {relink_err}"));
+            }
+            plugin_install_once(runtime, bridge, dsh_home, logs).map_err(|second| {
+                format!("{first}; after relink still failed: {second}")
+            })
         }
     }
+}
+
+/// Parsed view of `~/.dsh-desktop/logs/install.log` for user-facing alerts.
+struct InstallFailureDetail {
+    summary: String,
+    implicated_plugins: Vec<String>,
+}
+
+/// Turn the install log (+ short shell reason) into a concise Chinese summary
+/// and a best-effort list of packages that look involved.
+fn summarize_install_failure(logs: &Path, shell_reason: &str) -> InstallFailureDetail {
+    let log_path = logs.join("logs/install.log");
+    let text = fs::read_to_string(&log_path).unwrap_or_default();
+    let tail = {
+        let bytes = text.as_bytes();
+        let start = bytes.len().saturating_sub(12_000);
+        // Avoid splitting a UTF-8 codepoint.
+        let start = (start..bytes.len())
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(start);
+        &text[start..]
+    };
+    let implicated = extract_implicated_packages(tail);
+    let summary = if tail.contains("ERR_PNPM_OUTDATED_LOCKFILE") {
+        "web profile 的 pnpm-lock.yaml 与 package.json 不一致（常因终端侧改过插件依赖）".to_string()
+    } else if tail.contains("ERR_PNPM_ADDING_TO_ROOT") {
+        "web profile 被标成 pnpm workspace 根，plugin add 被拒绝".to_string()
+    } else if let Some(line) = tail
+        .lines()
+        .rev()
+        .find(|l| l.contains("ERR_PNPM_") || l.contains("dsh: pnpm failed"))
+    {
+        line.trim().to_string()
+    } else if !shell_reason.is_empty() {
+        shell_reason.to_string()
+    } else {
+        "未知错误（见 install.log）".to_string()
+    };
+    InstallFailureDetail {
+        summary,
+        implicated_plugins: implicated,
+    }
+}
+
+/// Pull package names out of common pnpm mismatch / dependency lines.
+fn extract_implicated_packages(log_tail: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let push = |out: &mut Vec<String>, name: &str| {
+        let name = name.trim().trim_matches(|c| c == '"' || c == '\'' || c == ',');
+        if name.is_empty() || out.iter().any(|x| x == name) {
+            return;
+        }
+        // Prefer scoped / dsh-* plugin-looking ids; skip bare npm noise.
+        if name.starts_with('@') || name.starts_with("dsh-") {
+            out.push(name.to_string());
+        }
+    };
+    for line in log_tail.lines() {
+        // specifiers in the lockfile ({"@scope/pkg":"..." , ...})
+        if let Some(idx) = line.find('"') {
+            let mut rest = &line[idx..];
+            while let Some(start) = rest.find('"') {
+                let after = &rest[start + 1..];
+                if let Some(end) = after.find('"') {
+                    let token = &after[..end];
+                    if token.contains('/') || token.starts_with("dsh-") {
+                        push(&mut out, token);
+                    }
+                    rest = &after[end + 1..];
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    // Cap so the alert stays readable.
+    out.truncate(8);
+    out
+}
+
+/// Blocking native alert (best effort). Used for boot failures and soft
+/// degrade notices — Gatekeeper-safe, no extra Tauri plugin.
+fn alert_user(title: &str, message: &str) {
+    let esc_osa = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .chars()
+            .take(900)
+            .collect::<String>()
+    };
+    let status = match std::env::consts::OS {
+        "macos" => {
+            let body = message
+                .lines()
+                .map(|line| format!("\"{}\"", esc_osa(line)))
+                .collect::<Vec<_>>()
+                .join(" & return & ");
+            let body = if body.is_empty() {
+                "\"\"".to_string()
+            } else {
+                body
+            };
+            Command::new("osascript")
+                .arg("-e")
+                .arg(format!(
+                    "display alert \"{}\" message ({}) as warning",
+                    esc_osa(title),
+                    body
+                ))
+                .status()
+        }
+        "windows" => windows_message_box(title, message),
+        _ => {
+            let zenity = Command::new("zenity")
+                .args(["--warning", "--title", title, "--text", message, "--width=480"])
+                .status();
+            match zenity {
+                Ok(s) if s.success() => Ok(s),
+                _ => Command::new("notify-send").arg(title).arg(message).status(),
+            }
+        }
+    };
+    if let Err(e) = status {
+        eprintln!("dsh-desktop: alert_user failed: {e}");
+    }
+}
+
+/// Two-button confirm. Returns `true` when the user picks `confirm_label`.
+/// On dialog failure, returns `false` (safe default = degrade / dismiss).
+fn alert_user_confirm(title: &str, message: &str, confirm_label: &str, cancel_label: &str) -> bool {
+    let esc_osa = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .chars()
+            .take(900)
+            .collect::<String>()
+    };
+    match std::env::consts::OS {
+        "macos" => {
+            let body = message
+                .lines()
+                .map(|line| format!("\"{}\"", esc_osa(line)))
+                .collect::<Vec<_>>()
+                .join(" & return & ");
+            let body = if body.is_empty() {
+                "\"\"".to_string()
+            } else {
+                body
+            };
+            let script = format!(
+                "set r to display alert \"{}\" message ({}) as warning \
+                 buttons {{\"{}\", \"{}\"}} default button \"{}\" cancel button \"{}\"\n\
+                 return button returned of r",
+                esc_osa(title),
+                body,
+                esc_osa(cancel_label),
+                esc_osa(confirm_label),
+                esc_osa(confirm_label),
+                esc_osa(cancel_label),
+            );
+            match Command::new("osascript").arg("-e").arg(&script).output() {
+                Ok(out) if out.status.success() => {
+                    let got = String::from_utf8_lossy(&out.stdout);
+                    got.trim() == confirm_label
+                }
+                Ok(out) => {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    if !err.trim().is_empty() {
+                        eprintln!("dsh-desktop: alert confirm cancelled: {}", err.trim());
+                    }
+                    false
+                }
+                Err(e) => {
+                    eprintln!("dsh-desktop: alert_user_confirm failed: {e}");
+                    false
+                }
+            }
+        }
+        "windows" => windows_confirm(title, message, confirm_label, cancel_label),
+        _ => {
+            let text = format!("{message}\n\n选「是」= {confirm_label}；「否」= {cancel_label}");
+            match Command::new("zenity")
+                .args([
+                    "--question",
+                    "--title",
+                    title,
+                    "--text",
+                    &text,
+                    "--ok-label",
+                    confirm_label,
+                    "--cancel-label",
+                    cancel_label,
+                    "--width=520",
+                ])
+                .status()
+            {
+                Ok(s) => s.success(),
+                Err(e) => {
+                    eprintln!("dsh-desktop: alert_user_confirm zenity failed: {e}");
+                    alert_user(title, message);
+                    false
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_message_box(title: &str, message: &str) -> std::io::Result<std::process::ExitStatus> {
+    let ps_esc = |s: &str| s.replace('\'', "''").chars().take(900).collect::<String>();
+    let script = format!(
+        "Add-Type -AssemblyName PresentationFramework; \
+         [System.Windows.MessageBox]::Show('{}','{}','OK','Warning') | Out-Null",
+        ps_esc(message),
+        ps_esc(title)
+    );
+    let encoded = utf16_le_base64(&script);
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]);
+    hide_console(&mut command);
+    command.status()
+}
+
+#[cfg(windows)]
+fn windows_confirm(title: &str, message: &str, confirm_label: &str, cancel_label: &str) -> bool {
+    let ps_esc = |s: &str| s.replace('\'', "''").chars().take(900).collect::<String>();
+    let body = format!(
+        "{}\n\n是 = {}\n否 = {}",
+        message, confirm_label, cancel_label
+    );
+    let script = format!(
+        "Add-Type -AssemblyName PresentationFramework; \
+         $r = [System.Windows.MessageBox]::Show('{}','{}','YesNo','Warning'); \
+         if ($r -eq 'Yes') {{ exit 0 }} else {{ exit 1 }}",
+        ps_esc(&body),
+        ps_esc(title)
+    );
+    let encoded = utf16_le_base64(&script);
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded]);
+    hide_console(&mut command);
+    match command.status() {
+        Ok(s) => s.success(),
+        Err(e) => {
+            eprintln!("dsh-desktop: windows_confirm failed: {e}");
+            false
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_message_box(_title: &str, _message: &str) -> std::io::Result<std::process::ExitStatus> {
+    unreachable!("windows_message_box is only called on Windows")
+}
+
+#[cfg(not(windows))]
+fn windows_confirm(_title: &str, _message: &str, _confirm: &str, _cancel: &str) -> bool {
+    unreachable!("windows_confirm is only called on Windows")
+}
+
+/// User-confirmed repair: allow workspace-root adds, refresh the lockfile
+/// without frozen CI, then retry bridge `plugin add`. Does not remove other
+/// profile plugins.
+fn repair_web_profile_and_retry_bridge(
+    runtime: &Runtime,
+    bridge: &Path,
+    dsh_home: &Path,
+    logs: &Path,
+) -> Result<(), String> {
+    ensure_profile_allows_root_add(dsh_home)?;
+    relink_profile_unfrozen(runtime, dsh_home, logs)?;
+    plugin_install_once(runtime, bridge, dsh_home, logs)
+}
+
+/// Idempotently set `ignore-workspace-root-check=true` on the web profile
+/// `.npmrc` so `pnpm add` works when the profile is itself a workspace root.
+fn ensure_profile_allows_root_add(dsh_home: &Path) -> Result<(), String> {
+    let npmrc = dsh_home.join("profiles/web/.npmrc");
+    let existing = fs::read_to_string(&npmrc).unwrap_or_default();
+    if existing
+        .lines()
+        .any(|l| l.trim() == "ignore-workspace-root-check=true")
+    {
+        return Ok(());
+    }
+    let mut next = existing;
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    next.push_str("ignore-workspace-root-check=true\n");
+    if let Some(parent) = npmrc.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir profile: {e}"))?;
+    }
+    fs::write(&npmrc, next).map_err(|e| format!("write {}: {e}", npmrc.display()))?;
+    println!(
+        "dsh-desktop: wrote ignore-workspace-root-check to {}",
+        npmrc.display()
+    );
+    Ok(())
 }
 
 /// True when the web profile already points at this extracted bridge.
@@ -712,30 +1101,74 @@ fn plugin_install_once(runtime: &Runtime, bridge: &Path, dsh_home: &Path, logs: 
     Ok(())
 }
 
-/// Relink the profile's node_modules with a plain install (recovers from a
-/// pnpm store-version mismatch: node_modules linked from a store built by a
-/// different pnpm major). Runs the same dsh CLI the plugin command uses.
+/// Relink with `CI=true` (frozen) — automatic first-fail recovery for store
+/// major mismatch. Must not rewrite the user's lockfile without consent.
 fn relink_profile(runtime: &Runtime, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+    profile_install(runtime, dsh_home, logs, true)
+}
+
+/// Relink without CI — may refresh `pnpm-lock.yaml` to match package.json.
+/// Only after the user confirms repair in the boot dialog.
+fn relink_profile_unfrozen(runtime: &Runtime, dsh_home: &Path, logs: &Path) -> Result<(), String> {
+    profile_install(runtime, dsh_home, logs, false)
+}
+
+fn profile_install(
+    runtime: &Runtime,
+    dsh_home: &Path,
+    logs: &Path,
+    frozen_ci: bool,
+) -> Result<(), String> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(logs.join("logs/install.log"))
         .map_err(|e| format!("open install log: {e}"))?;
-    let status = cli_command(runtime)
+    let mut command = cli_command(runtime);
+    command
         .arg("plugin")
         .arg("--profile")
         .arg("web")
         .arg("install")
         .env("DSH_HOME", dsh_home)
-        .env("CI", "true")
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone log: {e}"))?))
-        .stderr(Stdio::from(log))
+        .stderr(Stdio::from(log));
+    if frozen_ci {
+        command.env("CI", "true");
+    } else {
+        // Ensure a parent shell's CI=true does not freeze the repair path.
+        command.env_remove("CI");
+    }
+    let status = command
         .status()
-        .map_err(|e| format!("run profile relink: {e}"))?;
+        .map_err(|e| format!("run profile install: {e}"))?;
     if !status.success() {
-        return Err(format!("profile relink failed with {status}"));
+        return Err(format!(
+            "profile install failed with {status} ({})",
+            if frozen_ci {
+                "frozen"
+            } else {
+                "unfrozen repair"
+            }
+        ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod install_failure_tests {
+    use super::extract_implicated_packages;
+
+    #[test]
+    fn extracts_scoped_packages_from_lockfile_mismatch() {
+        let sample = r#"
+ ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with "frozen-lockfile"
+    specifiers in the lockfile ({"@dsh-yzj/bridge":"link:/x","@dsh-yzj/bundle":"link:/y"}) don't match specs in package.json ({"@dsh-yzj/bundle":"link:/z"})
+"#;
+        let pkgs = extract_implicated_packages(sample);
+        assert!(pkgs.iter().any(|p| p == "@dsh-yzj/bridge"));
+        assert!(pkgs.iter().any(|p| p == "@dsh-yzj/bundle"));
+    }
 }
 
 /// Ask the OS for one free loopback port.
