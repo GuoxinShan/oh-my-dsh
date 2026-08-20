@@ -1,0 +1,4 @@
+# Install-only profile bundle. Compaction is owned by each agent preset's
+# isolated `compaction` realm in rc.8, so activation must retarget that preset's
+# `compaction-basic` row instead of publishing a process-global service here.
+[]

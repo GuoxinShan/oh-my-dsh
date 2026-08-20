@@ -427,13 +427,24 @@ jobs:
             echo "变更见包内 CHANGELOG / README。"
           } > /tmp/release-body.md
 
-      - name: Package the plugin subtree (git archive)
+      - name: Package the plugin subtree and built artifacts
         run: |
           set -euo pipefail
           NAME=${{ steps.plugin.outputs.name }}
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          STAGE=$(mktemp -d)
+          trap 'rm -rf "$STAGE"' EXIT
           mkdir -p dist
-          git archive --format=tar.gz --prefix="$NAME/" -o "dist/$NAME-${{ steps.plugin.outputs.version }}.tar.gz" "$TAG:plugin/$NAME"
+          # Start from the immutable tag snapshot, then overlay lib/ produced by
+          # the build step. `git archive` alone cannot see ignored artifacts and
+          # previously emitted unusable tarballs for source-only plugin trees.
+          git archive --format=tar --prefix="$NAME/" "$TAG:plugin/$NAME" | tar -xf - -C "$STAGE"
+          if [ "${{ steps.npm.outputs.has_build }}" = "true" ]; then
+            [ -d "plugin/$NAME/lib" ] || { echo "::error::plugin/$NAME build produced no lib/"; exit 1; }
+            rm -rf "$STAGE/$NAME/lib"
+            cp -R "plugin/$NAME/lib" "$STAGE/$NAME/lib"
+          fi
+          tar -C "$STAGE" -czf "dist/$NAME-${{ steps.plugin.outputs.version }}.tar.gz" "$NAME"
 
       # 插件 Release 绝不抢 latest 指针（见文件头注释）。
       - name: Publish GitHub Release (never latest)

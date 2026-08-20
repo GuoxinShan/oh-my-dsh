@@ -1,0 +1,60 @@
+{
+  "name": "dsh-compaction-hierarchical",
+  "version": "0.1.0",
+  "description": "Hierarchical map-reduce compaction backend for migrating DeepSeek Harness conversations to smaller-context models",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown",
+    "watch": "tsdown --watch",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "preset-snippet.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "compaction",
+    "map-reduce"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1 <5",
+    "@deepseek-ai/dsh-agent": ">=0.1.0-rc.8 <0.2",
+    "@deepseek-ai/dsh-compaction-basic": ">=0.1.0-rc.8 <0.2",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.8 <0.2",
+    "@deepseek-ai/dsh-token-meter": ">=0.1.0-rc.8 <0.2",
+    "@deepseek-ai/schemastery": ">=3.18.1 <4"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-compaction-basic": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-token-meter": "0.1.0-rc.8",
+    "@deepseek-ai/schemastery": "3.18.1",
+    "@types/node": "^24.13.3",
+    "tsdown": "^0.22.2",
+    "tsx": "^4.19.2",
+    "typescript": "^6.0.3"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

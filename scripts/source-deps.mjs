@@ -29,7 +29,11 @@ const REGISTRY = {
   '@deepseek-ai/cordis': '4.0.1',
   '@deepseek-ai/cordis-plugin-timer': '1.1.3',
   '@deepseek-ai/schemastery': '3.18.1',
-  '@deepseek-ai/dsh-llm': '0.1.0-rc.7',
+  '@deepseek-ai/dsh-agent': '0.1.0-rc.8',
+  '@deepseek-ai/dsh-compaction-basic': '0.1.0-rc.8',
+  '@deepseek-ai/dsh-llm': '0.1.0-rc.8',
+  '@deepseek-ai/dsh-session': '0.1.0-rc.8',
+  '@deepseek-ai/dsh-token-meter': '0.1.0-rc.8',
   '@deepseek-ai/dsh-settings': '0.1.0-rc.7',
   '@deepseek-ai/dsh-credentials': '0.1.0-rc.7',
   '@deepseek-ai/dsh-typert-protocol': '0.1.0-rc.7',
@@ -45,7 +49,11 @@ const SOURCE = {
   '@deepseek-ai/cordis': 'vendor/cordis',
   '@deepseek-ai/cordis-plugin-timer': 'vendor/timer',
   '@deepseek-ai/schemastery': 'vendor/schemastery',
+  '@deepseek-ai/dsh-agent': 'packages/core/agent',
+  '@deepseek-ai/dsh-compaction-basic': 'packages/compaction/compaction-basic',
   '@deepseek-ai/dsh-llm': 'packages/llm/llm',
+  '@deepseek-ai/dsh-session': 'packages/core/session',
+  '@deepseek-ai/dsh-token-meter': 'packages/llm/token-meter',
   '@deepseek-ai/dsh-settings': 'packages/settings/settings',
   '@deepseek-ai/dsh-credentials': 'packages/credentials/credentials',
   '@deepseek-ai/dsh-typert-protocol': 'packages/typert/protocol',
@@ -58,6 +66,7 @@ const SOURCE = {
 
 /** Plugin packages managed by this switcher. */
 const PLUGINS = [
+  'dsh-compaction-hierarchical',
   'dsh-reasoning-efforts',
   'dsh-web-search-toggle',
 ]

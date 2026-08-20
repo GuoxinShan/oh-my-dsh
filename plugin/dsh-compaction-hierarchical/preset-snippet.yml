@@ -1,0 +1,12 @@
+# Replace only the provider row inside a copied user preset's existing
+# `compaction` isolate group. Keep command-compact and tool-result-pruner beside it.
+- id: compaction-basic
+  name: dsh-compaction-hierarchical
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    chunkInputRatio: 0.6
+    mapMaxTokens: 4096
+    reduceMaxTokens: 8192
+    maxDepth: 4
+    replayTools: false
