@@ -18,12 +18,12 @@
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 5
+const SCRIPT_REV = 6
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
@@ -227,31 +227,71 @@ const finalOverrides = { ...BASELINE_PIN, ...overrides }
 // passes the same --import for bundled runs).
 const runtimeDir = resolve(outDir, 'dsh')
 mkdirSync(runtimeDir, { recursive: true })
-// The fork set rides as DIRECT dependencies, not only overrides: a `npm:`
-// alias override reaches ordinary dependency edges, but the hoist fallback
-// (`.pnpm/node_modules`) and peer resolutions can still bind the official
-// upstream copy — observed when upstream's rc.8 matched a `^0.1.0-rc.7`
-// range and the composition loaded the unpatched registry build. Direct deps
-// always resolve the alias, and peers/hoists then bind to that instance.
+// Overrides MUST live in pnpm-workspace.yaml: pnpm 11 dropped support for the
+// package.json `pnpm.overrides` field, and under pnpm 11 the runtime manifest's
+// overrides were silently IGNORED — every ^range edge resolved to the official
+// registry while the same tree kept passing the version-equality scan (same
+// rc.8 on both sides, two module builds, split unique-symbol registries: the
+// 2026-08-20 zw.4 release failure). pnpm 10 reads the yaml form too.
+// Override VALUES stay absolute file: paths (pnpm rejects `..` segments in
+// version unions); the direct-dependency edges below use relative specs so
+// the built tree relocates with the repo.
+const relSpec = (spec) => {
+  if (!spec.startsWith('file:')) return spec
+  return 'file:' + relative(runtimeDir, spec.slice('file:'.length))
+}
+const overrideLines = []
+for (const [name, spec] of Object.entries(finalOverrides)) {
+  overrideLines.push(`  '${name}': ${spec}`)
+}
 const forkDirectDeps = {}
 for (const name of FORK_MODIFIED) {
   const forkName = `${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`
   forkDirectDeps[name] = `npm:${forkName}@${forkNpmVersion}`
 }
+// EVERY packed tarball rides as a direct dependency too. Overrides reach only
+// ordinary dependency edges: host packages expose their seams as
+// peerDependencies (dsh-workflow-worker-thread et al. peer on @deepseek-ai/
+// dsh-tools/dsh-session/dsh-agent), and neither file: overrides NOR alias
+// overrides touch peer edges. Direct deps give peer resolution a root-level
+// tarball instance to bind; combined with autoInstallPeers:false (below) no
+// edge can pull the official registry build while upstream publishes the same
+// rc — the duplicate-instance failure mode behind `undefined (reading
+// 'prepare')` and the typert gateway losing /api/<remote>/* routes.
+const tarballDirectDeps = {}
+for (const [name, spec] of Object.entries(overrides)) {
+  if (spec.startsWith('file:')) tarballDirectDeps[name] = relSpec(spec)
+}
 writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
   private: true,
+  // Deterministic installer: the pnpm shim honors the nearest packageManager
+  // pin, so the runtime tree installs under the same major the repo pins
+  // instead of whatever pnpm the assembling shell defaults to.
+  packageManager: 'pnpm@10.28.0',
   dependencies: {
     ...forkDirectDeps,
+    ...tarballDirectDeps,
     '@deepseek-ai/dsh': `npm:${FORK_NPM_SCOPE}/dsh@${forkNpmVersion}`,
     tsx: '^4.19.2',
   },
-  pnpm: { overrides: finalOverrides },
 }, null, 2) + '\n')
-// Native build scripts the runtime legitimately needs (prebuilt downloads).
+// Build-script decisions. QUALIFIED `name@file:` keys are NOT usable here:
+// pnpm rejects file: specifiers in allowBuilds version unions
+// (ERR_PNPM_INVALID_VERSION_UNION) — bare-name keys match these deps fine
+// (verified: the spawn-helper chmod ran under pnpm 10.28). The vendored root
+// package's husky is noise; it fails safe as an ignored-build warning.
 writeFileSync(resolve(runtimeDir, 'pnpm-workspace.yaml'), [
+  // Peers resolve from ancestors only: auto-install would fetch registry
+  // builds for unsatisfied peer ranges, the exact leak this assembly prevents.
+  'autoInstallPeers: false',
+  // All inputs are fork tarballs or pinned registry deps; the local supply-chain
+  // release-age guard (if configured globally) has nothing to add here.
+  'minimumReleaseAge: 0',
+  'overrides:',
+  ...overrideLines,
   'allowBuilds:',
   '  node-pty: true',
-  '  \'@deepseek-ai/dsh-subprocess-local\': true',
+  "  '@deepseek-ai/dsh-subprocess-local': true",
   '  koffi: true',
   '  esbuild: true',
   '  protobufjs: false',
@@ -267,6 +307,12 @@ console.log('prepare-runtime: installing runtime tree...')
 rmSync(resolve(runtimeDir, 'pnpm-lock.yaml'), { force: true })
 rmSync(resolve(runtimeDir, 'node_modules'), { recursive: true, force: true })
 execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+// node-pty's spawn-helper needs its exec bit; the postinstall that restores it
+// may be skipped as an ignored build, so run the same idempotent chmod directly.
+{
+  const chmod = resolve(runtimeDir, 'node_modules/@deepseek-ai/dsh-subprocess-local/scripts/ensure-spawn-helper.mjs')
+  if (existsSync(chmod)) execFileSync('node', [chmod], { cwd: runtimeDir, stdio: 'pipe' })
+}
 
 // 4b. Fail loud if any fork-modified package still resolved to an official
 // registry copy: the fix above is structural, but a future pnpm peer-resolution
@@ -276,16 +322,33 @@ execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, std
   const { readdirSync } = await import('node:fs')
   const drifted = []
   const offBaseline = []
+  const duplicated = []
   const pnpmDir = resolve(runtimeDir, 'node_modules/.pnpm')
+  // package name -> whether any file: (packed tarball) instance exists
+  const packedNames = new Set()
   for (const entry of readdirSync(pnpmDir)) {
     // Non-greedy name + the LAST '@' before the version segment: dir names
     // embed peer suffixes ("pkg@ver_peer@ver"), so a greedy name group would
     // swallow the real version.
     const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
     if (hit === null) continue
+    if (hit[2].includes('file+')) packedNames.add(`@deepseek-ai/${hit[1]}`)
+  }
+  for (const entry of readdirSync(pnpmDir)) {
+    const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
+    if (hit === null) continue
     const pkg = `@deepseek-ai/${hit[1]}`
     const version = hit[2]
     if (FORK_MODIFIED.has(pkg)) drifted.push(`${pkg} (${entry})`)
+    // A registry-semver instance of a package that ALSO has a packed tarball
+    // instance is a duplicate module build regardless of version equality:
+    // same-version official copies passed the baseline scan below on
+    // 2026-08-20 while splitting every unique-symbol registry across the two
+    // instances (`undefined (reading 'prepare')`, lost typert routes). Only
+    // pack-skipped natives may exist as registry-only singletons.
+    if (!version.includes('file+') && packedNames.has(pkg)) {
+      duplicated.push(`${pkg}@${version} (tarball instance also present)`)
+    }
     // Tarball copies (file:+..) carry no version in the dir name beyond the
     // sha prefix; only registry copies spell a real version. The expected
     // version per package is the fork tree's own manifest (BASELINE_PIN), so
@@ -298,6 +361,12 @@ execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, std
   if (drifted.length > 0) {
     console.error('prepare-runtime: fork-modified packages resolved to official registry copies:')
     for (const line of drifted) console.error(`  ${line}`)
+    process.exit(1)
+  }
+  if (duplicated.length > 0) {
+    console.error('prepare-runtime: duplicate @deepseek-ai module instances (official registry copy beside the packed tarball):')
+    for (const line of duplicated) console.error(`  ${line}`)
+    console.error('  peer edges bypass file: overrides; the runtime manifest must carry every tarball as a direct dependency')
     process.exit(1)
   }
   if (offBaseline.length > 0) {
