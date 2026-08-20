@@ -8,7 +8,7 @@
 - Rust toolchain（rustup stable；Windows 需 MSVC）
 - Node 22+ / pnpm（`packageManager` 钉版本）
 - **runtime 在哪台机器组装就只能给哪台 OS 用**（native 模块 + node 二进制）。不要把 mac 的 `runtime/build` 拷到 Windows，反之亦然。
-- runtime 组装只依赖**公有** fork 仓库（`runtime/revision.json` 的 repo），无需任何私有凭据；本仓库（壳）本身是私有仓库，构建机需要有它的 checkout 权限
+- runtime 组装只依赖**公有** fork 仓库（`runtime/revision.json` 的 repo），本仓库与 runtime fork 都无需私有 checkout 凭据
 - Windows 另需 WebView2 Runtime（Win10/11 通常已带；NSIS 安装器在缺失时会下 bootstrapper）
 
 ## 1. 一键打包
@@ -37,6 +37,8 @@ DMG 窗口的观感由两处共同决定，改任何一处必须同步另一处�
 
 - `src-tauri/dmg/background.png` —— 窗口背景（标题文案 + 拖拽箭头 + 柔和底纹）。**由 `scripts/generate-dmg-background.py` 生成**（PIL；`pip install --user pillow`），不要手改 PNG。画布按 point 布局（660×400）以 2x 渲染（1320×800），保存时写 144 DPI 元数据——Finder 按 DPI 把背景映射回 point 尺寸（与 DropDMG「72/144 dpi」约定一致），Retina 下文字不糊；只画 1x 会糊，只画 2x 不写 DPI 会被放大裁切。
 - `tauri.conf.json` 的 `bundle.macOS.dmg` —— `windowSize` / `appPosition` / `applicationFolderPosition`。图标锚点（app 180,196 / Applications 480,196，图标尺寸 128 为 create-dmg 脚本默认值）与背景里的箭头两端严格对齐；改坐标要重新生成背景。
+
+Finder 是否真正采用这些设置取决于卷根的 `.DS_Store`，单有 `.background/background.png` 不够。Tauri 检测到 `CI=true` 时默认给 create-dmg 加 `--skip-jenkins`，会跳过生成 `.DS_Store` 的 Finder AppleScript；GitHub Release 的 macOS build 因此必须设置 `TAURI_BUNDLER_DMG_IGNORE_CI=true`。流水线在公证前安装固定版本的 `ds-store` 解析器并运行 `scripts/verify-dmg-layout.sh <dmg>`：挂载最终只读 DMG，核对 Finder 的背景图模式、窗口尺寸、图标尺寸与 app/Applications 坐标，再校验背景内容和 Applications 链接；任何退化都 fail loud、不发布。
 
 已知现象：挂载窗口里可能看到 `.VolumeIcon.icns`——它是 create-dmg 放的卷图标 dotfile，默认隐藏，只有 Finder 开了「显示隐藏文件」（Cmd+Shift+.）才会现身，属正常现象，所有 create-dmg 系安装包（含 tauri 默认）皆然。
 

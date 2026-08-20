@@ -44,9 +44,9 @@
 git tag v0.2.0-rc.2 && git push origin v0.2.0-rc.2
 ```
 
-推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → 构建 → Developer ID 签名 → Apple 公证 → DMG 单独公证）与 `desktop-windows`（同套 prepare，出 NSIS `*-setup.exe`）并行，`desktop-publish` 合并两份 updater fragment 为 `latest.json`（`darwin-aarch64` + `windows-x86_64`）后上传 Release（dmg、app.tar.gz(+ .sig)、setup.exe(+ .sig)、latest.json，`make_latest: true`）。任一侧失败则不发版，避免 latest.json 缺平台把该平台的自动更新打穿。
+推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → 构建 → 校验 DMG Finder 布局 → Developer ID 签名 → Apple 公证 → DMG 单独公证）与 `desktop-windows`（同套 prepare，出 NSIS `*-setup.exe`）并行，`desktop-publish` 合并两份 updater fragment 为 `latest.json`（`darwin-aarch64` + `windows-x86_64`）后上传 Release（自动生成 Release Notes；dmg、app.tar.gz(+ .sig)、setup.exe(+ .sig)、latest.json；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版，避免 latest.json 缺平台把该平台的自动更新打穿。macOS job 必须保留 `TAURI_BUNDLER_DMG_IGNORE_CI=true`：否则 Tauri 因 `CI=true` 跳过 Finder AppleScript，发布 DMG 会有背景文件却没有启用背景/布局的 `.DS_Store`。
 
-验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。
+验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。需要复核安装页时用临时 venv 安装 `ds-store==1.3.1`，再把该 venv 的 `bin` 放到 `PATH` 后执行 `bash scripts/verify-dmg-layout.sh <下载的.dmg>`；脚本会解析发布件的 Finder 记录，而不是只看构建目录。
 
 **插件**：
 
@@ -86,8 +86,9 @@ xcrun notarytool submit src-tauri/target/release/bundle/dmg/dsh-desktop_*_aarch6
 | 公证失败 | `xcrun notarytool log <submission-id> --apple-id … --password … --team-id …`（submission-id 在 build 日志或 `notarytool history` 里）；`path` 字段直接点名是哪个文件 |
 | 401 Unauthenticated | 凭据错：App 专用密码 ≠ 账号密码 ≠ ASC API 密钥（个人密钥不可用） |
 | `errSecInternalComponent` | keychain 授权丢了：重跑 `security set-key-partition-list -S apple-tool:,apple:` |
-| About 弹层「检查失败」 | 正常软失败路径：dev 构建无端点 / 离线 / Release 还没发过 latest.json |
-| 更新下载后校验失败 | tauri 私钥与包内公钥不匹配——重发版并确认 `TAURI_SIGNING_PRIVATE_KEY` 是当前这对 |
+| About 页面「检查失败」 | 正常软失败路径：dev 构建无端点 / 离线 / Release 还没发过 latest.json；修复后点「重试」即可重新检查 |
+| 更新下载后校验失败 | About 会保留目标版本并进入失败态；tauri 私钥与包内公钥不匹配时需重发版，并确认 `TAURI_SIGNING_PRIVATE_KEY` 是当前这对 |
+| DMG 安装页退化成默认布局 | `bash scripts/verify-dmg-layout.sh <dmg>`；若报 `.DS_Store` 缺失，检查 macOS build 是否保留 `TAURI_BUNDLER_DMG_IGNORE_CI=true` |
 
 ## 5. 开源注意事项
 

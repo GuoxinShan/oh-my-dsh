@@ -32,6 +32,18 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify release checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
+          HEAD_COMMIT=$(git rev-parse HEAD)
+          [ "$HEAD_COMMIT" = "$TAG_COMMIT" ] || { echo "::error::checkout $HEAD_COMMIT != $TAG ($TAG_COMMIT)"; exit 1; }
 
       # Guard: the tag must carry exactly the version in tauri.conf.json —
       # the classic "tag says X, code says Y" release mistake fails here.
@@ -49,6 +61,14 @@ jobs:
           node-version: 24
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Assert Cargo and Tauri versions match
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAURI_V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          CARGO_V=$(cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).packages.find((pkg) => pkg.name === 'dsh-desktop').version")
+          [ "$TAURI_V" = "$CARGO_V" ] || { echo "::error::tauri.conf.json version $TAURI_V != Cargo.toml version $CARGO_V"; exit 1; }
 
       - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
         uses: actions/cache@v4
@@ -101,6 +121,10 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Tauri otherwise passes create-dmg --skip-jenkins whenever CI=true.
+          # That copies the PNG but omits Finder's .DS_Store, yielding a bare
+          # release DMG even though the same build looks correct locally.
+          TAURI_BUNDLER_DMG_IGNORE_CI: 'true'
         # The updater key was generated with an EMPTY password; a whitespace
         # secret value gets dropped by GitHub, and an empty-but-set var makes
         # tauri prompt/fail. Keep the var unset unless the secret carries a
@@ -110,6 +134,14 @@ jobs:
             echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> "$GITHUB_ENV"
           fi
           pnpm desktop:build
+
+      - name: Verify DMG Finder layout
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/dmg-layout-venv"
+          "$RUNNER_TEMP/dmg-layout-venv/bin/pip" install --quiet --disable-pip-version-check ds-store==1.3.1
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
+          PATH="$RUNNER_TEMP/dmg-layout-venv/bin:$PATH" bash scripts/verify-dmg-layout.sh "$DMG"
 
       - name: Notarize the DMG (tauri notarizes the .app only)
         env:
@@ -149,6 +181,18 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify release checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
+          HEAD_COMMIT=$(git rev-parse HEAD)
+          [ "$HEAD_COMMIT" = "$TAG_COMMIT" ] || { echo "::error::checkout $HEAD_COMMIT != $TAG ($TAG_COMMIT)"; exit 1; }
 
       - name: Assert tag matches the desktop version
         shell: bash
@@ -165,6 +209,14 @@ jobs:
           node-version: 24
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Assert Cargo and Tauri versions match
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAURI_V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          CARGO_V=$(cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).packages.find((pkg) => pkg.name === 'dsh-desktop').version")
+          [ "$TAURI_V" = "$CARGO_V" ] || { echo "::error::tauri.conf.json version $TAURI_V != Cargo.toml version $CARGO_V"; exit 1; }
 
       - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
         uses: actions/cache@v4
@@ -246,6 +298,18 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify release checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
+          HEAD_COMMIT=$(git rev-parse HEAD)
+          [ "$HEAD_COMMIT" = "$TAG_COMMIT" ] || { echo "::error::checkout $HEAD_COMMIT != $TAG ($TAG_COMMIT)"; exit 1; }
 
       - uses: actions/download-artifact@v4
         with:
@@ -267,6 +331,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          prerelease: false
           make_latest: true
           files: |
             dist/*.dmg
@@ -288,7 +354,17 @@ jobs:
       # runs check out a branch (shallow) where tags are absent otherwise.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
+
+      - name: Verify release checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
+          HEAD_COMMIT=$(git rev-parse HEAD)
+          [ "$HEAD_COMMIT" = "$TAG_COMMIT" ] || { echo "::error::checkout $HEAD_COMMIT != $TAG ($TAG_COMMIT)"; exit 1; }
 
       # dsh-<name>-v<semver>: split at the last '-v' (dashes in package names survive).
       - name: Resolve plugin name and version from the tag
