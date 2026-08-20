@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-search-toggle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A General-settings toggle for the native web_search tool: shows whether the DeepSeek search credential is configured (the tool is model-independent) and disables the tool row through the home patch layer when the user searches via MCP instead",
   "type": "module",
   "main": "lib/index.js",
@@ -16,6 +16,9 @@
     },
     "./remote": {
       "default": "./lib/typert.remote-client.js"
+    },
+    "./typert.host": {
+      "default": "./lib/typert.host.js"
     },
     "./client": {
       "default": "./lib/client.js"
@@ -44,12 +47,7 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "files": [
-    "lib/index.js",
-    "lib/gateway.js",
-    "lib/patch-file.js",
-    "lib/toggle-types.js",
-    "lib/typert.remote-client.js",
-    "lib/client.js",
+    "lib/*.js",
     "lib/client.js.map",
     "cordis.patch.yml",
     "README.md"
@@ -70,6 +68,7 @@
     "@deepseek-ai/dsh-credentials": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-settings": ">=0.0.1-rc.1 <1",
     "@deepseek-ai/dsh-typert-protocol": ">=0.0.1-rc.1 <1",
+    "@deepseek-ai/dsh-typert-registry": ">=0.0.1-rc.1 <1",
     "react": "^18.2.0"
   },
   "devDependencies": {
@@ -81,6 +80,7 @@
     "@deepseek-ai/dsh-credentials": "0.1.0-rc.7",
     "@deepseek-ai/dsh-settings": "0.1.0-rc.7",
     "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-typert-registry": "0.1.0-rc.7",
     "@types/node": "^24.13.3",
     "@types/react": "~18.3.1",
     "react": "^18.2.0",

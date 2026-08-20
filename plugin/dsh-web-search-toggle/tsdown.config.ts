@@ -54,6 +54,7 @@ export default defineConfig([
       'patch-file': 'src/patch-file.ts',
       'toggle-types': 'src/toggle-types.ts',
       'typert.remote-client': 'src/typert.remote-client.ts',
+      'typert.host': 'src/typert.host.ts',
     },
     outDir: 'lib',
     format: ['esm'],
@@ -62,6 +63,13 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
+    // zod rides inside the host libs: consumers (git installs, assembled
+    // runtimes) have no devDependencies materialized, and the typert
+    // registry duck-types codecs (parse()) rather than checking zod
+    // instance identity — a bundled copy validates fine.
+    deps: {
+      onlyBundle: ['zod'],
+    },
     plugins: [standardDecoratorPlugin()],
   },
   {

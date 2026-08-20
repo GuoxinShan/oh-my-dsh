@@ -29,15 +29,23 @@
 6. **`minimumReleaseAge: 0`**：本组装输入全是 fork tarball + 钉版 registry 依赖，关掉本地供应链 age 守卫，免得 pnpm 自动往生成的 yaml 里追加 exclude 名单。
 7. **扫描补第三桶 `duplicated`**：同一 `@deepseek-ai/*` 包在 `.pnpm` 里同时存在 `file+` 实例与 registry-semver 实例即中止（**不看版本号**——同版本混装正是本案）；pack-skip 原生包（landlock/schemastery）registry-only 单例仍合法。
 
-## 遗留：webSearchToggle 404 在「干净树」上仍复现（第二根因，独立于混装）
+## 遗留：webSearchToggle 404 在「干净树」上仍复现（第二根因，独立于混装）——已修（插件侧，0.1.1）
 
 组装修复后（232 tarball 实例 / 0 registry 副本 / 0 双实例），`/api/webSearchToggle/get` 在装配 runtime 上**仍是 404**，而源码 runtime 是 200。示踪（对单实例 gateway 打点）定案：
 
 - `claims(webSearchToggle/get): local=false`；`collectSrcClaims` 里 `receiver=object`、`binding={ns:"webSearchToggle"}` 都可见，**唯独 `remoteMethods(original) = []`**。
-- 机理：`@Remote` 装饰器把方法 markers 写进 **typert-protocol 模块实例自己的模块级 WeakMap**。插件 gateway.js 的 `@deepseek-ai/dsh-typert-protocol` 按 Node 上溯解析命中**插件自带 node_modules 的 rc.7 副本**（`plugin/dsh-web-search-toggle/node_modules/.pnpm/...rc.7`），而 runtime gateway 用的是树内 rc.8 实例——不同模块实例的 WeakMap 互不可见。binding 字段挂在实例对象上所以跨实例可见（这是 src-claims 设计的用意），但方法枚举不行。
+- 机理：`@Remote` 装饰器把方法 markers 写进 **typert-protocol 模块实例自己的模块级 WeakMap**。插件 gateway.js 的 `@deepseek-ai/dsh-typert-protocol` 按 Node 上溯解析命中**插件自带 node_modules 的 rc.7 副本**，而 runtime gateway 用的是树内 rc.8 实例——不同模块实例的 WeakMap 互不可见。binding 字段挂在实例对象上所以跨实例可见（这是 src-claims 设计的用意），但方法枚举不行。
 - 源码上为何 200：checkout 跑 tsx **4.22**，其 resolver 把插件文件的 bare specifier 统一解析到运行项目（checkout）的 node_modules——单一模块世界。runtime 是 tsx **4.23**，bare specifier 走纯 Node 上溯（AGENTS「tsx 4.23+ 只对 tsconfig include 内文件生效」笔记的另一面）。
-- 属 AGENTS「已知残留（MCP 双 cordis）」同类：**link:/git 安装的插件自带 `@deepseek-ai/*` 模块副本，模块级注册表（unique symbol / WeakMap）跨实例分裂**。本例是 WeakMap（markers）；rc.5 案是 unique symbol。字符串键服务注册（`ctx.get('webSearchToggle')`）不受影响，所以插件行能挂载、binding 能读到，症状更隐蔽。
-- 修法方向（后续 fork PR，二选一）：① `dsh plugin add` 装插件时把插件的 `@deepseek-ai/*` 解析对齐 runtime 树（桥的 cordis 符号链接技巧推广到全部插件依赖）；② harness 侧让 Remote markers 跨实例可发现（binding 上携带方法表，或在 typert registry 提供手写 descriptor 的注册通道）。插件侧把 devDeps 升 rc.8 **不能**修——不同物理路径仍是不同模块实例。
+- 属 AGENTS「已知残留（插件自带 `@deepseek-ai/*` 模块副本）」同类：**link:/git 安装的插件自带 `@deepseek-ai/*` 模块副本，模块级注册表（unique symbol / WeakMap）跨实例分裂**。本例是 WeakMap（markers）；rc.5 案是 unique symbol。字符串键服务注册（`ctx.get('webSearchToggle')`）不受影响，所以插件行能挂载、binding 能读到，症状更隐蔽。插件侧把 devDeps 升 rc.8 **不能**修——不同物理路径仍是不同模块实例。
+
+**修（0.1.1，插件侧；实测装配 runtime get/set 全 200、set 真实写 patch 层、源码 runtime 无回归）**：Host 主行 apply 里把**浏览器端已在用的 `TYPERT_REMOTE.descriptors`**（带 strict zod codec 的完整 `InvocationDescriptor`）经 `ctx.typert.register()` 注册成 Host strict contribution（`src/typert.host.ts` 单一事实源复用 client descriptors）。strict 路径直接命中 `typert.local`——路由认领与分发都不再走 marker 发现，跨实例问题整个绕开。关键合规点：registry 的 `validateCodec` 是 **duck check**（只验 `schema.parse` 是函数，不验 zod 实例身份），插件自带 zod 副本构建的 schema 能过 runtime registry 校验。配套细节：
+
+- `inject = ['typert']`（字符串键，跨实例安全）等 registry 就绪；`ctx.get('typert')` 拿 runtime 实例，结构化形状（`{ register }`），不 import runtime 侧类型的运行时值。
+- apply 返回 disposer：registry 的 `register()` 内部 effect 绑在 registry 自己的 ctx 上，**调用方必须持有 disposer 并随 fiber 卸载回收**，否则插件卸载后 descriptors 残留。
+- host bundle 内联 zod（tsdown `deps.onlyBundle: ['zod']`）：git 安装形态消费者没有 devDeps；duck check 下内联副本合法。
+- `files` 用 `lib/*.js` glob：tsdown chunk 带内容 hash（`typert.remote-client-DSHTvq5p.js`），逐一列举必漏。
+
+**fork 侧要不要修**：本插件已不需要；但任何未来 out-of-tree Remote 插件仍会踩同一坑。正解方向（harness PR）：`bindTypertRemote()` 让 binding 携带「从声明它的模块实例读取 markers」的闭包——binding 对象跨实例可见，gateway 改读 `binding.methods()` 而非自己模块的 WeakMap；旧装饰器的数据封死在旧模块 WeakMap 里，无法单边兼容，升级协议后插件同步重发。次选：把本插件的修法上升为官方文档模式（「out-of-tree Remote 插件应自带 strict host contribution 注册」）。
 
 ## 教训
 
