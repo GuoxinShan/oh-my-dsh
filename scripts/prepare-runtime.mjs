@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 2
+const SCRIPT_REV = 5
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
@@ -54,7 +54,12 @@ if (!existsSync(resolve(srcDir, '.git'))) {
 }
 console.log(`prepare-runtime: fetching ${revision.ref}...`)
 execFileSync('git', ['fetch', '--filter=blob:none', 'origin', revision.ref], { cwd: srcDir, stdio: 'inherit' })
-execFileSync('git', ['checkout', '--detach', revision.sha], { cwd: srcDir, stdio: 'inherit' })
+// reset --hard, not checkout --detach: the pack step below flips private
+// flags on tracked manifests and never restores them, so a reused clone
+// carries a dirty tree that a plain checkout refuses to abandon (first
+// hit reusing the zw.2 clone for zw.3). Untracked files (the SHA build
+// marker) survive the reset.
+execFileSync('git', ['reset', '--hard', revision.sha], { cwd: srcDir, stdio: 'inherit' })
 const actual = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: srcDir, encoding: 'utf8' }).trim()
 if (actual !== revision.sha) {
   console.error(`prepare-runtime: checkout drifted (want ${revision.sha}, got ${actual})`)
@@ -64,7 +69,7 @@ if (actual !== revision.sha) {
 // 2. Install + build, cached per SHA.
 if (!existsSync(buildMarker) || readFileSync(buildMarker, 'utf8').trim() !== revision.sha) {
   console.log('prepare-runtime: pnpm install (frozen)...')
-  execFileSync('pnpm', ['install', '--frozen-lockfile'], { cwd: srcDir, stdio: 'inherit' })
+  execFileSync('pnpm', ['install', '--frozen-lockfile'], { cwd: srcDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
   console.log('prepare-runtime: pnpm build...')
   execFileSync('pnpm', ['run', 'build'], { cwd: srcDir, stdio: 'inherit' })
   writeFileSync(buildMarker, revision.sha + '\n')
@@ -129,6 +134,24 @@ for (const name of FORK_MODIFIED) {
   overrides[name] = `npm:${forkName}@${forkNpmVersion}`
 }
 console.log(`prepare-runtime: fork-modified set -> npm ${FORK_NPM_SCOPE}/* @ ${forkNpmVersion}`)
+
+// Pin EVERY @deepseek-ai/* package to the fork's baseline version. The fork
+// tree is one upstream line; letting unmodified packages float on their
+// ^ranges silently mixes upstream lines when upstream publishes a newer rc
+// (rc.8 matching ^0.1.0-rc.7 mixed 18 packages in — unique-symbol registries
+// then break across module copies: `undefined (reading 'prepare')`). The
+// baseline moves only when WE merge upstream and re-release. Skipped natives
+// (landlock etc.) get the exact-version pin too — same rule, no float.
+const BASELINE_PIN = {}
+for (const pkg of packages) {
+  if (!pkg.name?.startsWith('@deepseek-ai/')) continue
+  if (overrides[pkg.name] !== undefined) continue
+  // Pin to the version the fork tree itself declares (its manifest version),
+  // not the raw baseline string: vendored framework packages (schemastery,
+  // cordis) carry their own version lines unrelated to the dsh rc cadence.
+  const manifest = JSON.parse(readFileSync(resolve(pkg.path, 'package.json'), 'utf8'))
+  BASELINE_PIN[pkg.name] = manifest.version
+}
 for (const pkg of packages) {
   if (!pkg.name?.startsWith('@deepseek-ai/')) continue
   if (FORK_MODIFIED.has(pkg.name)) continue // consumed from npm via overrides
@@ -136,6 +159,34 @@ for (const pkg of packages) {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
   if (manifest.private === true) {
     manifest.private = false
+  }
+  // Rewrite fork-name references to the @crazx alias BEFORE packing. pnpm's
+  // `npm:` alias overrides do not reach into file:-tarball manifests, so a
+  // packed `@deepseek-ai/dsh-base` keeping `dsh-agent-default-model:
+  // workspace:^` (pack expands it to `^0.1.0-rc.8`) resolves the OFFICIAL
+  // registry copy of a fork-modified package once upstream publishes that rc
+  // (the zw.4 assembly leaked six packages this way). Dependency edges point
+  // at the alias; peer edges rename their key — the root manifest provides
+  // every alias as a direct dependency, so peers bind to the crazx instance.
+  let rewrote = false
+  for (const field of ['dependencies', 'optionalDependencies']) {
+    const deps = manifest[field]
+    if (deps === undefined) continue
+    for (const name of Object.keys(deps)) {
+      if (!FORK_MODIFIED.has(name)) continue
+      deps[name] = `npm:${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}@${forkNpmVersion}`
+      rewrote = true
+    }
+  }
+  if (manifest.peerDependencies !== undefined) {
+    for (const name of Object.keys(manifest.peerDependencies)) {
+      if (!FORK_MODIFIED.has(name)) continue
+      delete manifest.peerDependencies[name]
+      manifest.peerDependencies[`${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`] = forkNpmVersion
+      rewrote = true
+    }
+  }
+  if (manifest.private === false || rewrote) {
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n')
   }
   // Platform-specific natives (landlock linux builds etc.) fail their own
@@ -158,6 +209,13 @@ for (const pkg of packages) {
   packed += 1
 }
 console.log(`prepare-runtime: packed ${packed} fork packages` + (skipped.length > 0 ? ` (skipped to npm: ${skipped.join(', ')})` : ''))
+console.log(`prepare-runtime: pinning ${Object.keys(BASELINE_PIN).length} unmodified package(s) to baseline ${forkBaseVersion} (no upstream float)`)
+// Tarball pins (file:) WIN — a bare-version pin would silently fetch the
+// OFFICIAL registry build for packed packages, losing every fork change in
+// them (the zw.4 assembly leaked dsh-web-app this way: its official rc.8
+// build carried an unpatched frontend-static chain). The baseline pin only
+// catches what the pack loop skipped.
+const finalOverrides = { ...BASELINE_PIN, ...overrides }
 
 // 4. Runtime manifest: the CLI rides the fork npm release (the
 // `npm:@crazx/dsh` override above); every other @deepseek-ai/* is pinned to
@@ -187,7 +245,7 @@ writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
     '@deepseek-ai/dsh': `npm:${FORK_NPM_SCOPE}/dsh@${forkNpmVersion}`,
     tsx: '^4.19.2',
   },
-  pnpm: { overrides },
+  pnpm: { overrides: finalOverrides },
 }, null, 2) + '\n')
 // Native build scripts the runtime legitimately needs (prebuilt downloads).
 writeFileSync(resolve(runtimeDir, 'pnpm-workspace.yaml'), [
@@ -202,7 +260,12 @@ writeFileSync(resolve(runtimeDir, 'pnpm-workspace.yaml'), [
   '',
 ].join('\n'))
 console.log('prepare-runtime: installing runtime tree...')
+// Both the lockfile AND node_modules must go: pnpm install with no lockfile
+// but a stale node_modules resolves incrementally against the existing
+// layout, silently keeping registry copies the new overrides re-point at
+// tarballs (the SCRIPT_REV=4 half-assembly shipped exactly that).
 rmSync(resolve(runtimeDir, 'pnpm-lock.yaml'), { force: true })
+rmSync(resolve(runtimeDir, 'node_modules'), { recursive: true, force: true })
 execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
 
 // 4b. Fail loud if any fork-modified package still resolved to an official
@@ -212,16 +275,35 @@ execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, std
 {
   const { readdirSync } = await import('node:fs')
   const drifted = []
+  const offBaseline = []
   const pnpmDir = resolve(runtimeDir, 'node_modules/.pnpm')
   for (const entry of readdirSync(pnpmDir)) {
-    const hit = /^@deepseek-ai\+(.+)@/.exec(entry)
+    // Non-greedy name + the LAST '@' before the version segment: dir names
+    // embed peer suffixes ("pkg@ver_peer@ver"), so a greedy name group would
+    // swallow the real version.
+    const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
     if (hit === null) continue
     const pkg = `@deepseek-ai/${hit[1]}`
+    const version = hit[2]
     if (FORK_MODIFIED.has(pkg)) drifted.push(`${pkg} (${entry})`)
+    // Tarball copies (file:+..) carry no version in the dir name beyond the
+    // sha prefix; only registry copies spell a real version. The expected
+    // version per package is the fork tree's own manifest (BASELINE_PIN), so
+    // vendored framework lines (schemastery 3.x) and natives (landlock 0.1.1)
+    // compare against themselves, not the dsh rc cadence.
+    if (!version.includes('file+') && version !== (BASELINE_PIN[pkg] ?? forkBaseVersion) && !version.endsWith(`.zw.${zwMatch[2]}`)) {
+      offBaseline.push(`${pkg}@${version} (expected ${BASELINE_PIN[pkg] ?? forkBaseVersion})`)
+    }
   }
   if (drifted.length > 0) {
     console.error('prepare-runtime: fork-modified packages resolved to official registry copies:')
     for (const line of drifted) console.error(`  ${line}`)
+    process.exit(1)
+  }
+  if (offBaseline.length > 0) {
+    console.error(`prepare-runtime: mixed upstream lines in tree (baseline ${forkBaseVersion}):`)
+    for (const line of offBaseline) console.error(`  ${line}`)
+    console.error('  the fork tracks ONE upstream line; merge upstream in the fork and re-release to move it')
     process.exit(1)
   }
 }

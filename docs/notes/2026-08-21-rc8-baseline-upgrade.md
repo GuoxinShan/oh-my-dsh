@@ -1,7 +1,8 @@
-# 2026-08-21 — rc.8 基线升级（fork v0.1.0-rc.8+zw.3 + 桌面 0.2.0-rc.6）
+# 2026-08-21 — rc.8 基线升级（fork v0.1.0-rc.8+zw.4 + 桌面 0.2.0-rc.6）
 
 上游发布 `dsh-v0.1.0-rc.8`（1604 文件、+54k 行；npm `next` tag）。本次把 fork 基线从
-`v0.1.0-rc.7+zw.2` 升到 `v0.1.0-rc.8+zw.3`，桌面随之发 `0.2.0-rc.6`。
+`v0.1.0-rc.7+zw.2` 升到 `v0.1.0-rc.8+zw.4`（zw.3 因发布链缺陷作废，见「发布链事故」），桌面随之发
+`0.2.0-rc.6`。
 
 ## 调查结论（为什么升）
 
@@ -51,6 +52,24 @@
 （stock rc.8 worktree 复核：未构建时 skip，构建后同样失败）。上游 CI 钉 Node 24 无此告警。
 **这是本地环境噪音，不是 merge 回归**；本地跑该套件时忽略此一项。
 
+## 发布链事故与修复（zw.3 → zw.4）
+
+1. **持久克隆复用炸 checkout**：`prepare-runtime` 的 pack 步骤翻转 tracked manifest 的
+   `private` 标记且从不还原，复用 zw.2 克隆时 `git checkout --detach` 拒绝离开脏树。
+   修复：`reset --hard <sha>`（同时完成 detach 与清理；untracked 的 SHA 标记幸存）。
+2. **vendor 线 workspace 依赖带毒发布（真正让 zw.3 作废的根因）**：`publish-fork` 的
+   `rewriteManifest` 把非 fork 的 `workspace:^` 一律改写为 fork 基线版本——但 vendor 线包
+   （cordis 4.x、schemastery 3.x、cordis-plugin-* 1.x）在 npm 上有自己的真实版本线。
+   于是 `@crazx/dsh-agent-default-model` 声明 `schemastery@^0.1.0-rc.8`、`@crazx/dsh` peer
+   依赖 `cordis-plugin-timer@^0.1.0-rc.8`——registry 只有 3.18.1 / 1.1.3，直查即 404。
+   **为什么 zw.2 没炸**：runtime 组装时本地 tarball overrides 恰好覆盖了每条带毒边，毒范围
+   从未被解析；zw.3 组装时 peer 边（overrides 够不着的路径）第一个撞上。**为什么 standalone
+   安装 `@crazx/*` 一直会炸**：npm install 没有 overrides 兜底。修复：改写按**目标包的真实
+   workspace 版本**（构建 name→version 全表传入），zw.4 顶替 zw.3。
+3. 诊断弯路备忘：`pnpm -r ls --json` 在该克隆里两次返回不一致的包清单（首次查不出 vendor
+   包、复跑又正常），差点误判为打包循环缺包——定位 manifest 问题以 npm `view <pkg>
+   dependencies` 的发布产物为准，不要只信工作区查询。
+
 ## 验证矩阵
 
 - fork：受影响面包测试（1091 通过）+ 全树构建（200 client artifacts）+ `verify-cordis-catalog`
@@ -61,7 +80,8 @@
 
 ## 发版序
 
-1. fork `master` → GitHub（merge + 基线修复合入），打 `v0.1.0-rc.8+zw.3` tag 推送 → npm-release
-   workflow 发 10 个 `@crazx/*` 包。
-2. dsh-desktop 提交本批改动，`v0.2.0-rc.6` tag → release.yml 签名公证出包。
-   （tag 推送前均需用户确认。）
+1. fork `master` → GitHub（merge + 基线修复 + vendor 依赖改写修复），`v0.1.0-rc.8+zw.4` tag →
+   npm-release workflow 发 10 个 `@crazx/*` 包（zw.3 的发布物带毒作废；npm 不支持撤版，消费一律
+   钉 `zw.4`+）。✅ 已推送并发布。
+2. dsh-desktop `revision.json` → zw.4，`v0.2.0-rc.6` tag → release.yml 签名公证出包。
+   （桌面 tag 推送前需用户确认。）
