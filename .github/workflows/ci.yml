@@ -12,13 +12,28 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Upstream-line discipline: typecheck against the SAME baseline the
+      # runtime pins (runtime/revision.json spells v<base>+zw.N; the upstream
+      # tag is dsh-<base>). A floating master checkout silently moves the
+      # goalposts every time upstream publishes.
+      - name: Resolve harness baseline from runtime/revision.json
+        id: baseline
+        run: |
+          ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
+          base="${ref%+zw.*}"; base="${base#v}"
+          case "$base" in
+            *.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
+          esac
       - uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
+          ref: ${{ steps.baseline.outputs.tag }}
           path: harness
+      # No `version` input: package.json packageManager (pnpm 10.28) is the
+      # single source of truth — pinning a different major here made
+      # action-setup hard-error on the conflict (red since rc.3).
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -42,12 +57,44 @@ jobs:
           pnpm run build
 
   shell:
-    name: Tauri shell (cargo check)
+    name: Tauri shell (prepare + cargo check)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # tauri_build validates src-tauri/resources exist at cargo-check time;
+      # they are gitignored and produced by desktop:prepare (bridge build +
+      # runtime assembly + tarballs). Bare cargo check on a fresh checkout
+      # always failed — prepare first, doubling as a runtime-assembly smoke.
+      - name: Resolve harness baseline from runtime/revision.json
+        id: baseline
+        run: |
+          ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
+          base="${ref%+zw.*}"; base="${base#v}"
+          case "$base" in
+            *.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ steps.baseline.outputs.tag }}
+          path: harness
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            plugin/dsh-desktop-bridge/pnpm-lock.yaml
+      - name: Bridge deps + anchor (prepare builds the bridge tarball)
+        working-directory: plugin/dsh-desktop-bridge
+        run: |
+          pnpm install --no-frozen-lockfile
+          DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm run setup
+      - name: Prepare bundle resources
+        run: pnpm run desktop:prepare
       - name: cargo check
         working-directory: src-tauri
         run: cargo check
