@@ -2,7 +2,7 @@
 
 dsh-desktop 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）的桌面化 monorepo：出树插件与 Tauri 壳同仓、独立发版。两个平面：
 
-- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。成员：`dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）、`dsh-mcp-settings`（2026-08-19 subtree 迁入）、`dsh-provider-balance`（2026-08-19 subtree 迁入，纯 DOM 注入）、`dsh-reasoning-efforts`（2026-08-20 新写，host-only：给手写 llm-pi-ai 模型补 `reasoningEfforts` 声明，契约见包内 README，决策见 `docs/notes/2026-08-20-reasoning-efforts.md`）、`dsh-web-search-toggle`（2026-08-20 新写，双面：通用设置页「原生网页搜索」开关——DEEPSEEK_API_KEY 状态提示 + home patch 层受管块禁用 tool-web 行，契约见 `docs/notes/2026-08-20-web-search-toggle.md`）、`dsh-compaction-hierarchical`（2026-08-20 新写，host-only：继承 stock compaction 事务，以有界 map-reduce 让小上下文模型压缩大历史；契约见包内 README，决策见 `docs/notes/2026-08-20-hierarchical-compaction.md`）。
+- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。成员：`dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）、`dsh-mcp-settings`（2026-08-19 subtree 迁入）、`dsh-provider-balance`（2026-08-19 subtree 迁入，纯 DOM 注入）、`dsh-reasoning-efforts`（2026-08-20 新写，host-only：给手写 llm-pi-ai 模型补 `reasoningEfforts` 声明，契约见包内 README，决策见 `docs/notes/2026-08-20-reasoning-efforts.md`）、`dsh-web-search-toggle`（2026-08-20 新写，双面：通用设置页「Web Search」开关——DEEPSEEK_API_KEY 状态提示 + home patch 层受管块禁用 tool-web 行，契约见 `docs/notes/2026-08-20-web-search-toggle.md`）、`dsh-compaction-hierarchical`（2026-08-20 新写，host-only：继承 stock compaction 事务，以有界 map-reduce 让小上下文模型压缩大历史；契约见包内 README，决策见 `docs/notes/2026-08-20-hierarchical-compaction.md`）。
 - **Tauri 2 Rust 壳** —— spawn harness sidecar、端口分配、就绪检测、窗口加载。壳层不含业务逻辑；harness 不感知壳的存在。业务集成只特殊对待桥插件（gate + IPC）；分发层另按本文件的 desktop-owned 清单打包/安装层次压缩，但不读取其 Provider 业务。
 
 规范层级：[README.md](README.md) 记录「为什么」（技术选型）；本文件记录「契约与约定」（怎么做）；代码是实现。冲突时以本文件为准。改契约必须同 PR 改本文件。

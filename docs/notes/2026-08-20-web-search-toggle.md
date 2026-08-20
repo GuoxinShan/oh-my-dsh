@@ -12,7 +12,7 @@
 `plugin/dsh-web-search-toggle/`，双面：
 
 - **Host 网关行**（`dsh-web-search-toggle/gateway`）：Typert Remote 服务 `webSearchToggle`，`get`/`set` 两个直连方法。`get` 投影开关状态 + `DEEPSEEK_API_KEY`（或 `web-search-deepseek` 设置的 `apiKeyEnv`）凭据解析状态（字面 `apiKey` > credentials 服务 > 缺省 ref，镜像 provider 自己的解析顺序）；`set` 重写 home patch 文件的受管块。
-- **浏览器设置行**（`dsh-web-search-toggle`）：`settings.general.item` 加性槽（order 15，AppearanceRow 同款注入模式）注册「原生网页搜索」卡片——开关状态、key 状态/缺失提示（指向 设置→插件→Web Search）、保存后「等待热更新」过渡态。Remote 走 `$mount` 自挂贡献（mcp-settings 同款，防 shell 未选命名空间）。
+- **浏览器设置行**（`dsh-web-search-toggle`）：`settings.general.item` 加性槽（order 15，AppearanceRow 同款注入模式）注册「Web Search」设置行——左侧展示说明与不含凭据引用名的密钥状态/缺失提示（指向 设置→插件→Web Search），右侧按通用设置 Setting-Cell 布局放置开关，并保留保存后的「等待热更新」过渡态。Remote 走 `$mount` 自挂贡献（mcp-settings 同款，防 shell 未选命名空间）。
 
 **开关机制**：home patch 层（`$DSH_HOME/cordis.patch.yml`）的受管块 `- id: tool-web / disabled: true`，用标记注释（`# BEGIN/END dsh-web-search-toggle`）包裹、**纯文本拼接**——不 YAML 重排，用户手写的条目和注释逐字节保留。`disabled: true` 是 loader 的文档化行开关（DSH_TELEMETRY_DISABLED 同款）；home patch 被 `watchUserPatches` 实时监听，保存即热重组，无需重启。
 
@@ -26,7 +26,7 @@
 
 ## 验证
 
-- 单测 10 个全过（含 YAML 合法性、幂等、往返、注释保留）。
+- 单测 11 个全过（含文案隐私回归、YAML 合法性、幂等、往返、注释保留）。
 - scratch home 实机：`plugin add` → boot 200 → 通过构建产物执行 disable（写出的块 `parse` 为 `[{id:'tool-web',disabled:true}]`）→ HMR 重组后 host 存活零错误 → re-enable 回 `[]\n` → host 存活。
 
 ## 已知边界

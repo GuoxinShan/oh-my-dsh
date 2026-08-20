@@ -1,94 +1,99 @@
-/* Web-search toggle row: AppearanceRow's row anatomy (title + content,
- * gap 8, pad 16/0, hairline) with mcp-settings' switch vocabulary. Every
- * color goes through a --dsw-* alias token. */
+/* Match the built-in General setting rows: copy on the left, control on the
+ * trailing edge, 16px vertical padding, and a shared hairline separator. */
 
 .row {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
   padding: 16px 0;
   border-bottom: 1px solid var(--dsw-alias-border-l2);
 }
 
-.head {
+.rowText {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 48px;
 }
 
 .title {
+  color: var(--dsw-alias-label-primary);
   font-size: 14px;
   font-weight: 400;
   line-height: 22px;
-  color: var(--dsw-alias-label-primary);
 }
 
-/* Status pill: the credential answer rendered as a quiet tag, not prose. */
-.pill {
+.desc,
+.hint,
+.state,
+.controlState,
+.error,
+.credential {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.desc,
+.hint,
+.state {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.credential {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 6px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-layer-1);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l1);
 }
 
-.pillOk {
+.credentialOk {
   color: var(--dsw-alias-state-success-primary);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-success-primary);
 }
 
-.pillWarn {
+.credentialMissing {
   color: var(--dsw-alias-label-warning);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-label-warning);
 }
 
-.pillDot {
+.credentialDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: currentColor;
 }
 
-.desc {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* Hint under the pill: only the missing-credential case needs guidance. */
 .hint {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  min-width: min(100%, 240px);
 }
 
-.hint a {
-  color: inherit;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-/* Control line: state text + switch, mirroring mcp-settings' server row. */
 .controls {
   display: flex;
+  flex: none;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+  min-width: 112px;
 }
 
-.state {
-  font-size: 12px;
-  line-height: 18px;
+.controlState {
+  min-width: 58px;
   color: var(--dsw-alias-label-tertiary);
+  text-align: right;
 }
 
 .switch {
   position: relative;
   display: inline-flex;
+  flex: none;
   width: 32px;
   height: 18px;
   cursor: pointer;
@@ -135,18 +140,24 @@
 }
 
 .switch input:disabled + span {
-  opacity: 0.55;
   cursor: wait;
-}
-
-.pending {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
+  opacity: 0.55;
 }
 
 .error {
-  font-size: 12px;
-  line-height: 18px;
   color: var(--dsw-alias-state-error-primary);
+}
+
+@media (max-width: 600px) {
+  .rowText {
+    padding-right: 16px;
+  }
+
+  .controlState {
+    display: none;
+  }
+
+  .controls {
+    min-width: auto;
+  }
 }

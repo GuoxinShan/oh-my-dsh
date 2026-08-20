@@ -1,7 +1,7 @@
 /**
- * The General-section row for the native web_search toggle: AppearanceRow's
- * anatomy (title + content, hairline separator) with mcp-settings' switch
- * vocabulary via CSS Modules — no inline styles, every color a --dsw-* alias.
+ * The General-section row for the web search toggle: the same horizontal
+ * Setting-Cell anatomy as the built-in rows, with a compact credential status
+ * and the control kept on the trailing edge.
  *
  * @module dsh-web-search-toggle/client/WebSearchRow
  */
@@ -34,7 +34,7 @@ export type WebSearchRowComponentProps =
   & InjectFace<WebSearchRowInjected>
 
 /**
- * Render the web_search toggle row.
+ * Render the web search toggle row.
  * @param props - composed slot props.
  * @returns the row element tree.
  */
@@ -56,45 +56,49 @@ export function WebSearchRow({ t, refresh, setEnabled }: WebSearchRowComponentPr
   }
 
   const snap = state.snapshot
-  const pillClass = snap?.keyConfigured === true
-    ? `${css.pill} ${css.pillOk}`
-    : snap ? `${css.pill} ${css.pillWarn}` : css.pill
+  const credentialClass = snap?.keyConfigured === true
+    ? `${css.credential} ${css.credentialOk}`
+    : `${css.credential} ${css.credentialMissing}`
 
   return (
     <div className={css.row}>
-      <div className={css.head}>
+      <div className={css.rowText}>
         <div className={css.title}>{t('row.title')}</div>
-        {snap !== undefined && (
-          <span className={pillClass}>
-            <span className={css.pillDot} />
-            {snap.keyConfigured
-              ? t('key.configured', { ref: snap.keyRef })
-              : t('key.missing', { ref: snap.keyRef })}
-          </span>
+        <div className={css.desc}>{t('row.desc')}</div>
+        {state.status === 'loading' && <div className={css.state}>{t('state.loading')}</div>}
+        {state.status === 'error' && (
+          <div className={css.error} role="alert">{t('state.error', { message: state.error ?? '' })}</div>
+        )}
+        {state.status === 'ready' && snap !== undefined && (
+          <div className={css.meta}>
+            <span className={credentialClass}>
+              <span className={css.credentialDot} aria-hidden="true" />
+              {snap.keyConfigured ? t('key.configured') : t('key.missing')}
+            </span>
+            {!snap.keyConfigured && <span className={css.hint}>{t('key.hint')}</span>}
+          </div>
         )}
       </div>
-      <div className={css.desc}>{t('row.desc')}</div>
-      {state.status === 'loading' && <div className={css.state}>{t('state.loading')}</div>}
-      {state.status === 'error' && <div className={css.error}>{t('state.error', { message: state.error ?? '' })}</div>}
       {state.status === 'ready' && snap !== undefined && (
-        <>
-          {!snap.keyConfigured && <div className={css.hint}>{t('key.hint')}</div>}
-          <div className={css.controls}>
-            <label className={css.switch} htmlFor={switchId}>
-              <input
-                id={switchId}
-                type="checkbox"
-                role="switch"
-                checked={snap.enabled}
-                disabled={state.pending === true}
-                onChange={e => { commit(e.target.checked) }}
-              />
-              <span aria-hidden="true" />
-            </label>
-            <span className={css.state}>{snap.enabled ? t('toggle.on') : t('toggle.off')}</span>
-            {state.pending === true && <span className={css.pending}>{t('state.pending')}</span>}
-          </div>
-        </>
+        <div className={css.controls}>
+          <span className={css.controlState} aria-live="polite">
+            {state.pending === true
+              ? t('state.pending')
+              : snap.enabled ? t('toggle.on') : t('toggle.off')}
+          </span>
+          <label className={css.switch} htmlFor={switchId}>
+            <input
+              id={switchId}
+              type="checkbox"
+              role="switch"
+              aria-label={t('toggle.label')}
+              checked={snap.enabled}
+              disabled={state.pending === true}
+              onChange={e => { commit(e.target.checked) }}
+            />
+            <span aria-hidden="true" />
+          </label>
+        </div>
       )}
     </div>
   )
