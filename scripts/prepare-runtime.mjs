@@ -20,7 +20,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execPnpm } from './cli-bins.mjs'
+import { execNpm, execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
@@ -130,10 +130,17 @@ for (const name of FORK_MODIFIED) {
   // Fail loud before a long install: a missing npm release means the tag was
   // pushed without the fork's npm-release workflow finishing (or failing).
   try {
-    execFileSync('npm', ['view', `${forkName}@${forkNpmVersion}`, 'version'], { stdio: 'pipe' })
-  } catch {
-    console.error(`prepare-runtime: fork npm release not on the registry: ${forkName}@${forkNpmVersion}`)
-    console.error('  publish it in the fork repo (tag v*+zw.* -> npm release workflow), then re-run')
+    execNpm(['view', `${forkName}@${forkNpmVersion}`, 'version'], { stdio: 'pipe' })
+  } catch (err) {
+    // Spawn failures (npm absent from PATH, Windows .cmd EINVAL) are NOT a
+    // missing release — report the real error instead of a fake registry 404
+    // (the v0.2.0-rc.8 Windows job burned a round-trip on exactly that).
+    if (err && (err.code === 'ENOENT' || err.code === 'EINVAL')) {
+      console.error(`prepare-runtime: could not run npm view (${err.code}: ${err.message.split('\n')[0]}) — npm must be on PATH`)
+    } else {
+      console.error(`prepare-runtime: fork npm release not on the registry: ${forkName}@${forkNpmVersion}`)
+      console.error('  publish it in the fork repo (tag v*+zw.* -> npm release workflow), then re-run')
+    }
     process.exit(1)
   }
   overrides[name] = `npm:${forkName}@${forkNpmVersion}`
