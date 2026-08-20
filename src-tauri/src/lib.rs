@@ -296,14 +296,87 @@ fn cli_command(runtime: &Runtime) -> Command {
     }
     command.arg(&runtime.cli);
     command.current_dir(&runtime.cwd);
-    if !runtime.path_prepend.is_empty() {
-        let existing = std::env::var("PATH").unwrap_or_default();
-        let sep = if cfg!(windows) { ";" } else { ":" };
-        let prepend = runtime.path_prepend.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(sep);
-        command.env("PATH", format!("{prepend}{sep}{existing}"));
-    }
+    // GUI-launched apps (Finder / Dock / notarized .app) inherit a minimal
+    // PATH that omits Homebrew and user bins — so plugins that spawn host
+    // CLIs (`yzj-cli`, etc.) get ENOENT. Always compose an enriched PATH.
+    let existing = std::env::var("PATH").unwrap_or_default();
+    command.env("PATH", compose_process_path(&runtime.path_prepend, &existing));
     hide_console(&mut command);
     command
+}
+
+/// Join runtime tool dirs + well-known user CLI dirs + the inherited PATH,
+/// de-duplicated, existing dirs only. Pure enough to unit-test the order.
+fn compose_process_path(runtime_prepend: &[PathBuf], existing: &str) -> String {
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |p: PathBuf| {
+        if !p.is_dir() {
+            return;
+        }
+        let s = p.display().to_string();
+        if parts.iter().any(|x| x == &s) {
+            return;
+        }
+        parts.push(s);
+    };
+    for p in runtime_prepend {
+        push(p.clone());
+    }
+    for p in user_cli_path_dirs() {
+        push(p);
+    }
+    for part in existing.split(sep).filter(|s| !s.is_empty()) {
+        if !parts.iter().any(|x| x == part) {
+            parts.push(part.to_string());
+        }
+    }
+    parts.join(sep)
+}
+
+/// Directories GUI apps commonly miss, where users install host CLIs
+/// (`yzj-cli` via Homebrew/npm, etc.). Only existing dirs are used.
+fn user_cli_path_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(home) = user_home() {
+        #[cfg(windows)]
+        {
+            dirs.push(home.join(r"AppData\Roaming\npm"));
+            dirs.push(home.join(r"AppData\Local\Yarn\bin"));
+            dirs.push(home.join(".local\\bin"));
+            dirs.push(home.join(".bun\\bin"));
+            dirs.push(home.join(".cargo\\bin"));
+        }
+        #[cfg(not(windows))]
+        {
+            dirs.push(home.join(".local/bin"));
+            dirs.push(home.join(".bun/bin"));
+            dirs.push(home.join(".cargo/bin"));
+            dirs.push(home.join("Library/pnpm")); // macOS pnpm home
+            dirs.push(home.join(".npm-global/bin"));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/opt/homebrew/sbin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin"));
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(program_files) = std::env::var("ProgramFiles") {
+            dirs.push(PathBuf::from(program_files).join(r"nodejs"));
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(local).join(r"Programs\Microsoft VS Code\bin"));
+        }
+    }
+    dirs
 }
 
 /// Keep child consoles off the desktop. Windows `node.exe` is a console
@@ -1168,6 +1241,31 @@ mod install_failure_tests {
         let pkgs = extract_implicated_packages(sample);
         assert!(pkgs.iter().any(|p| p == "@dsh-yzj/bridge"));
         assert!(pkgs.iter().any(|p| p == "@dsh-yzj/bundle"));
+    }
+}
+
+#[cfg(test)]
+mod path_enrichment_tests {
+    use super::compose_process_path;
+
+    #[test]
+    fn prepends_runtime_dirs_before_existing_and_dedupes() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let tmp = std::env::temp_dir().join(format!("dsh-path-test-{}", std::process::id()));
+        let a = tmp.join("a");
+        let b = tmp.join("b");
+        let _ = std::fs::create_dir_all(&a);
+        let _ = std::fs::create_dir_all(&b);
+        let existing = format!("{}{sep}/usr/bin", a.display());
+        let got = compose_process_path(&[a.clone(), b.clone()], &existing);
+        let parts: Vec<&str> = got.split(sep).collect();
+        let a_s = a.display().to_string();
+        let b_s = b.display().to_string();
+        assert_eq!(parts[0], a_s);
+        assert_eq!(parts[1], b_s);
+        assert_eq!(parts.iter().filter(|p| **p == a_s).count(), 1);
+        assert!(parts.iter().any(|p| *p == "/usr/bin"));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
 
