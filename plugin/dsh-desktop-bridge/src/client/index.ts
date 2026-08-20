@@ -11,6 +11,8 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // frame declares it) so the registration below typechecks against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the settings SlotMap declaration ('settings.section').
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { AttentionEdge, AttentionRow } from './attention.ts'
@@ -22,7 +24,10 @@ import { classifyDownload, saveViaShell } from './downloads.ts'
 import type { DesktopProbe, TauriInvoke } from './env.ts'
 import { probeDesktop } from './env.ts'
 import { DesktopBadge, type BadgeInjected } from './badge.tsx'
+import { AboutSection, type AboutInjected } from './about.tsx'
 import { UpdateIndicator, type UpdateIndicatorInjected } from './update-indicator.tsx'
+import { createUpdateCoordinator } from './update-coordinator.ts'
+import type { DesktopVersionInfo } from './updates.ts'
 import { en, zh, type DesktopBridgeKey } from './locales.ts'
 import { installRailCss, installRailHider } from './rail.ts'
 import { DesktopRailControls, type RailControlsInjected } from './rail-controls.tsx'
@@ -83,40 +88,37 @@ export function apply(ctx: ClientContext): void {
   const injected = (): BadgeInjected => ({
     openExternal: (url) => { void callOpenExternal(invoke, url, logger) },
   })
-  // One shared updater round-trip: the indicator's first check rides the
-  // memo; its periodic ticks pass force to bypass it and see the live
-  // endpoint. A failed check (offline, dev build without an endpoint) must
-  // not pin the memo forever — the next caller retries.
-  let updateCheck: Promise<{ version: string; notes: string } | null> | undefined
-  const checkUpdate = (force = false): Promise<{ version: string; notes: string } | null> => {
-    if (force) updateCheck = undefined
-    if (updateCheck === undefined) {
-      updateCheck = (async () => {
-        const raw = (await invoke.invoke('dsh_desktop_check_update')) as { update?: { version?: unknown; notes?: unknown } | null }
-        if (raw.update === null || raw.update === undefined) return null
-        return {
-          version: typeof raw.update.version === 'string' ? raw.update.version : '?',
-          notes: typeof raw.update.notes === 'string' ? raw.update.notes : '',
-        }
-      })()
-      updateCheck.catch(() => { updateCheck = undefined })
+  // About and the title-band entry share one ordered browser coordinator;
+  // the Rust process remains the authoritative updater state owner.
+  const updater = createUpdateCoordinator((command) => invoke.invoke(command))
+  const versionInfo = async (): Promise<DesktopVersionInfo> => {
+    const raw = (await invoke.invoke('dsh_desktop_version_info')) as {
+      desktopVersion?: unknown
+      runtimeVersion?: unknown
+      runtimeSha?: unknown
     }
-    return updateCheck
+    return {
+      desktopVersion: typeof raw.desktopVersion === 'string' ? raw.desktopVersion : '?',
+      runtimeVersion: typeof raw.runtimeVersion === 'string' ? raw.runtimeVersion : '?',
+      runtimeSha: typeof raw.runtimeSha === 'string' ? raw.runtimeSha : '?',
+    }
   }
-  const updateInjected = (): UpdateIndicatorInjected => ({
-    checkUpdate,
-    applyUpdate: async () => {
-      await invoke.invoke('dsh_desktop_apply_update')
-      // The process restarts on success; reaching here means the shell let
-      // the call resolve, which should not happen — treat as a failure.
-      throw new Error('apply_update resolved without restarting')
-    },
-  })
+  const updateInjected = (): UpdateIndicatorInjected => updater
+  const aboutInjected = (): AboutInjected => ({ ...updater, versionInfo })
+  const t = ctx.locale.bind(NS)
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'desktop-about',
+    order: 100,
+    label: () => t('about.nav'),
+    locale: NS,
+    inject: aboutInjected,
+  }, AboutSection))
   // slots.inject waits on the ui-layout declaration (activation order is
   // unconstrained), reruns after redeclaration, and leaves with this fiber.
   ctx.slots.inject('shell.overlay', () => {
     const disposeBadge = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge)
-    const disposeUpdate = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-update-indicator', order: 6, inject: updateInjected }, UpdateIndicator)
+    const disposeUpdate = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-update-indicator', order: 6, locale: NS, inject: updateInjected }, UpdateIndicator)
     if (!fuseTitlebar) return () => { disposeUpdate(); disposeBadge() }
     const disposeStrip = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-drag-strip', order: 0 }, DesktopDragStrip)
     // Resolve ctx.layout lazily per click, never at registration time:

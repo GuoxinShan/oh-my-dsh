@@ -57,6 +57,68 @@ static SIGNALED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::ne
 /// The e2e verdict reported through the IPC channel, if it works.
 static E2E_VERDICT: Mutex<Option<String>> = Mutex::new(None);
 
+/// Process-wide updater state shared by the About page and title-band entry.
+/// Tauri's updater streams chunk lengths through callbacks; keeping the
+/// accumulator here lets either surface attach midway through a download.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+enum DesktopUpdateStatus {
+    Idle,
+    Checking,
+    Current,
+    Available {
+        version: String,
+        notes: String,
+    },
+    Preparing {
+        version: Option<String>,
+    },
+    Downloading {
+        version: String,
+        downloaded: u64,
+        total: Option<u64>,
+    },
+    Installing {
+        version: String,
+    },
+    Restarting {
+        version: String,
+    },
+    Failed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        message: String,
+    },
+}
+
+impl DesktopUpdateStatus {
+    /// A network/install operation owns the updater while these phases hold.
+    fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            Self::Checking
+                | Self::Preparing { .. }
+                | Self::Downloading { .. }
+                | Self::Installing { .. }
+                | Self::Restarting { .. }
+        )
+    }
+
+    /// Preserve the target version when an in-flight operation fails.
+    fn version(&self) -> Option<String> {
+        match self {
+            Self::Available { version, .. }
+            | Self::Downloading { version, .. }
+            | Self::Installing { version }
+            | Self::Restarting { version } => Some(version.clone()),
+            Self::Preparing { version } | Self::Failed { version, .. } => version.clone(),
+            Self::Idle | Self::Checking | Self::Current => None,
+        }
+    }
+}
+
+static UPDATE_STATUS: Mutex<DesktopUpdateStatus> = Mutex::new(DesktopUpdateStatus::Idle);
+
 /// Run the shell.
 pub fn run() {
     #[cfg(unix)]
@@ -79,7 +141,9 @@ pub fn run() {
             dsh_desktop_notify,
             dsh_desktop_save_file,
             dsh_desktop_e2e_report,
+            dsh_desktop_version_info,
             dsh_desktop_check_update,
+            dsh_desktop_update_status,
             dsh_desktop_apply_update
         ])
         .build(tauri::generate_context!())
@@ -1563,39 +1627,200 @@ fn dsh_desktop_e2e_report(verdict: String) -> Result<(), String> {
     Ok(())
 }
 
-/// IPC: check the updater endpoint for a newer release. Returns
-/// {version, notes} when an update exists, null when current, and a
-/// plain-English error when the updater is unconfigured or unreachable
-/// (dev builds, offline) so the indicator can fail soft.
-#[tauri::command]
-async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    use tauri_plugin_updater::UpdaterExt as _;
-    let updater = app.updater().map_err(|e| format!("updater unavailable: {e}"))?;
-    match updater.check().await {
-        Ok(Some(update)) => Ok(serde_json::json!({
-            "update": { "version": update.version, "notes": update.body.unwrap_or_default() },
-        })),
-        Ok(None) => Ok(serde_json::json!({ "update": null })),
-        Err(e) => Err(format!("check failed: {e}")),
+/// Replace the shared updater snapshot. Callback sites deliberately ignore a
+/// poisoned mutex: a status rendering failure must not abort a verified update.
+fn set_update_status(status: DesktopUpdateStatus) {
+    if let Ok(mut current) = UPDATE_STATUS.lock() {
+        *current = status;
     }
 }
 
-/// IPC: download + install + relaunch. The process is replaced on success,
-/// so a successful call never resolves on the client side; failures return
-/// a plain-English error.
+/// Clone the current updater snapshot for IPC and failure recovery.
+fn update_status_snapshot() -> Result<DesktopUpdateStatus, String> {
+    UPDATE_STATUS
+        .lock()
+        .map(|status| status.clone())
+        .map_err(|_| "update status unavailable".to_string())
+}
+
+/// Claim the updater for a check operation while retaining a known target for
+/// failure recovery.
+fn claim_update_check(status: &mut DesktopUpdateStatus) -> Result<Option<String>, String> {
+    if status.is_busy() {
+        return Err("update operation already in progress".to_string());
+    }
+    let version = status.version();
+    *status = DesktopUpdateStatus::Checking;
+    Ok(version)
+}
+
+fn begin_update_check() -> Result<Option<String>, String> {
+    let mut status = UPDATE_STATUS
+        .lock()
+        .map_err(|_| "update status unavailable".to_string())?;
+    claim_update_check(&mut status)
+}
+
+/// Claim download/install only after a successful check exposed a target.
+/// Failed operations must return through an explicit check before retrying,
+/// preserving the rule that installation follows a fresh user-visible offer.
+fn claim_update_apply(status: &mut DesktopUpdateStatus) -> Result<String, String> {
+    if status.is_busy() {
+        return Err("update operation already in progress".to_string());
+    }
+    let version = match &*status {
+        DesktopUpdateStatus::Available { version, .. } => version.clone(),
+        _ => return Err("no checked update available".to_string()),
+    };
+    *status = DesktopUpdateStatus::Preparing {
+        version: Some(version.clone()),
+    };
+    Ok(version)
+}
+
+fn begin_update_apply() -> Result<String, String> {
+    let mut status = UPDATE_STATUS
+        .lock()
+        .map_err(|_| "update status unavailable".to_string())?;
+    claim_update_apply(&mut status)
+}
+
+/// Add one updater download chunk without allowing integer wraparound.
+fn add_update_chunk(status: &mut DesktopUpdateStatus, chunk: usize, content_length: Option<u64>) {
+    let DesktopUpdateStatus::Downloading {
+        downloaded, total, ..
+    } = status
+    else {
+        return;
+    };
+    *downloaded = downloaded.saturating_add(chunk as u64);
+    if total.is_none() {
+        *total = content_length;
+    }
+}
+
+/// Compile-time desktop/runtime identity. The revision manifest is included in
+/// the binary so About never depends on the extracted runtime still existing.
+#[tauri::command]
+fn dsh_desktop_version_info() -> Result<serde_json::Value, String> {
+    let revision: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../runtime/revision.json"
+    )))
+    .map_err(|e| format!("runtime revision unavailable: {e}"))?;
+    Ok(serde_json::json!({
+        "desktopVersion": env!("CARGO_PKG_VERSION"),
+        "runtimeVersion": revision.get("ref").and_then(|value| value.as_str()).unwrap_or("?"),
+        "runtimeSha": revision.get("sha").and_then(|value| value.as_str()).unwrap_or("?"),
+    }))
+}
+
+/// IPC: check the updater endpoint for a newer release. The same result also
+/// advances the process-wide snapshot consumed by both browser surfaces.
+#[tauri::command]
+async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    use tauri_plugin_updater::UpdaterExt as _;
+
+    let expected_version = begin_update_check()?;
+    let result = async {
+        let updater = app
+            .updater()
+            .map_err(|e| format!("updater unavailable: {e}"))?;
+        updater.check().await.map_err(|e| format!("check failed: {e}"))
+    }
+    .await;
+
+    match result {
+        Ok(Some(update)) => {
+            let version = update.version;
+            let notes = update.body.unwrap_or_default();
+            set_update_status(DesktopUpdateStatus::Available {
+                version: version.clone(),
+                notes: notes.clone(),
+            });
+            Ok(serde_json::json!({ "update": { "version": version, "notes": notes } }))
+        }
+        Ok(None) => {
+            set_update_status(DesktopUpdateStatus::Current);
+            Ok(serde_json::json!({ "update": null }))
+        }
+        Err(message) => {
+            set_update_status(DesktopUpdateStatus::Failed {
+                version: expected_version,
+                message: message.clone(),
+            });
+            Err(message)
+        }
+    }
+}
+
+/// IPC: read the latest updater snapshot. The browser polls only while an
+/// update is visible or active, keeping the idle desktop free of IPC traffic.
+#[tauri::command]
+fn dsh_desktop_update_status() -> Result<DesktopUpdateStatus, String> {
+    update_status_snapshot()
+}
+
+/// IPC: single-flight recheck, streaming download, signature verification,
+/// installation, then process restart. Successful calls never resolve in the
+/// browser because restart replaces this process.
 #[tauri::command]
 async fn dsh_desktop_apply_update(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt as _;
-    let updater = app.updater().map_err(|e| format!("updater unavailable: {e}"))?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| format!("check failed: {e}"))?
-        .ok_or_else(|| "no update available".to_string())?;
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| format!("download/install failed: {e}"))?;
+
+    let expected_version = begin_update_apply()?;
+    let result = async {
+        let updater = app
+            .updater()
+            .map_err(|e| format!("updater unavailable: {e}"))?;
+        let update = updater
+            .check()
+            .await
+            .map_err(|e| format!("check failed: {e}"))?
+            .ok_or_else(|| "no update available".to_string())?;
+        let version = update.version.clone();
+        set_update_status(DesktopUpdateStatus::Downloading {
+            version: version.clone(),
+            downloaded: 0,
+            total: None,
+        });
+
+        let restart_version = version.clone();
+        let install_version = version.clone();
+        update
+            .download_and_install(
+                move |chunk, content_length| {
+                    if let Ok(mut status) = UPDATE_STATUS.lock() {
+                        add_update_chunk(&mut status, chunk, content_length);
+                    }
+                },
+                move || {
+                    set_update_status(DesktopUpdateStatus::Installing {
+                        version: install_version,
+                    });
+                },
+            )
+            .await
+            .map_err(|e| format!("download/install failed: {e}"))?;
+        set_update_status(DesktopUpdateStatus::Restarting {
+            version: restart_version,
+        });
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(message) = result {
+        let version = update_status_snapshot()
+            .ok()
+            .and_then(|status| status.version())
+            .or(Some(expected_version));
+        set_update_status(DesktopUpdateStatus::Failed {
+            version,
+            message: message.clone(),
+        });
+        return Err(message);
+    }
+
     // Never returns: the process is replaced by the new version.
     #[allow(unreachable_code)]
     {
@@ -1760,6 +1985,80 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn updater_progress_accumulates_chunks_and_keeps_the_first_total() {
+        let mut status = DesktopUpdateStatus::Downloading {
+            version: "0.3.0".into(),
+            downloaded: 0,
+            total: None,
+        };
+        add_update_chunk(&mut status, 4096, Some(16_384));
+        add_update_chunk(&mut status, 2048, Some(32_768));
+        assert_eq!(
+            status,
+            DesktopUpdateStatus::Downloading {
+                version: "0.3.0".into(),
+                downloaded: 6144,
+                total: Some(16_384),
+            }
+        );
+        let json = serde_json::to_value(status).unwrap();
+        assert_eq!(json["phase"], "downloading");
+        assert_eq!(json["downloaded"], 6144);
+        assert_eq!(json["total"], 16_384);
+    }
+
+    #[test]
+    fn updater_busy_and_version_projection_cover_active_phases() {
+        let preparing = DesktopUpdateStatus::Preparing {
+            version: Some("0.3.0".into()),
+        };
+        assert!(preparing.is_busy());
+        assert_eq!(preparing.version().as_deref(), Some("0.3.0"));
+        assert!(!DesktopUpdateStatus::Current.is_busy());
+        assert_eq!(DesktopUpdateStatus::Current.version(), None);
+    }
+
+    #[test]
+    fn updater_claims_require_a_target_and_preserve_it_across_rechecks() {
+        let mut idle = DesktopUpdateStatus::Idle;
+        assert_eq!(
+            claim_update_apply(&mut idle).unwrap_err(),
+            "no checked update available"
+        );
+        assert_eq!(idle, DesktopUpdateStatus::Idle);
+
+        let mut available = DesktopUpdateStatus::Available {
+            version: "0.3.0".into(),
+            notes: String::new(),
+        };
+        assert_eq!(
+            claim_update_check(&mut available).unwrap().as_deref(),
+            Some("0.3.0")
+        );
+        assert_eq!(available, DesktopUpdateStatus::Checking);
+        assert!(
+            claim_update_apply(&mut available).is_err(),
+            "checking is single-flight"
+        );
+
+        let mut failed = DesktopUpdateStatus::Failed {
+            version: Some("0.3.0".into()),
+            message: "offline".into(),
+        };
+        assert_eq!(
+            claim_update_apply(&mut failed).unwrap_err(),
+            "no checked update available"
+        );
+        assert_eq!(
+            failed,
+            DesktopUpdateStatus::Failed {
+                version: Some("0.3.0".into()),
+                message: "offline".into(),
+            }
+        );
     }
 
     #[test]

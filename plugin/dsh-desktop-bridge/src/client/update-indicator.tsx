@@ -1,76 +1,100 @@
-/**
- * The update indicator, browser half: one additive shell.overlay entry that
- * stays invisible until the periodic GitHub check finds a newer desktop
- * release — then a small download icon seats at the window's top-right
- * (level with the titleband controls), one click downloads + installs +
- * restarts. Check cadence borrows the Zed / GitHub Desktop consensus (a
- * quiet background poll, an affordance only when there is something to
- * show): one check soon after mount, then every UPDATE_INTERVAL_MS with a
- * forced refresh (the shared single-flight memo is bypassed so each tick
- * sees the live endpoint). Misses (offline, dev build without an endpoint)
- * stay silent; the icon simply never appears.
- */
+/** Quiet title-band updater entry with shared shell progress. */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { IconDownloadOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import {
+  isUpdateBusy, isUpdateIndicatorVisible, statusFromCheck, updatePercent,
+  type DesktopUpdaterInjected, type DesktopUpdateStatus,
+} from './updates.ts'
 
-/** Injected faces bound in apply's closure (thin wrappers over IPC). */
-export interface UpdateIndicatorInjected {
-  /** Updater check; `force` bypasses the shared boot memo (periodic ticks). null when current, {version} on hit. */
-  checkUpdate: (force?: boolean) => Promise<{ version: string } | null>
-  /** Download + install + restart (the call never resolves on success). */
-  applyUpdate: () => Promise<never>
-}
+export type UpdateIndicatorInjected = DesktopUpdaterInjected
+export type UpdateIndicatorProps = UpdateIndicatorInjected & PropsLocale<'desktop-bridge'>
 
-/** Full props: the injected faces (the slot passes its owner props too; unused). */
-export type UpdateIndicatorProps = UpdateIndicatorInjected
-/** Periodic check interval (Zed-style quiet poll; 2h). */
+/** Periodic check interval (quiet background poll; 2h). */
 const UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
-
-/** First check delay after mount: past the boot burst, soon enough to matter. */
+/** First check delay after mount, beyond the boot request burst. */
 const FIRST_CHECK_DELAY_MS = 3000
 
-type IndicatorState =
-  | { kind: 'hidden' }
-  | { kind: 'available'; version: string }
-  | { kind: 'applying'; version: string }
-
-/**
- * The top-right update affordance.
- * @param props - the injected faces.
- * @returns null while current/failed, the icon button when an update waits.
- */
+/** Top-right affordance: absent while current, compact live progress on update. */
 export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | null {
-  const { checkUpdate, applyUpdate } = props
-  const [state, setState] = useState<IndicatorState>({ kind: 'hidden' })
-  const alive = useRef(true)
+  const { checkUpdate, getUpdateStatus, updateGeneration, applyUpdate, t } = props
+  const [status, setStatus] = useState<DesktopUpdateStatus>({ phase: 'idle' })
+  const mounted = useRef(true)
+  const statusRequest = useRef(0)
+
+  const refreshStatus = useCallback(async (
+    requestGeneration: number,
+    fallback?: DesktopUpdateStatus,
+  ): Promise<void> => {
+    const sequence = ++statusRequest.current
+    try {
+      const snapshot = await getUpdateStatus()
+      if (mounted.current && updateGeneration() === requestGeneration && statusRequest.current === sequence) {
+        setStatus(snapshot)
+      }
+    } catch {
+      if (fallback !== undefined
+        && mounted.current
+        && updateGeneration() === requestGeneration
+        && statusRequest.current === sequence) {
+        setStatus(fallback)
+      }
+    }
+  }, [getUpdateStatus, updateGeneration])
 
   useEffect(() => {
-    alive.current = true
+    mounted.current = true
     const run = (force: boolean): void => {
-      checkUpdate(force).then(
-        (found) => {
-          if (!alive.current) return
-          if (found !== null) setState((prev) => (prev.kind === 'applying' ? prev : { kind: 'available', version: found.version }))
-        },
-        () => undefined, // offline / no endpoint: stay hidden, retry next tick
+      const request = checkUpdate(force)
+      const requestGeneration = updateGeneration()
+      request.then(
+        (found) => { void refreshStatus(requestGeneration, statusFromCheck(found)) },
+        () => { void refreshStatus(requestGeneration) },
       )
     }
+    void refreshStatus(updateGeneration())
     const first = setTimeout(() => { run(false) }, FIRST_CHECK_DELAY_MS)
     const interval = setInterval(() => { run(true) }, UPDATE_INTERVAL_MS)
     return () => {
-      alive.current = false
+      mounted.current = false
       clearTimeout(first)
       clearInterval(interval)
     }
-  }, [checkUpdate])
+  }, [checkUpdate, refreshStatus, updateGeneration])
+
+  // Available polls slowly so an About-initiated update is reflected here;
+  // active phases poll at UI cadence for live byte progress.
+  useEffect(() => {
+    if (status.phase !== 'available' && !isUpdateBusy(status)) return
+    let pending = false
+    const poll = (): void => {
+      if (pending) return
+      pending = true
+      const requestGeneration = updateGeneration()
+      refreshStatus(requestGeneration).finally(() => { pending = false })
+    }
+    const timer = setInterval(poll, isUpdateBusy(status) ? 120 : 750)
+    return () => { clearInterval(timer) }
+  }, [refreshStatus, status, updateGeneration])
 
   const onApply = useCallback(() => {
-    setState((prev) => (prev.kind === 'available' ? { kind: 'applying', version: prev.version } : prev))
-    applyUpdate().catch(() => { if (alive.current) setState((prev) => (prev.kind === 'applying' ? { kind: 'available', version: prev.version } : prev)) })
-  }, [applyUpdate])
+    if (status.phase !== 'available') return
+    const request = applyUpdate()
+    const requestGeneration = updateGeneration()
+    setStatus({ phase: 'preparing', version: status.version })
+    request.catch(() => { void refreshStatus(requestGeneration) })
+  }, [applyUpdate, refreshStatus, status, updateGeneration])
 
-  if (state.kind === 'hidden') return null
-  const applying = state.kind === 'applying'
+  if (!isUpdateIndicatorVisible(status)) return null
+
+  const busy = isUpdateBusy(status)
+  const percent = updatePercent(status)
+  const title = status.phase === 'available'
+    ? t('update.indicator.available', { version: status.version })
+    : status.phase === 'downloading' && percent !== undefined
+      ? t('update.indicator.progress', { percent })
+      : t('update.indicator.applying')
+
   return (
     <div
       data-desktop-update-indicator=""
@@ -89,27 +113,34 @@ export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | nul
       <button
         type="button"
         data-desktop-update-button=""
-        title={applying ? '正在下载并安装，完成后自动重启…' : `更新到 v${state.version}`}
+        aria-label={title}
+        title={title}
         onClick={onApply}
-        disabled={applying}
+        disabled={busy}
         style={{
           all: 'unset',
           boxSizing: 'border-box',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: '22px',
+          gap: '4px',
+          minWidth: '22px',
           height: '22px',
+          padding: percent === undefined ? 0 : '0 6px',
           borderRadius: '6px',
-          cursor: applying ? 'default' : 'pointer',
-          opacity: applying ? 0.55 : 1,
+          cursor: busy ? 'default' : 'pointer',
+          opacity: busy && percent === undefined ? 0.55 : 1,
           color: 'inherit',
           pointerEvents: 'auto',
+          fontSize: '11px',
+          lineHeight: '16px',
+          fontVariantNumeric: 'tabular-nums',
         }}
-        onMouseEnter={(e) => { if (!applying) e.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+        onMouseEnter={(event) => { if (!busy) event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' }}
+        onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent' }}
       >
         <IconDownloadOutline16 />
+        {percent === undefined ? null : <span>{percent}%</span>}
       </button>
     </div>
   )
