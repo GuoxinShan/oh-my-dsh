@@ -220,16 +220,20 @@ fn cli_command(runtime: &Runtime) -> Command {
     command
 }
 
-/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the release
-/// bundle's resources (extracted to ~/.dsh-desktop on first boot), then the
-/// repo-assembled runtime/build/<sha> from runtime/revision.json, then the
-/// source checkout (dev fallback).
+/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the repo's own
+/// runtime/build/<sha> from runtime/revision.json, then the release bundle's
+/// resources (extracted to ~/.dsh-desktop on first boot), then the source
+/// checkout (dev fallback).
+///
+/// runtime/build precedes the extraction: `tauri dev` runs the bare debug
+/// binary against the repo, and a ~/.dsh-desktop extraction can belong to an
+/// INSTALLED app of a different (older) revision — dev would silently boot
+/// stale code. The installed app always wins in production anyway: its
+/// bundled resources exist and the repo checkout (with runtime/build) does
+/// not ship inside the .app.
 fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
     if let Ok(dir) = std::env::var("DSH_DESKTOP_RUNTIME") {
         return bundled_runtime(PathBuf::from(dir));
-    }
-    if let Some(dir) = release_runtime_dir(app)? {
-        return bundled_runtime(dir);
     }
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let revision_path = repo_root.join("runtime/revision.json");
@@ -243,6 +247,9 @@ fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
                 return bundled_runtime(dir);
             }
         }
+    }
+    if let Some(dir) = release_runtime_dir(app)? {
+        return bundled_runtime(dir);
     }
     source_runtime()
 }
@@ -260,6 +267,15 @@ fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
 /// writable volume (App Translocation mounts the .app read-only) and keeps
 /// the nested node Mach-O out of the notarization scan later.
 fn release_runtime_dir(app: &tauri::AppHandle) -> Result<Option<PathBuf>, String> {
+    // Dev builds never consume bundled resources: `tauri dev` resolves
+    // resource_dir() to the repo's src-tauri/resources (a leftover from a
+    // previous desktop:build), and the ~/.dsh-desktop extraction it feeds
+    // can be an older assembly than the repo's runtime/build — dev would
+    // silently boot stale code. Release builds have no debug_assertions and
+    // take this path as before.
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
     let Some(resources) = app.path().resource_dir().ok() else {
         return Ok(None);
     };
