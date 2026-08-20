@@ -1,67 +1,124 @@
 # dsh-desktop
 
-基于 **Tauri 2** 的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 桌面壳：Rust 壳 + Node sidecar，替代 Electron 封装方案。
+[![CI](https://github.com/aka-danielZhang/dsh-desktop/actions/workflows/ci.yml/badge.svg)](https://github.com/aka-danielZhang/dsh-desktop/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/aka-danielZhang/dsh-desktop?display_name=tag&sort=semver)](https://github.com/aka-danielZhang/dsh-desktop/releases/latest)
 
-> 私有项目，早期规划阶段。参考了 [dataelement/dsh-desktop](https://github.com/dataelement/dsh-desktop)（Electron 实现）的进程编排设计。
+DeepSeek Harness 的原生桌面发行版。它用 **Tauri 2 + 系统 WebView** 承载完整的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) runtime，并通过一组独立 DSH 插件补齐桌面集成，而不是再捆绑一份 Chromium。
 
-## 为什么是 Tauri 而不是 Electron
+项目已公开，当前按 `0.2.0-rc.x` 节奏持续发布。macOS 与 Windows 安装包由 GitHub Actions 从同一个 tag 构建；桌面自动更新始终指向最新的完整双平台 Release。
 
-DSH 本身就是「Node Host 进程 + 纯 Web UI」的分离架构，壳只需要做四件事：
+## 下载
 
-1. spawn Harness 子进程（sidecar，捆绑 Node 24 + 架构相关原生模块）
-2. 随机回环端口分配（`portpicker`，避免冲突）
-3. 就绪检测（轮询 `GET /`，webserver 就绪即 2xx）
-4. 窗口加载 `http://127.0.0.1:<port>`（系统 WebView：WKWebView / WebView2）
+前往 [GitHub Releases](https://github.com/aka-danielZhang/dsh-desktop/releases/latest) 下载最新版本：
 
-Electron 壳里 Chromium + Node 是纯冗余——DSH 带原生模块（landlock addon）需要真 Node ABI，dsh-desktop 因此单独捆绑了 node@24.9.0，Electron 自带的运行时完全空转。Tauri 版直接砍掉这层开销。
-
-| | Electron 壳 | Tauri 壳（本项目） |
+| 平台 | 安装包 | 状态 |
 |---|---|---|
-| 壳本体 | ~190MB | ~10MB Rust 二进制 |
-| 常驻内存 | 300-500MB（整个 Chromium） | 80-150MB（系统 WebView 共享） |
-| Node 运行时 | ~90MB（保留） | ~90MB（保留） |
-| Webview | Chromium（一致） | 系统 WebView（需回归验证） |
+| macOS Apple Silicon | `.dmg` | Developer ID 签名并通过 Apple 公证 |
+| Windows x64 | NSIS `setup.exe` | 当前用户安装；未签名构建可能触发 SmartScreen 提示 |
+| Linux | 暂无官方安装包 | 可从源码参与适配 |
+
+macOS 打开 DMG 后把 `dsh-desktop.app` 拖入 Applications。Windows 运行 NSIS 安装器即可，不需要管理员权限。
+
+安装后的会话、工作区、设置和凭据默认与命令行 DSH 共用同一个 `~/.dsh`。`~/.dsh-desktop` 只保存桌面 runtime、插件资源和壳层编排数据，不复制用户业务数据。
+
+## 已实现能力
+
+- **完整 Harness runtime**：Release 内置固定 revision 的 DSH、Node 24 与所需原生模块，用户不需要单独安装 Node 或 pnpm。
+- **原生桌面窗口**：Tauri 负责随机回环端口、sidecar 启动、就绪检测和系统 WebView；macOS 使用融合标题栏与原生窗口控制。
+- **可靠的进程生命周期**：Unix 进程组、Windows Job Object、优雅退出阶梯和 stale-sidecar 注册表共同防止孤儿 Harness 进程。
+- **桌面系统集成**：系统浏览器外链、原生注意力通知、下载保存桥、窗口拖拽区和桌面专属侧栏控制。
+- **About 与自动更新**：About 页展示桌面版本和内置 runtime revision；后台静默检查更新，用户确认后才下载、验签、安装并重启，两个 UI 入口共享同一进度状态。
+- **可诊断日志**：Harness 日志与桌面 sidecar 日志写入 `$DSH_HOME/logs`，并维护 latest 软链接。
+- **桌面自有插件**：Release 只捆绑运行面直接依赖的 `dsh-desktop-bridge` 与 `dsh-compaction-hierarchical`，其他插件保持独立安装和独立发版。
 
 ## 架构
 
-两个平面（契约详见 [AGENTS.md](AGENTS.md)）：
-
+```text
+┌──────────────────────── dsh-desktop ────────────────────────┐
+│ Tauri 2 shell                                                │
+│  ├─ runtime/resource extraction                              │
+│  ├─ sidecar supervision                                      │
+│  ├─ updater, notifications, downloads, external links        │
+│  └─ WKWebView / WebView2 → http://127.0.0.1:<random>          │
+│                              │                                │
+│                              ▼                                │
+│ Bundled DeepSeek Harness runtime                              │
+│  ├─ Node 24 + DSH CLI                                        │
+│  ├─ shared ~/.dsh sessions, settings and credentials         │
+│  └─ web profile                                              │
+│      ├─ dsh-desktop-bridge                                   │
+│      └─ dsh-compaction-hierarchical                          │
+└──────────────────────────────────────────────────────────────┘
 ```
-dsh-desktop                         出树插件 + 桌面壳的 monorepo
-├── plugin/<name>/                  一个可独立打 tag 的 DSH 插件（目录名 === 包名）
-│    └── dsh-desktop-bridge         桌面门控桥（host 空 apply + browser 半门控）
-│         ├── 外链路由 → dsh_desktop_open_external
-│         ├── 注意力通知 → dsh_desktop_notify
-│         └── shell.overlay 桌面指示 pill
-└── Tauri 2 Rust 壳
-     ├── sidecar: Harness Node 子进程
-     ├── 随机 127.0.0.1 端口 + 就绪检测
-     ├── webview 注入 window.__DSH_DESKTOP__ + IPC
-     └── 系统 WebView → http://127.0.0.1:<random>
+
+壳层只负责进程、窗口、分发和 OS IPC；Harness 业务能力仍由 Cordis/DSH 插件组合。普通浏览器中的 `dsh-desktop-bridge` 会在检测不到 `window.__DSH_DESKTOP__` 时零副作用退出，因此同一插件也可以安全挂进终端启动的 `dsh web` profile。
+
+## 仓库结构
+
+```text
+plugin/<name>/                  独立安装、测试和发版的 DSH 插件
+  dsh-desktop-bridge/           桌面门控桥、About/更新 UI、日志汇
+  dsh-compaction-hierarchical/  桌面随包的层次压缩 Provider
+  dsh-mcp-settings/             MCP 设置插件
+  dsh-provider-balance/         Provider 配额可视化
+  dsh-reasoning-efforts/        reasoningEfforts 声明补丁
+  dsh-web-search-toggle/        Web Search 通用设置开关
+src-tauri/                      Tauri 2 Rust 壳、权限与打包配置
+scripts/                        runtime 组装、资源打包与发布校验
+docs/                           打包/发布手册和设计决策记录
+runtime/revision.json           内置 Harness fork tag 与精确 commit
 ```
 
-关键原则：壳层不含业务逻辑；Harness 不感知壳的存在。每个插件是独立安装单元（`dsh plugin --profile web add <repo>/plugin/<name>`），桌面 tag（`v<semver>`）与插件 tag（`<包名>-v<semver>`）分家。对照 dataelement/dsh-desktop 的 `patches/` 模型：那是钉死上游再打压缩包补丁，不是插件布局。
+插件 tag 使用 `<包名>-v<semver>`，桌面 tag 使用 `v<semver>`；两者版本独立。部分插件同时发布到 npm，具体分发纪律见 [AGENTS.md](AGENTS.md)。
 
-## Milestones
+## 本地开发
 
-- [x] M0 桥插件：`plugin/dsh-desktop-bridge`（外链路由 / 注意力通知 / 桌面指示），实机挂载验证通过
-- [x] M1 壳原型：Tauri 脚手架 + sidecar spawn + 端口分配 + 就绪检测 + 窗口加载 + `__DSH_DESKTOP__` 注入 + IPC 命令表（e2e `DSH_E2E_OK`；WKWebView chunked 加载失败已修，见 docs/notes）
-- [ ] M2 对齐 dsh-desktop 行为：单实例锁、孤儿进程清理、日志落盘、启动根目录管理、通知点击回跳
-- [ ] M3 平台化：macOS 签名公证、自动更新、安装包（DMG / NSIS）；Windows 壳与 NSIS 已落地，Authenticode 流水线已接（待填 Code Signing 证书）
-- [ ] M4 WKWebView / WebView2 下 DSH client UI 回归（重点：`color-mix()` 等 CSS 兼容）
-
-## 开发
+前置条件：Node 22+、仓库声明版本的 pnpm、Rust stable。Windows 需要 MSVC toolchain；构建 runtime 的操作系统必须与目标安装包一致。
 
 ```sh
-# 前置：Node 22+、pnpm；桥插件的类型检查/构建另需 DSH 源码 checkout（见 AGENTS.md）
-cd plugin/dsh-desktop-bridge
-pnpm install && pnpm run setup
-pnpm run typecheck && pnpm run build && pnpm run test
+git clone https://github.com/aka-danielZhang/dsh-desktop.git
+cd dsh-desktop
+pnpm install
 
-# Tauri 壳（M1 起，需 Rust toolchain；Windows 必须是 MSVC 目标，见 packaging-playbook §8）
+# 组装公开 fork 对应的 runtime，并作为插件类型锚使用
+node scripts/prepare-runtime.mjs
+DSH_CHECKOUT="$PWD/runtime/src" pnpm run plugin:setup
+
+# 各桌面自有插件保持独立依赖树
+pnpm --dir plugin/dsh-desktop-bridge install
+pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
+
+# 开发窗口
 pnpm desktop:dev
-pnpm desktop:build
 ```
+
+常用验证命令：
+
+```sh
+# 全树检查前，各插件需要自己的依赖树（symlink 锚会自动跳过）
+for dir in plugin/*/; do [ -L "${dir%/}" ] || (cd "$dir" && pnpm install); done
+
+pnpm run plugins:check       # 所有出树插件的 typecheck/test/build
+pnpm run desktop:prepare     # 组装 runtime 与桌面自有插件资源
+pnpm desktop:build           # 当前平台的完整安装包
+```
+
+`src-tauri/resources/` 是构建生成目录。裸跑 `cargo build`/`cargo check` 会因为资源门禁失败；需要先执行 `pnpm run desktop:prepare`。完整平台步骤见 [打包手册](docs/packaging-playbook.md)。
+
+## 发布与更新
+
+桌面版本同时写在 `src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.toml`。推送匹配的 `v<semver>` tag 后，Release workflow 会并行构建 macOS 和 Windows，只有两端都成功才生成 `latest.json` 并推进 GitHub `latest` 指针。
+
+macOS 流水线还会解析 DMG 的 `.DS_Store`，核对背景模式、窗口尺寸和图标坐标，再执行公证。发布操作与故障恢复见 [Release Runbook](docs/release-runbook.md)。
+
+## 项目文档
+
+- [AGENTS.md](AGENTS.md)：仓库契约、插件边界、runtime 分发和版本纪律
+- [Packaging Playbook](docs/packaging-playbook.md)：macOS/Windows 构建、签名、公证与安装包结构
+- [Release Runbook](docs/release-runbook.md)：tag、GitHub Actions、Release 与自动更新
+- [Design Notes](docs/notes/)：关键问题的复现、决策和验证记录
+
+问题与改进建议可以直接提交 [Issue](https://github.com/aka-danielZhang/dsh-desktop/issues) 或 Pull Request。
 
 ## License
 
