@@ -404,7 +404,10 @@ jobs:
           echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > "$HOME/.npmrc"
           cd "plugin/$NAME"
           npm publish --access public
-          npm view "$NAME@$VERSION" version
+          # No immediate verify: the registry index lags a few seconds behind
+          # publish, and an instant `npm view` raced a 404 into a red job even
+          # though the publish itself succeeded (dsh-mcp-settings 0.2.3 first
+          # publish). npm publish already fails loud on real errors.
 
       - name: Compose release body
         run: |
