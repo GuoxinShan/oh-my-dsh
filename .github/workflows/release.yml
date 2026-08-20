@@ -1,12 +1,14 @@
 name: Release
 
 # 增量发布流水线，tag 分流（见 AGENTS.md「发版」，无斜杠命名）：
-#   v<semver>             → 桌面公证版（.app/.dmg + updater artifacts + latest.json）
+#   v<semver>             → 桌面公证版（macOS .app/.dmg + Windows NSIS + updater artifacts + latest.json）
 #   dsh-<name>-v<semver>  → 插件源码 Release（git archive 附件，不发 npm）
 #
 # ⚠️ latest 指针纪律：自动更新端点是 releases/latest/download/latest.json，
 # desktop Release 独占 latest 指针；插件 Release 一律 make_latest: false，
 # 否则插件发布会把 latest 抢走、桌面自动更新即刻断链。
+# ⚠️ 双平台纪律：macos 与 windows 必须都成功才发 GitHub Release；一侧失败
+# 则不发版，避免 latest.json 缺平台把该平台的自动更新打穿。
 
 on:
   push:
@@ -21,8 +23,8 @@ permissions:
   contents: write
 
 jobs:
-  desktop:
-    name: Desktop (sign, notarize, publish)
+  desktop-macos:
+    name: Desktop macOS (sign, notarize)
     if: startsWith(github.ref_name, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))
     runs-on: macos-latest
     timeout-minutes: 90
@@ -53,7 +55,9 @@ jobs:
             runtime/src
             runtime/build
             runtime/tarballs
-          key: runtime-${{ hashFiles('runtime/revision.json') }}-${{ hashFiles('scripts/prepare-runtime.mjs') }}
+          key: runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-${{ hashFiles('scripts/prepare-runtime.mjs') }}
+          restore-keys: |
+            runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-
 
       - name: Import signing certificate
         env:
@@ -116,24 +120,140 @@ jobs:
           xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           spctl -a -vv -t install "$DMG"
 
-      - name: Compose updater manifest (latest.json)
+      - name: Stage updater fragment
         run: |
           set -euo pipefail
-          BUNDLE=src-tauri/target/release/bundle
-          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          SIG=$(cat "$BUNDLE/macos/dsh-desktop.app.tar.gz.sig")
+          mkdir -p dist
+          cp src-tauri/target/release/bundle/dmg/*.dmg dist/
+          cp src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz dist/
+          cp src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig dist/
+          SIG=$(cat src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig)
           REPO="${{ github.repository }}"
           TAG="${{ github.ref_name || inputs.tag }}"
           node -e '
-          const [version, sig, url] = [process.argv[1], process.argv[2], process.argv[3]]
-          const manifest = {
-            version,
-            notes: "See the release page for notes.",
-            pub_date: new Date().toISOString(),
-            platforms: { "darwin-aarch64": { signature: sig, url } },
-          }
-          require("fs").writeFileSync("src-tauri/target/release/bundle/latest.json", JSON.stringify(manifest, null, 2) + "\n")
-          ' "$VERSION" "$SIG" "https://github.com/$REPO/releases/download/$TAG/dsh-desktop.app.tar.gz"
+          const [sig, url] = process.argv.slice(1)
+          require("fs").writeFileSync("dist/latest-darwin.json", JSON.stringify({ "darwin-aarch64": { signature: sig, url } }, null, 2) + "\n")
+          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/dsh-desktop.app.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: dist/
+
+  desktop-windows:
+    name: Desktop Windows (NSIS)
+    if: startsWith(github.ref_name, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert tag matches the desktop version
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name || inputs.tag }}"
+          V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          [ "v$V" = "$TAG" ] || { echo "::error::tag $TAG != v$V (src-tauri/tauri.conf.json + Cargo.toml not bumped?)"; exit 1; }
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
+        uses: actions/cache@v4
+        with:
+          path: |
+            runtime/src
+            runtime/build
+            runtime/tarballs
+          key: runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-${{ hashFiles('scripts/prepare-runtime.mjs') }}
+          restore-keys: |
+            runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-
+
+      - name: Prepare deps and the bridge type anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm install
+          node scripts/prepare-runtime.mjs
+          DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
+          pnpm --dir plugin/dsh-desktop-bridge install
+
+      - name: Import Authenticode certificate
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: ./scripts/windows-import-cert.ps1
+
+      - name: Build NSIS bundle
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ] && [ "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" != " " ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          fi
+          if [ -f src-tauri/tauri.windows-sign.json ]; then
+            pnpm desktop:build -- --config src-tauri/tauri.windows-sign.json
+          else
+            echo "dsh-desktop: WINDOWS_CERTIFICATE secret empty — NSIS will be unsigned (SmartScreen warning)"
+            pnpm desktop:build
+          fi
+
+      - name: Stage updater fragment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          EXE=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
+          cp "$EXE" dist/
+          cp "$EXE.sig" dist/
+          SIG=$(tr -d '\r' < "$EXE.sig")
+          BASENAME=$(basename "$EXE")
+          REPO="${{ github.repository }}"
+          TAG="${{ github.ref_name || inputs.tag }}"
+          node -e '
+          const [sig, url] = process.argv.slice(1)
+          require("fs").writeFileSync("dist/latest-windows.json", JSON.stringify({ "windows-x86_64": { signature: sig, url } }, null, 2) + "\n")
+          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/$BASENAME"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-bundle
+          path: dist/
+
+  desktop-publish:
+    name: Desktop publish
+    needs: [desktop-macos, desktop-windows]
+    if: startsWith(github.ref_name, 'v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-bundle
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-bundle
+          path: dist
+
+      - name: Compose updater manifest (latest.json)
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          node scripts/compose-latest-json.mjs "$VERSION" dist/latest.json dist/latest-darwin.json dist/latest-windows.json
 
       - name: Publish GitHub Release (owns the latest pointer)
         uses: softprops/action-gh-release@v2
@@ -141,10 +261,12 @@ jobs:
           tag_name: ${{ github.ref_name || inputs.tag }}
           make_latest: true
           files: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz
-            src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig
-            src-tauri/target/release/bundle/latest.json
+            dist/*.dmg
+            dist/dsh-desktop.app.tar.gz
+            dist/dsh-desktop.app.tar.gz.sig
+            dist/*-setup.exe
+            dist/*-setup.exe.sig
+            dist/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

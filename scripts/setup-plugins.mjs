@@ -15,13 +15,14 @@
 import { existsSync, lstatSync, symlinkSync, unlinkSync, realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { execPnpm } from './cli-bins.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const home = process.env.HOME || process.env.USERPROFILE || ''
 const candidates = [
   process.env.DSH_CHECKOUT,
   resolve(repoRoot, '../deepseek-harness'),
-  resolve(process.env.HOME ?? '', 'workspace/deepseek-harness'),
+  resolve(home, 'workspace/deepseek-harness'),
 ].filter(Boolean)
 
 const target = candidates.find((c) => existsSync(resolve(c, 'docs/architecture.md')))
@@ -53,9 +54,9 @@ for (const { link, note } of anchors) {
     console.error(`setup-plugins: ${link} exists and is not a symlink — refusing to remove it`)
     process.exit(1)
   }
-  symlinkSync(resolved, link)
+  symlinkSync(resolved, link, process.platform === 'win32' ? 'junction' : 'dir')
   console.log(`setup-plugins: ${link} -> ${resolved} (${note})`)
 }
 
 // The bridge keeps its own setup contract (dsh anchor + devDeps).
-execFileSync('pnpm', ['run', 'setup'], { cwd: resolve(repoRoot, 'plugin/dsh-desktop-bridge'), stdio: 'inherit' })
+execPnpm(['run', 'setup'], { cwd: resolve(repoRoot, 'plugin/dsh-desktop-bridge'), stdio: 'inherit' })

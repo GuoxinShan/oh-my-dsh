@@ -23,7 +23,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg", "nsis"],
     "createUpdaterArtifacts": true,
     "macOS": {
       "hardenedRuntime": true,
@@ -41,6 +41,18 @@
           "x": 480,
           "y": 196
         }
+      }
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": true,
+        "languages": ["SimpChinese", "English"],
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "resources": [

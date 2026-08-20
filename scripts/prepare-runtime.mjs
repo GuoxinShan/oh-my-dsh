@@ -20,10 +20,12 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 6
+const SCRIPT_REV = 7
+const cacheToken = `${SCRIPT_REV} ${process.platform} ${process.arch}`
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
@@ -35,10 +37,13 @@ const buildMarker = resolve(srcDir, '.prepare-runtime-ok')
 const cachedRev = existsSync(resolve(outDir, '.script-rev'))
   ? readFileSync(resolve(outDir, '.script-rev'), 'utf8').trim()
   : ''
+const cachedNode = process.platform === 'win32'
+  ? resolve(outDir, 'tools/node_modules/node/bin/node.exe')
+  : resolve(outDir, 'tools/node_modules/node/bin/node')
 if (
-  cachedRev === String(SCRIPT_REV)
+  cachedRev === cacheToken
   && existsSync(resolve(outDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'))
-  && existsSync(resolve(outDir, 'tools/node_modules/node/bin/node'))
+  && existsSync(cachedNode)
 ) {
   console.log(`prepare-runtime: cached ${revision.sha.slice(0, 12)} -> ${outDir}`)
   process.exit(0)
@@ -69,9 +74,9 @@ if (actual !== revision.sha) {
 // 2. Install + build, cached per SHA.
 if (!existsSync(buildMarker) || readFileSync(buildMarker, 'utf8').trim() !== revision.sha) {
   console.log('prepare-runtime: pnpm install (frozen)...')
-  execFileSync('pnpm', ['install', '--frozen-lockfile'], { cwd: srcDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+  execPnpm(['install', '--frozen-lockfile'], { cwd: srcDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
   console.log('prepare-runtime: pnpm build...')
-  execFileSync('pnpm', ['run', 'build'], { cwd: srcDir, stdio: 'inherit' })
+  execPnpm( ['run', 'build'], { cwd: srcDir, stdio: 'inherit' })
   writeFileSync(buildMarker, revision.sha + '\n')
 } else {
   console.log('prepare-runtime: install+build cached for this SHA')
@@ -83,7 +88,7 @@ if (!existsSync(buildMarker) || readFileSync(buildMarker, 'utf8').trim() !== rev
 rmSync(tarballDir, { recursive: true, force: true })
 mkdirSync(tarballDir, { recursive: true })
 const packages = JSON.parse(
-  execFileSync('pnpm', ['-r', 'ls', '--depth', '-1', '--json'], { cwd: srcDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
+  execPnpm( ['-r', 'ls', '--depth', '-1', '--json'], { cwd: srcDir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }),
 )
 const overrides = {}
 let packed = 0
@@ -193,7 +198,7 @@ for (const pkg of packages) {
   // prepare verification off-target; skip them — overrides then leaves them
   // to the official npm build, which is the same artifact either way.
   try {
-    execFileSync('pnpm', ['pack', '--pack-destination', tarballDir], { cwd: pkg.path, stdio: 'pipe' })
+    execPnpm( ['pack', '--pack-destination', tarballDir], { cwd: pkg.path, stdio: 'pipe' })
   } catch {
     skipped.push(pkg.name)
     continue
@@ -226,6 +231,7 @@ const finalOverrides = { ...BASELINE_PIN, ...overrides }
 // via `node --import tsx/esm`, and the bundled runtime must match (the shell
 // passes the same --import for bundled runs).
 const runtimeDir = resolve(outDir, 'dsh')
+rmSync(runtimeDir, { recursive: true, force: true })
 mkdirSync(runtimeDir, { recursive: true })
 // Overrides MUST live in pnpm-workspace.yaml: pnpm 11 dropped support for the
 // package.json `pnpm.overrides` field, and under pnpm 11 the runtime manifest's
@@ -299,6 +305,13 @@ writeFileSync(resolve(runtimeDir, 'pnpm-workspace.yaml'), [
   '  node-addon-require-builtin: false',
   '',
 ].join('\n'))
+// Windows bsdtar follows NTFS junctions into copies, which breaks pnpm's
+// nested .pnpm layout (tsx then cannot resolve sibling esbuild). Hoist so
+// the tree is real directories and survives the tar round-trip. Unix keeps
+// the default isolated linker — tar preserves POSIX symlinks.
+if (process.platform === 'win32') {
+  writeFileSync(resolve(runtimeDir, '.npmrc'), 'node-linker=hoisted\n')
+}
 console.log('prepare-runtime: installing runtime tree...')
 // Both the lockfile AND node_modules must go: pnpm install with no lockfile
 // but a stale node_modules resolves incrementally against the existing
@@ -306,7 +319,7 @@ console.log('prepare-runtime: installing runtime tree...')
 // tarballs (the SCRIPT_REV=4 half-assembly shipped exactly that).
 rmSync(resolve(runtimeDir, 'pnpm-lock.yaml'), { force: true })
 rmSync(resolve(runtimeDir, 'node_modules'), { recursive: true, force: true })
-execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+execPnpm(['install', '--no-frozen-lockfile'], { cwd: runtimeDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
 // node-pty's spawn-helper needs its exec bit; the postinstall that restores it
 // may be skipped as an ignored build, so run the same idempotent chmod directly.
 {
@@ -324,38 +337,61 @@ execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, std
   const offBaseline = []
   const duplicated = []
   const pnpmDir = resolve(runtimeDir, 'node_modules/.pnpm')
-  // package name -> whether any file: (packed tarball) instance exists
-  const packedNames = new Set()
-  for (const entry of readdirSync(pnpmDir)) {
-    // Non-greedy name + the LAST '@' before the version segment: dir names
-    // embed peer suffixes ("pkg@ver_peer@ver"), so a greedy name group would
-    // swallow the real version.
-    const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
-    if (hit === null) continue
-    if (hit[2].includes('file+')) packedNames.add(`@deepseek-ai/${hit[1]}`)
-  }
-  for (const entry of readdirSync(pnpmDir)) {
-    const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
-    if (hit === null) continue
-    const pkg = `@deepseek-ai/${hit[1]}`
-    const version = hit[2]
-    if (FORK_MODIFIED.has(pkg)) drifted.push(`${pkg} (${entry})`)
-    // A registry-semver instance of a package that ALSO has a packed tarball
-    // instance is a duplicate module build regardless of version equality:
-    // same-version official copies passed the baseline scan below on
-    // 2026-08-20 while splitting every unique-symbol registry across the two
-    // instances (`undefined (reading 'prepare')`, lost typert routes). Only
-    // pack-skipped natives may exist as registry-only singletons.
-    if (!version.includes('file+') && packedNames.has(pkg)) {
-      duplicated.push(`${pkg}@${version} (tarball instance also present)`)
+  if (existsSync(pnpmDir)) {
+    // package name -> whether any file: (packed tarball) instance exists
+    const packedNames = new Set()
+    for (const entry of readdirSync(pnpmDir)) {
+      // Non-greedy name + the LAST '@' before the version segment: dir names
+      // embed peer suffixes ("pkg@ver_peer@ver"), so a greedy name group would
+      // swallow the real version.
+      const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
+      if (hit === null) continue
+      if (hit[2].includes('file+')) packedNames.add(`@deepseek-ai/${hit[1]}`)
     }
-    // Tarball copies (file:+..) carry no version in the dir name beyond the
-    // sha prefix; only registry copies spell a real version. The expected
-    // version per package is the fork tree's own manifest (BASELINE_PIN), so
-    // vendored framework lines (schemastery 3.x) and natives (landlock 0.1.1)
-    // compare against themselves, not the dsh rc cadence.
-    if (!version.includes('file+') && version !== (BASELINE_PIN[pkg] ?? forkBaseVersion) && !version.endsWith(`.zw.${zwMatch[2]}`)) {
-      offBaseline.push(`${pkg}@${version} (expected ${BASELINE_PIN[pkg] ?? forkBaseVersion})`)
+    for (const entry of readdirSync(pnpmDir)) {
+      const hit = /^@deepseek-ai\+(.+?)@([^_]+)/.exec(entry)
+      if (hit === null) continue
+      const pkg = `@deepseek-ai/${hit[1]}`
+      const version = hit[2]
+      if (FORK_MODIFIED.has(pkg)) drifted.push(`${pkg} (${entry})`)
+      // A registry-semver instance of a package that ALSO has a packed tarball
+      // instance is a duplicate module build regardless of version equality:
+      // same-version official copies passed the baseline scan below on
+      // 2026-08-20 while splitting every unique-symbol registry across the two
+      // instances (`undefined (reading 'prepare')`, lost typert routes). Only
+      // pack-skipped natives may exist as registry-only singletons.
+      if (!version.includes('file+') && packedNames.has(pkg)) {
+        duplicated.push(`${pkg}@${version} (tarball instance also present)`)
+      }
+      // Tarball copies (file:+..) carry no version in the dir name beyond the
+      // sha prefix; only registry copies spell a real version. The expected
+      // version per package is the fork tree's own manifest (BASELINE_PIN), so
+      // vendored framework lines (schemastery 3.x) and natives (landlock 0.1.1)
+      // compare against themselves, not the dsh rc cadence.
+      if (!version.includes('file+') && version !== (BASELINE_PIN[pkg] ?? forkBaseVersion) && !version.endsWith(`.zw.${zwMatch[2]}`)) {
+        offBaseline.push(`${pkg}@${version} (expected ${BASELINE_PIN[pkg] ?? forkBaseVersion})`)
+      }
+    }
+  } else {
+    // Windows hoisted layout (node-linker=hoisted) has no .pnpm package dirs;
+    // approximate the same fail-loud net over the flattened tree: fork-modified
+    // packages must not exist under @deepseek-ai at all (they ship as @crazx/*),
+    // and every package's version must sit on the pinned upstream line.
+    // Duplicate-instance detection stays isolated-only: hoisted dedupes to one
+    // visible dir per name; a second version only hides in suffixed dirs the
+    // resolver would rather surface as offBaseline here anyway.
+    const scopeDir = resolve(runtimeDir, 'node_modules/@deepseek-ai')
+    if (existsSync(scopeDir)) {
+      for (const name of readdirSync(scopeDir)) {
+        const pkg = `@deepseek-ai/${name}`
+        if (FORK_MODIFIED.has(pkg)) drifted.push(`${pkg} (hoisted top-level official copy)`)
+        const manifest = resolve(scopeDir, name, 'package.json')
+        if (!existsSync(manifest)) continue
+        const version = JSON.parse(readFileSync(manifest, 'utf8')).version ?? ''
+        if (version !== (BASELINE_PIN[pkg] ?? forkBaseVersion) && !version.endsWith(`.zw.${zwMatch[2]}`)) {
+          offBaseline.push(`${pkg}@${version} (expected ${BASELINE_PIN[pkg] ?? forkBaseVersion})`)
+        }
+      }
     }
   }
   if (drifted.length > 0) {
@@ -379,14 +415,18 @@ execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: runtimeDir, std
 
 // 5. Runtime tools: node + pnpm binaries.
 const toolsDir = resolve(outDir, 'tools')
+rmSync(toolsDir, { recursive: true, force: true })
 mkdirSync(toolsDir, { recursive: true })
 writeFileSync(resolve(toolsDir, 'package.json'), JSON.stringify({
   private: true,
   dependencies: { node: '24.9.0', pnpm: '^10.28.0' },
 }, null, 2) + '\n')
 writeFileSync(resolve(toolsDir, 'pnpm-workspace.yaml'), 'allowBuilds:\n  node: true\n')
+if (process.platform === 'win32') {
+  writeFileSync(resolve(toolsDir, '.npmrc'), 'node-linker=hoisted\n')
+}
 rmSync(resolve(toolsDir, 'pnpm-lock.yaml'), { force: true })
-execFileSync('pnpm', ['install', '--no-frozen-lockfile'], { cwd: toolsDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
-writeFileSync(resolve(outDir, '.script-rev'), `${SCRIPT_REV}\n`)
+execPnpm( ['install', '--no-frozen-lockfile'], { cwd: toolsDir, stdio: 'inherit', env: { ...process.env, CI: 'true' } })
+writeFileSync(resolve(outDir, '.script-rev'), `${cacheToken}\n`)
 
 console.log(`prepare-runtime: done -> ${outDir}`)

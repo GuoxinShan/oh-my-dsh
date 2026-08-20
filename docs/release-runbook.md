@@ -6,7 +6,7 @@
 
 | 发什么 | tag | Release 产物 | latest 指针 |
 |---|---|---|---|
-| 桌面公证版 | `v<semver>`（如 `v0.2.0-rc.2`） | dmg + app.tar.gz + .sig + latest.json | **独占**（`make_latest: true`） |
+| 桌面公证版 | `v<semver>`（如 `v0.2.0-rc.2`） | dmg + app.tar.gz + Windows NSIS setup.exe + .sig + latest.json（含 darwin-aarch64 与 windows-x86_64） | **独占**（`make_latest: true`） |
 | 插件 | `<包名>-v<semver>`（如 `dsh-mcp-settings-v0.2.3`） | git archive 的插件源码 tarball + 安装说明 | **永不**（`make_latest: false`） |
 | runtime fork | `v<基线>+zw.<补丁>`（如 `v0.1.0-rc.7+zw.1`，在 fork 仓库） | 无 Release，仅 git tag 供 revision.json 钉 | — |
 
@@ -27,6 +27,8 @@
 | `APPLE_TEAM_ID` | 10 位 Team ID | developer.apple.com → Membership Details |
 | `TAURI_SIGNING_PRIVATE_KEY` | updater 签名私钥（整文件内容） | `tauri signer generate -w tauri-keys/dsh-desktop.key`（本地已生成，`tauri-keys/` 已 gitignore，**别提交**） |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 私钥密码 | 我们生成时为空，填一个空格或留空字符串 |
+| `WINDOWS_CERTIFICATE` | Authenticode 证书的 pfx（base64） | 有代码签名 PFX 才填；空则 Windows 安装包不签（SmartScreen 警告）。生成：`[Convert]::ToBase64String([IO.File]::ReadAllBytes('cert.pfx'))` |
+| `WINDOWS_CERTIFICATE_PASSWORD` | 导出该 pfx 时的密码 | 与上一行成对；买证与流程见 packaging-playbook §9 |
 
 公钥已硬编码在 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`——**私钥丢失=自动更新链断**，需重新生成并换公钥发版。
 
@@ -36,11 +38,11 @@
 
 ```sh
 # 1. 版本号两处同步：src-tauri/tauri.conf.json 的 version 与 src-tauri/Cargo.toml 的 version
-# 2. （可选）runtime 升级：fork 打 desktop/v* 标签 + 更新 runtime/revision.json
+# 2. （可选）runtime 升级：fork 打 v<基线>+zw.<补丁> 标签 + 更新 runtime/revision.json
 git tag v0.2.0-rc.2 && git push origin v0.2.0-rc.2
 ```
 
-推 tag 即触发 release.yml 的 desktop job：组装 runtime（缓存命中秒级）→ 构建 → Developer ID 签名（app + runtime 内 16 个 Mach-O）→ Apple 公证 → DMG 单独公证 → 上传 Release 附件（`dsh-desktop_<ver>_aarch64.dmg`、`dsh-desktop.app.tar.gz(+ .sig)`、`latest.json`，`make_latest: true`）。
+推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → 构建 → Developer ID 签名 → Apple 公证 → DMG 单独公证）与 `desktop-windows`（同套 prepare，出 NSIS `*-setup.exe`）并行，`desktop-publish` 合并两份 updater fragment 为 `latest.json`（`darwin-aarch64` + `windows-x86_64`）后上传 Release（dmg、app.tar.gz(+ .sig)、setup.exe(+ .sig)、latest.json，`make_latest: true`）。任一侧失败则不发版，避免 latest.json 缺平台把该平台的自动更新打穿。
 
 验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。
 
@@ -56,7 +58,7 @@ git tag dsh-provider-balance-v0.4.2 && git push origin dsh-provider-balance-v0.4
 
 ## 2. 自动更新的接线（已内置，无需操作）
 
-- 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 `dsh-desktop.app.tar.gz`，签名校验用上面的 tauri 私钥对应的公钥；
+- 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 macOS `dsh-desktop.app.tar.gz` 与 Windows `*-setup.exe`，签名校验用上面的 tauri 私钥对应的公钥；`latest.json` 的 `platforms` 必须同时带上已发布的每一个 OS，缺一项该平台的检查会失败；
 - 用户侧：**后台定时检查**（启动 3s 首查，之后每 2h）——有新版时窗口右上角亮出下载小图标，一键下载+校验+安装+自动重启；离线/无端点时图标不出现、完全静默（Zed/GitHub Desktop 的共识模式，Zed「过于激进」的教训取 2h 周期）；
 - **GitHub 的 latest 指向**：desktop Release `make_latest: true` 独占 latest；插件 Release 一律 `make_latest: false`（见 §0 的指针纪律）。
 

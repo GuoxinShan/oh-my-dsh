@@ -7,6 +7,7 @@
     "desktop:dev": "tauri dev",
     "desktop:prepare": "node scripts/prepare-desktop-bundle.mjs",
     "desktop:build": "tauri build",
+    "desktop:build:signed": "tauri build --config src-tauri/tauri.windows-sign.json",
     "plugin:setup": "node scripts/setup-plugins.mjs",
     "plugin:check": "cd plugin/dsh-desktop-bridge && pnpm run typecheck && pnpm run test && pnpm run build",
     "plugins:check": "for d in plugin/*/; do d=${d%/}; [ -L \"$d\" ] && continue; echo \"== $d\"; (cd \"$d\" && pnpm run --if-present typecheck && pnpm run --if-present test && pnpm run --if-present build) || exit 1; done",

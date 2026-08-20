@@ -12,10 +12,11 @@ import { fileURLToPath } from 'node:url'
 const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const linkPath = resolve(pkgRoot, 'dsh')
 
+const home = process.env.HOME || process.env.USERPROFILE || ''
 const candidates = [
   process.env.DSH_CHECKOUT,
   resolve(pkgRoot, '../../../deepseek-harness'),
-  resolve(process.env.HOME ?? '', 'workspace/deepseek-harness'),
+  resolve(home, 'workspace/deepseek-harness'),
 ].filter(Boolean)
 
 const target = candidates.find((c) => existsSync(resolve(c, 'docs/architecture.md')))
@@ -42,5 +43,5 @@ if (st?.isSymbolicLink()) {
   console.error(`setup: ${linkPath} exists and is not a symlink — refusing to remove it`)
   process.exit(1)
 }
-symlinkSync(resolved, linkPath, 'dir')
+symlinkSync(resolved, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
 console.log(`setup: dsh -> ${resolved}`)

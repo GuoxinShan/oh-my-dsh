@@ -1,13 +1,15 @@
-# dsh-desktop 打包手册（macOS / M3）
+# dsh-desktop 打包手册（macOS / Windows）
 
 面向「打出一个能在别的 mac 上跑的安装包」的完整操作指引。改流程先改本文件。
 
 ## 0. 前置条件（构建机）
 
-- macOS + Apple Silicon（当前只打 aarch64；Intel 需另加 target，见 §7）
-- Rust toolchain（rustup stable）
+- macOS + Apple Silicon（当前只打 aarch64；Intel 需另加 target，见 §7）**或** Windows 10/11 x64（NSIS；ARM64 另加 target）
+- Rust toolchain（rustup stable；Windows 需 MSVC）
 - Node 22+ / pnpm（`packageManager` 钉版本）
+- **runtime 在哪台机器组装就只能给哪台 OS 用**（native 模块 + node 二进制）。不要把 mac 的 `runtime/build` 拷到 Windows，反之亦然。
 - runtime 组装只依赖**公有** fork 仓库（`runtime/revision.json` 的 repo），无需任何私有凭据；本仓库（壳）本身是私有仓库，构建机需要有它的 checkout 权限
+- Windows 另需 WebView2 Runtime（Win10/11 通常已带；NSIS 安装器在缺失时会下 bootstrapper）
 
 ## 1. 一键打包
 
@@ -20,9 +22,12 @@ pnpm desktop:build
 1. 构建桥插件（typecheck + 单测 + tsdown）；
 2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）；
 3. 打 `src-tauri/resources/runtime.tar.gz`（`dsh/` + `tools/`，SHA 键控缓存）与 `bridge.tar.gz`（package.json + lib/ + cordis.patch.yml，每次重建），落 `runtime-revision.json` 副本；
-4. cargo release 编译 → tauri-bundler 出 `.app` + `.dmg`（无签名证书时为 ad-hoc 签名）。
+4. cargo release 编译 → tauri-bundler 出平台包：macOS `.app` + `.dmg`（无签名证书时为 ad-hoc 签名）；Windows NSIS `*-setup.exe`（currentUser）。
 
-产物：`src-tauri/target/release/bundle/macos/dsh-desktop.app` 与 `.../dmg/dsh-desktop_<ver>_aarch64.dmg`。
+产物：
+
+- macOS：`src-tauri/target/release/bundle/macos/dsh-desktop.app` 与 `.../dmg/dsh-desktop_<ver>_aarch64.dmg`
+- Windows：`src-tauri/target/release/bundle/nsis/dsh-desktop_<ver>_x64-setup.exe`
 
 注意：`src-tauri/resources/` 是 gitignored 的再生产物；**裸 `cargo build` 会因 build.rs 校验资源缺失而失败**，必须经 `pnpm desktop:build`（或先 `pnpm run desktop:prepare`）。单独 `cargo check` 前也要先跑一次 prepare。
 
@@ -124,14 +129,91 @@ xcrun notarytool submit src-tauri/target/release/bundle/dmg/dsh-desktop_<ver>_aa
 
 ## 6. 升级 runtime / 桥版本
 
-1. fork 侧打标签：`git tag desktop/vX.Y.Z <sha> && git push origin desktop/vX.Y.Z`
+1. fork 侧打标签：`git tag v<基线>+zw.<n> <sha> && git push origin <tag>`（例 `v0.1.0-rc.7+zw.1`）
 2. 本仓库更新 `runtime/revision.json`（repo/ref/sha）
 3. `pnpm desktop:build`——prepare 检测到新 sha 自动重新组装、重新打 tar；壳按 sha 换解压目录，旧 `~/.dsh-desktop/runtime/<旧sha>` 不再被引用（可手动清理，壳不自动删）
 
 ## 7. 已知边界
 
-- **架构**：只打 aarch64。Intel 机器需要 `rustup target add x86_64-apple-darwin` 后 `--target x86_64-apple-darwin` 另打一份（或 universal，体积翻倍）。分发时确认对方机器架构。
+- **架构**：macOS 只打 aarch64。Intel 机器需要 `rustup target add x86_64-apple-darwin` 后 `--target x86_64-apple-darwin` 另打一份（或 universal，体积翻倍）。Windows 只打 x86_64（`windows-latest`）；ARM64 需 `--target aarch64-pc-windows-msvc`。分发时确认对方机器架构。
 - **验证机的「干净」标准**：没有 Rust、没有 DSH checkout、没有本仓库 clone 的机器才是目标用户画像——装了 dev 环境的机器会走 source 兜底掩盖打包缺陷。
 - **首启解压窗口**：~500MB 解压约 10–20s，窗口出现前有一段无反馈等待（后续可在窗口加启动进度）。
-- **Windows/Linux**：解压用系统 `tar`（macOS 自带 bsdtar；Linux 上一般也有；Windows M3+ 再议）。
+- **tar**：解压用系统 `tar`（macOS/Windows 10+ 自带 bsdtar；Linux 上一般也有）。GNU tar 对 `C:\...` 需要 `--force-local`；Win11 bsdtar 3.8.4 不认此选项。prepare 与壳按 `tar --help` 探测。
+- **runtime 不可跨 OS**：在 mac 组装的树不能打进 Windows 安装包。
 - App Translocation：从 DMG 直接拖进 /Applications 不触发；但**直接在 DMG 挂载卷里双击运行**会触发只读随机路径——解压方案对此免疫（写入目标是 home），行为仍推荐拖装。
+
+## 8. Windows 本机验证
+
+前置：Rust **MSVC** 工具链（`rustc -vV` 的 host 必须是 `x86_64-pc-windows-msvc`；若当前是 `windows-gnu`，先 `rustup toolchain install stable-x86_64-pc-windows-msvc` 再 `rustup default stable-x86_64-pc-windows-msvc`——Tauri 在 GNU 目标下会因缺少 `dlltool` 编不过）、Node 22+、pnpm、WebView2。源码 sidecar 需要 DSH checkout（`DSH_CHECKOUT` 或与本仓平级的 `../deepseek-harness`）。
+
+```powershell
+# dev
+$env:DSH_CHECKOUT = "D:\dev\deepseek-harness"   # 若默认路径不存在
+pnpm desktop:dev
+
+# 打包（本机组装 Windows runtime，约数分钟到十几分钟）
+pnpm desktop:build
+# 产物：src-tauri/target/release/bundle/nsis/dsh-desktop_*_x64-setup.exe
+```
+
+e2e（PowerShell）：
+
+```powershell
+$env:DSH_HOME = Join-Path $env:TEMP ("dsh-e2e-" + [guid]::NewGuid())
+$env:DSH_DESKTOP_E2E_PROBE = "1"
+$env:DSH_DESKTOP_E2E_EXIT = "1"
+& "src-tauri\target\release\dsh-desktop.exe"
+echo "exit=$LASTEXITCODE"   # 0 = 通过
+```
+
+强制走资源分支：把 `runtime\build` 改名、删 `%USERPROFILE%\.dsh-desktop\runtime` 后再跑上面的 exe。
+
+无 Authenticode 时 SmartScreen 可能弹「无法验证发布者」——点「仍要运行」即可。NSIS 是 currentUser，不弹 UAC。证书怎么买、怎么接到 CI，见 §9。
+
+## 9. Windows Authenticode（SmartScreen）
+
+这和已经在用的 **updater 签名**（`TAURI_SIGNING_PRIVATE_KEY`，minisign，壳内自动更新校验）不是同一把钥匙。updater 管「这个包是不是我们发的」；Authenticode 管「Windows 认不认这个发布者」。缺 Authenticode **不挡安装**，只是浏览器下载会警告。
+
+**不能自签。** openssl 造的证书 Windows 不当成发布者，SmartScreen 照样红。SSL 网站证书也不能用来签 exe。必须买 **Code Signing**（代码签名）证书。
+
+### 怎么买（2023-06 之后的现实）
+
+CA 不再给可随意导出的 PFX：新证私钥必须在硬件（USB token）或云 HSM 里。个人/小团队三条路：
+
+| 路线 | 适合 | 备注 |
+|---|---|---|
+| **Azure Trusted Signing**（推荐新买） | 没有旧 PFX、要在 GitHub Actions 签 | [Azure 文档](https://learn.microsoft.com/en-us/azure/trusted-signing/)：订阅 + 身份核验（护照等）。私钥不出云。CI 走 `signCommand` + `artifact-signing-cli`，不是下面的 PFX 流程；接好 Azure 后再改 release.yml。 |
+| **还能导出 PFX 的 OV/EV** | 公司 2023-06 前买的旧证，或 CA 提供云导出 | DigiCert / Sectigo / SSL.com 的 **Code Signing**，不是 SSL。EV 更贵、SmartScreen 立刻绿；OV 要靠安装量养信誉。 |
+| USB token EV | 本机签、不走 CI | GitHub Actions 拿不到插在你电脑上的 token，不适合本仓库的 tag 发布流。 |
+
+本仓库已接好的是 **PFX 路径**（和 macOS 的 p12 secret 同一形态）。本机证书库目前是空的，需要你买到证之后把 PFX 填进 GitHub Secrets。
+
+### 拿到 PFX 之后
+
+1. 把 `.pfx` 编成一行 base64（PowerShell）：
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('D:\certs\dsh-desktop.pfx')) | Set-Clipboard
+```
+
+2. GitHub → 本仓 Settings → Secrets and variables → Actions，加两条：
+
+| Secret | 内容 |
+|---|---|
+| `WINDOWS_CERTIFICATE` | 上一步剪贴板里的 base64 |
+| `WINDOWS_CERTIFICATE_PASSWORD` | 导出 PFX 时设的密码 |
+
+3. 再发 `v*` tag（如 `v0.2.0-rc.2`）：`desktop-windows` job 会导入证书、写出 gitignored 的 `src-tauri/tauri.windows-sign.json`（thumbprint + sha256 + DigiCert 时间戳），`tauri build --config` 签 NSIS。secret 为空则跳过、打未签名包（现状）。
+
+本机验证（证书已导入 CurrentUser\My 时）：
+
+```powershell
+$env:WINDOWS_PFX_PATH = 'D:\certs\dsh-desktop.pfx'
+$env:WINDOWS_CERTIFICATE_PASSWORD = '…'
+.\scripts\windows-import-cert.ps1
+pnpm desktop:build:signed
+# 日志应有 signing app / Successfully signed
+```
+
+`tauri.conf.json` **故意不写死 thumbprint**：没证书的机器（含 mac CI、本地 gnu/msvc 未导入）必须仍能打未签名包。
+

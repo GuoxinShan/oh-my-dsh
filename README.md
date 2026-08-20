@@ -40,14 +40,14 @@ dsh-desktop                         出树插件 + 桌面壳的 monorepo
      └── 系统 WebView → http://127.0.0.1:<random>
 ```
 
-关键原则：壳层不含业务逻辑；Harness 不感知壳的存在。每个插件是独立安装单元（`dsh plugin --profile web add <repo>/plugin/<name>`），桌面 tag（`desktop/v*`）与插件 tag（`plugin/<name>/v*`）分家。对照 dataelement/dsh-desktop 的 `patches/` 模型：那是钉死上游再打压缩包补丁，不是插件布局。
+关键原则：壳层不含业务逻辑；Harness 不感知壳的存在。每个插件是独立安装单元（`dsh plugin --profile web add <repo>/plugin/<name>`），桌面 tag（`v<semver>`）与插件 tag（`<包名>-v<semver>`）分家。对照 dataelement/dsh-desktop 的 `patches/` 模型：那是钉死上游再打压缩包补丁，不是插件布局。
 
 ## Milestones
 
 - [x] M0 桥插件：`plugin/dsh-desktop-bridge`（外链路由 / 注意力通知 / 桌面指示），实机挂载验证通过
 - [x] M1 壳原型：Tauri 脚手架 + sidecar spawn + 端口分配 + 就绪检测 + 窗口加载 + `__DSH_DESKTOP__` 注入 + IPC 命令表（e2e `DSH_E2E_OK`；WKWebView chunked 加载失败已修，见 docs/notes）
 - [ ] M2 对齐 dsh-desktop 行为：单实例锁、孤儿进程清理、日志落盘、启动根目录管理、通知点击回跳
-- [ ] M3 平台化：macOS 签名公证、自动更新、安装包（DMG / NSIS）
+- [ ] M3 平台化：macOS 签名公证、自动更新、安装包（DMG / NSIS）；Windows 壳与 NSIS 已落地，Authenticode 流水线已接（待填 Code Signing 证书）
 - [ ] M4 WKWebView / WebView2 下 DSH client UI 回归（重点：`color-mix()` 等 CSS 兼容）
 
 ## 开发
@@ -58,9 +58,9 @@ cd plugin/dsh-desktop-bridge
 pnpm install && pnpm run setup
 pnpm run typecheck && pnpm run build && pnpm run test
 
-# Tauri 壳（M1 起，需 Rust toolchain）
-pnpm tauri dev
-pnpm tauri build
+# Tauri 壳（M1 起，需 Rust toolchain；Windows 必须是 MSVC 目标，见 packaging-playbook §8）
+pnpm desktop:dev
+pnpm desktop:build
 ```
 
 ## License

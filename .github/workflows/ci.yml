@@ -69,6 +69,9 @@ jobs:
       # they are gitignored and produced by desktop:prepare (bridge build +
       # runtime assembly + tarballs). Bare cargo check on a fresh checkout
       # always failed — prepare first, doubling as a runtime-assembly smoke.
+      # (The Windows job below uses placeholder resources instead: a full
+      # hoisted runtime assembly on windows runners is not worth the minutes
+      # for a cargo test gate; the release job exercises the real assembly.)
       - name: Resolve harness baseline from runtime/revision.json
         id: baseline
         run: |
@@ -113,3 +116,21 @@ jobs:
       - name: cargo check
         working-directory: src-tauri
         run: cargo check
+
+  shell-windows:
+    name: Tauri shell Windows (cargo check + tests)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Placeholder bundle resources for cargo check
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources
+          : > src-tauri/resources/runtime.tar.gz
+          : > src-tauri/resources/bridge.tar.gz
+          echo '{}' > src-tauri/resources/runtime-revision.json
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
