@@ -91,7 +91,18 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: |
+            harness/pnpm-lock.yaml
             plugin/dsh-desktop-bridge/pnpm-lock.yaml
+      # desktop:prepare typechecks the bridge (its step 1) before assembling
+      # the runtime, and the dsh anchor points here — the tree must carry
+      # node_modules and built lib/types or every @deepseek-ai/* import fails
+      # to resolve (the run red at 04:06 skipped these two steps).
+      - name: Install harness
+        working-directory: harness
+        run: pnpm install --frozen-lockfile
+      - name: Build harness (lib/types the bridge typechecks against)
+        working-directory: harness
+        run: pnpm run build
       - name: Bridge deps + anchor (prepare builds the bridge tarball)
         working-directory: plugin/dsh-desktop-bridge
         run: |
