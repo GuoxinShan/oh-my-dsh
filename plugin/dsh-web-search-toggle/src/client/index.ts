@@ -38,6 +38,11 @@ async function call(
   }
 }
 
+/** Required Client services (mcp-settings' client face): the apply below
+ * awaits ctx.remote.$mount, so the fiber must not run before `remote`
+ * arrives — reading it without this declaration throws at entry. */
+export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope']
+
 /** Contribute the web_search toggle row to the General settings section. */
 export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
   // Mount our own generated-equivalent contribution when the shell's

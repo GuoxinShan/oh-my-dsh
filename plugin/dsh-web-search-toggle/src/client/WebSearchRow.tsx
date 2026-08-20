@@ -1,14 +1,14 @@
 /**
- * The General-section row for the native web_search toggle. Inline styles on
- * --dsw-* semantic tokens only (the bridge's M1 precedent: no CSS-modules
- * pipeline for a single small row). Async state is local (fetch-on-mount,
- * mcp-settings' section pattern); actions arrive through the injected face.
+ * The General-section row for the native web_search toggle: AppearanceRow's
+ * anatomy (title + content, hairline separator) with mcp-settings' switch
+ * vocabulary via CSS Modules — no inline styles, every color a --dsw-* alias.
  *
  * @module dsh-web-search-toggle/client/WebSearchRow
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { WebSearchToggleSnapshot } from '../toggle-types.ts'
+import css from './WebSearchRow.module.css'
 
 /** Row render state: the snapshot plus the async wrapper states. */
 export interface WebSearchRowState {
@@ -33,30 +33,6 @@ export type WebSearchRowComponentProps =
   & PropsLocale<'web-search-toggle'>
   & InjectFace<WebSearchRowInjected>
 
-const group: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-  padding: '12px 0',
-  borderBottom: '1px solid var(--dsw-border-subtle)',
-}
-const title: React.CSSProperties = { font: 'var(--dsw-text-md-medium)', color: 'var(--dsw-text-primary)' }
-const desc: React.CSSProperties = { font: 'var(--dsw-text-sm-regular)', color: 'var(--dsw-text-secondary)' }
-const keyLine = (ok: boolean): React.CSSProperties => ({
-  font: 'var(--dsw-text-sm-regular)',
-  color: ok ? 'var(--dsw-text-secondary)' : 'var(--dsw-text-warning, var(--dsw-text-secondary))',
-})
-const toggleLine: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: '10px' }
-const button = (danger: boolean): React.CSSProperties => ({
-  font: 'var(--dsw-text-sm-medium)',
-  color: danger ? 'var(--dsw-button-secondary-foreground, var(--dsw-text-secondary))' : 'var(--dsw-button-primary-foreground, #fff)',
-  background: danger ? 'var(--dsw-button-secondary-background, transparent)' : 'var(--dsw-button-primary-background, #333)',
-  border: '1px solid var(--dsw-border-subtle)',
-  borderRadius: '6px',
-  padding: '4px 12px',
-  cursor: 'pointer',
-})
-
 /**
  * Render the web_search toggle row.
  * @param props - composed slot props.
@@ -64,6 +40,7 @@ const button = (danger: boolean): React.CSSProperties => ({
  */
 export function WebSearchRow({ t, refresh, setEnabled }: WebSearchRowComponentProps) {
   const [state, setState] = useState<WebSearchRowState>({ status: 'loading' })
+  const switchId = useId()
 
   useEffect(() => {
     let live = true
@@ -78,35 +55,44 @@ export function WebSearchRow({ t, refresh, setEnabled }: WebSearchRowComponentPr
     void setEnabled(enabled).then(next => setState(next))
   }
 
+  const snap = state.snapshot
+  const pillClass = snap?.keyConfigured === true
+    ? `${css.pill} ${css.pillOk}`
+    : snap ? `${css.pill} ${css.pillWarn}` : css.pill
+
   return (
-    <div style={group}>
-      <div style={title}>{t('row.title')}</div>
-      <div style={desc}>{t('row.desc')}</div>
-      {state.status === 'loading' && <div style={desc}>{t('state.loading')}</div>}
-      {state.status === 'error' && <div style={keyLine(false)}>{t('state.error', { message: state.error ?? '' })}</div>}
-      {state.status === 'ready' && state.snapshot !== undefined && (
+    <div className={css.row}>
+      <div className={css.head}>
+        <div className={css.title}>{t('row.title')}</div>
+        {snap !== undefined && (
+          <span className={pillClass}>
+            <span className={css.pillDot} />
+            {snap.keyConfigured
+              ? t('key.configured', { ref: snap.keyRef })
+              : t('key.missing', { ref: snap.keyRef })}
+          </span>
+        )}
+      </div>
+      <div className={css.desc}>{t('row.desc')}</div>
+      {state.status === 'loading' && <div className={css.state}>{t('state.loading')}</div>}
+      {state.status === 'error' && <div className={css.error}>{t('state.error', { message: state.error ?? '' })}</div>}
+      {state.status === 'ready' && snap !== undefined && (
         <>
-          <div style={keyLine(state.snapshot.keyConfigured)}>
-            {state.snapshot.keyConfigured
-              ? t('key.configured', { ref: state.snapshot.keyRef })
-              : t('key.missing', { ref: state.snapshot.keyRef })}
-          </div>
-          <div style={toggleLine}>
-            <span style={desc}>
-              {state.snapshot.enabled ? t('toggle.on') : t('toggle.off')}
-            </span>
-            {state.pending === true
-              ? <span style={desc}>{t('state.pending')}</span>
-              : (
-                <button
-                  type="button"
-                  style={button(state.snapshot.enabled)}
-                  aria-pressed={state.snapshot.enabled}
-                  onClick={() => { commit(!state.snapshot!.enabled) }}
-                >
-                  {state.snapshot.enabled ? t('toggle.action.off') : t('toggle.action.on')}
-                </button>
-              )}
+          {!snap.keyConfigured && <div className={css.hint}>{t('key.hint')}</div>}
+          <div className={css.controls}>
+            <label className={css.switch} htmlFor={switchId}>
+              <input
+                id={switchId}
+                type="checkbox"
+                role="switch"
+                checked={snap.enabled}
+                disabled={state.pending === true}
+                onChange={e => { commit(e.target.checked) }}
+              />
+              <span aria-hidden="true" />
+            </label>
+            <span className={css.state}>{snap.enabled ? t('toggle.on') : t('toggle.off')}</span>
+            {state.pending === true && <span className={css.pending}>{t('state.pending')}</span>}
           </div>
         </>
       )}

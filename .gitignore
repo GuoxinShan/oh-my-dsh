@@ -14,6 +14,8 @@ plugin/dsh-desktop-bridge/lib/
 # dsh-reasoning-efforts：同款类型锚与构建产物
 plugin/dsh-reasoning-efforts/dsh
 plugin/dsh-reasoning-efforts/lib/
+# dsh-web-search-toggle：构建产物（锚走 plugin/deepseek-harness 共享）
+plugin/dsh-web-search-toggle/lib/
 # dsh-mcp-settings 的同级 harness 锚（scripts/setup-plugins.mjs 再生）
 plugin/deepseek-harness
 

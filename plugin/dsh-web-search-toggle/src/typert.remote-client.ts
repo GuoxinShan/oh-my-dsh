@@ -12,6 +12,10 @@ const snapshotSchema = z.object({
   keyRef: z.string(),
 })
 
+const setParamsSchema = z.object({
+  enabled: z.boolean(),
+})
+
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteNamespace$776562536561726368546f67676c65 {
     get: () => Promise<RemoteResult<WebSearchToggleSnapshot>>
@@ -50,7 +54,20 @@ export const TYPERT_REMOTE: TypertRemoteContribution = {
       namespace: 'webSearchToggle',
       method: 'set',
       invocation: { kind: 'direct' },
-      parameters: [],
+      // The gateway derives its call-arity check and the wire `args` mapping
+      // from this list — an empty list made the one-argument call throw
+      // "expected 0 argument(s), got 1". Generated Remotes require strict
+      // codecs end to end, so the parameter carries the zod schema.
+      parameters: [{
+        name: 'params',
+        wire: 'params',
+        source: 'json',
+        codec: {
+          mode: 'strict',
+          typeSymbol: 'dsh-web-search-toggle/toggle-types#WebSearchToggleSetParams',
+          schema: setParamsSchema,
+        },
+      }],
       result: {
         mode: 'strict',
         typeSymbol: 'dsh-web-search-toggle/toggle-types#WebSearchToggleSnapshot',

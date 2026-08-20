@@ -166,13 +166,17 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Locate the harness checkout: $DSH_CHECKOUT, then the conventional path.
+/// Locate the harness checkout (dev source fallback only — runtime/build and
+/// the release extraction take precedence in find_runtime): $DSH_CHECKOUT,
+/// then the sibling checkout beside this repo, then the conventional path —
+/// the same candidate order as scripts/setup-plugins.mjs.
 fn find_checkout() -> Result<PathBuf, String> {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(from_env) = std::env::var("DSH_CHECKOUT") {
         candidates.push(PathBuf::from(from_env));
     }
-    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deepseek-harness"));
+    candidates.push(repo_root.join("../deepseek-harness"));
     if let Ok(home) = user_home() {
         candidates.push(home.join("workspace/deepseek-harness"));
     }
@@ -232,16 +236,20 @@ pub(crate) fn hide_console(command: &mut Command) {
     let _ = command;
 }
 
-/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the release
-/// bundle's resources (extracted to ~/.dsh-desktop on first boot), then the
-/// repo-assembled runtime/build/<sha> from runtime/revision.json, then the
-/// source checkout (dev fallback).
+/// Resolve the sidecar runtime: $DSH_DESKTOP_RUNTIME, then the repo's own
+/// runtime/build/<sha> from runtime/revision.json, then the release bundle's
+/// resources (extracted to ~/.dsh-desktop on first boot), then the source
+/// checkout (dev fallback).
+///
+/// runtime/build precedes the extraction: `tauri dev` runs the bare debug
+/// binary against the repo, and a ~/.dsh-desktop extraction can belong to an
+/// INSTALLED app of a different (older) revision — dev would silently boot
+/// stale code. The installed app always wins in production anyway: its
+/// bundled resources exist and the repo checkout (with runtime/build) does
+/// not ship inside the .app.
 fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
     if let Ok(dir) = std::env::var("DSH_DESKTOP_RUNTIME") {
         return bundled_runtime(PathBuf::from(dir));
-    }
-    if let Some(dir) = release_runtime_dir(app)? {
-        return bundled_runtime(dir);
     }
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let revision_path = repo_root.join("runtime/revision.json");
@@ -255,6 +263,9 @@ fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
                 return bundled_runtime(dir);
             }
         }
+    }
+    if let Some(dir) = release_runtime_dir(app)? {
+        return bundled_runtime(dir);
     }
     source_runtime()
 }
@@ -272,6 +283,15 @@ fn find_runtime(app: &tauri::AppHandle) -> Result<Runtime, String> {
 /// writable volume (App Translocation mounts the .app read-only) and keeps
 /// the nested node Mach-O out of the notarization scan later.
 fn release_runtime_dir(app: &tauri::AppHandle) -> Result<Option<PathBuf>, String> {
+    // Dev builds never consume bundled resources: `tauri dev` resolves
+    // resource_dir() to the repo's src-tauri/resources (a leftover from a
+    // previous desktop:build), and the ~/.dsh-desktop extraction it feeds
+    // can be an older assembly than the repo's runtime/build — dev would
+    // silently boot stale code. Release builds have no debug_assertions and
+    // take this path as before.
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
     let Some(resources) = app.path().resource_dir().ok() else {
         return Ok(None);
     };
@@ -776,6 +796,11 @@ fn spawn_sidecar(runtime: &Runtime, dsh_home: &Path, port: u16) -> Result<PathBu
         .arg("web")
         .arg("--port")
         .arg(port.to_string())
+        // rc.8+ hands the ready URL to the system browser by default; the
+        // desktop shell owns its window, so opt out explicitly. Harmless on
+        // rc.7-era runtimes (the CLI parser allows unknown options and those
+        // never auto-opened).
+        .arg("--no-open")
         .env("DSH_HOME", dsh_home)
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone sidecar log: {e}"))?))
         .stderr(Stdio::from(log));

@@ -31,21 +31,39 @@ test('foreign entries are preserved byte-for-byte around the block', () => {
   const off = withToggleEntry(FOREIGN, false)
   const before = off.slice(0, off.indexOf(BEGIN_MARKER))
   const after = off.slice(off.indexOf(END_MARKER) + END_MARKER.length)
-  assert.equal(before, FOREIGN)
-  assert.equal(after, '')
+  // One blank separator line precedes the block and one newline follows its
+  // end marker; user content itself is intact.
+  assert.equal(before, `${FOREIGN}\n`)
+  assert.equal(after, '\n')
 })
 
-test('an empty-list file becomes the block, and back to the empty list', () => {
+test('an empty-list file becomes the block, and back to the empty list', async () => {
+  const { parse } = await import('yaml')
   const off = withToggleEntry('[]\n', false)
   assert.equal(toggleStateFromText(off), false)
+  // The `[]` marker is dropped: a flow-sequence line before block entries is
+  // two YAML documents and the loader would reject the file.
+  assert.deepEqual(parse(off), [{ id: 'tool-web', disabled: true }])
   const back = withToggleEntry(off, true)
   assert.equal(back, '[]\n')
 })
 
-test('undefined input creates a header plus the block', () => {
+test('an empty-list file with surrounding comments parses with the block', async () => {
+  const { parse } = await import('yaml')
+  const off = withToggleEntry('# header\n[]\n# tail\n', false)
+  const parsed = parse(off) as Array<{ id?: string, disabled?: boolean }>
+  assert.deepEqual(parsed, [{ id: 'tool-web', disabled: true }])
+  assert.ok(off.includes('# header\n'))
+})
+
+test('undefined input creates a header plus the block', async () => {
+  const { parse } = await import('yaml')
   const off = withToggleEntry(undefined, false)
   assert.ok(off.startsWith('#'))
   assert.equal(toggleStateFromText(off), false)
+  assert.deepEqual(parse(off), [{ id: 'tool-web', disabled: true }])
+  // Re-enabling settles on the harness-native empty-list shape; the creation
+  // header was only scaffolding for the file's first write.
   const back = withToggleEntry(off, true)
   assert.equal(back, '[]\n')
 })

@@ -2,12 +2,18 @@
  * Build config for dsh-web-search-toggle, distilled from dsh-mcp-settings:
  * host half as plain ESM libs (with standard decorators pre-transpiled for
  * Rolldown), browser half as the module-loader closure with platform modules
- * externalized. Inline styles only — no CSS-modules pipeline.
+ * externalized. CSS Modules are inlined as a style tag at import time
+ * (lightningcss transform, mcp-settings' pipeline).
  */
-import ts from 'typescript'
+import { readFile } from 'node:fs/promises'
+import { basename, dirname, resolve } from 'node:path'
 import { defineConfig } from 'tsdown'
+import { transform } from 'lightningcss'
+import ts from 'typescript'
 
 const PACKAGE_ID = 'dsh-web-search-toggle'
+const CSS_VIRTUAL_PREFIX = '\0dsh-css:'
+const CSS_VIRTUAL_SUFFIX = '.mjs'
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
@@ -45,6 +51,7 @@ export default defineConfig([
     entry: {
       index: 'src/index.ts',
       gateway: 'src/gateway.ts',
+      'patch-file': 'src/patch-file.ts',
       'toggle-types': 'src/toggle-types.ts',
       'typert.remote-client': 'src/typert.remote-client.ts',
     },
@@ -67,7 +74,6 @@ export default defineConfig([
     dts: false,
     sourcemap: true,
     clean: false,
-    external: [...CLIENT_EXTERNALS],
     deps: {
       neverBundle: CLIENT_EXTERNALS as unknown as string[],
       alwaysBundle: (id: string) => ((CLIENT_EXTERNALS as readonly string[]).includes(id) ? undefined : true),
@@ -79,5 +85,40 @@ export default defineConfig([
       footer: 'return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',
     },
+    plugins: [{
+      name: 'dsh-css-modules-inline',
+      resolveId(source: string, importer: string | undefined) {
+        if (!source.endsWith('.module.css')) return null
+        const absolute = importer === undefined ? source : resolve(dirname(importer), source)
+        return CSS_VIRTUAL_PREFIX + absolute + CSS_VIRTUAL_SUFFIX
+      },
+      async load(virtualId: string) {
+        if (!virtualId.startsWith(CSS_VIRTUAL_PREFIX)) return null
+        const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)
+        this.addWatchFile(fileId)
+        const source = await readFile(fileId)
+        const { code, exports: cssExports } = transform({
+          filename: fileId,
+          code: source,
+          cssModules: { pattern: '[hash]_[local]' },
+          minify: true,
+        })
+        const classMap: Record<string, string> = {}
+        for (const [local, value] of Object.entries(cssExports ?? {})) classMap[local] = value.name
+        const tagId = `${PACKAGE_ID}/${basename(fileId)}`
+        return [
+          `const css = ${JSON.stringify(code.toString())};`,
+          `const tagId = ${JSON.stringify(tagId)};`,
+          "if (typeof document !== 'undefined' && document.querySelector('style[data-plugin-css=' + JSON.stringify(tagId) + ']') === null) {",
+          "  const tag = document.createElement('style');",
+          `  tag.dataset.plugin = ${JSON.stringify(PACKAGE_ID)};`,
+          '  tag.dataset.pluginCss = tagId;',
+          '  tag.textContent = css;',
+          '  document.head.appendChild(tag);',
+          '}',
+          `export default ${JSON.stringify(classMap)};`,
+        ].join('\n')
+      },
+    }],
   },
 ])

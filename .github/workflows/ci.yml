@@ -12,13 +12,30 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # Upstream-line discipline: typecheck against the SAME baseline the
+      # runtime pins (runtime/revision.json spells v<base>+zw.N; the upstream
+      # tag is dsh-<base>). A floating master checkout silently moves the
+      # goalposts every time upstream publishes.
+      - name: Resolve harness baseline from runtime/revision.json
+        id: baseline
+        run: |
+          # Upstream tags keep the leading v (dsh-v0.1.0-rc.8); stripping it
+          # here fabricated dsh-0.1.0-rc.8 and checkout failed on fetch.
+          ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
+          base="${ref%+zw.*}"
+          case "$base" in
+            v*.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
+          esac
       - uses: actions/checkout@v4
         with:
           repository: deepseek-ai/deepseek-harness
+          ref: ${{ steps.baseline.outputs.tag }}
           path: harness
+      # No `version` input: package.json packageManager (pnpm 10.28) is the
+      # single source of truth — pinning a different major here made
+      # action-setup hard-error on the conflict (red since rc.3).
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -42,18 +59,60 @@ jobs:
           pnpm run build
 
   shell:
-    name: Tauri shell (cargo check)
+    name: Tauri shell (prepare + cargo check)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Placeholder bundle resources for cargo check
+      # tauri_build validates src-tauri/resources exist at cargo-check time;
+      # they are gitignored and produced by desktop:prepare (bridge build +
+      # runtime assembly + tarballs). Bare cargo check on a fresh checkout
+      # always failed — prepare first, doubling as a runtime-assembly smoke.
+      # (The Windows job below uses placeholder resources instead: a full
+      # hoisted runtime assembly on windows runners is not worth the minutes
+      # for a cargo test gate; the release job exercises the real assembly.)
+      - name: Resolve harness baseline from runtime/revision.json
+        id: baseline
         run: |
-          mkdir -p src-tauri/resources
-          : > src-tauri/resources/runtime.tar.gz
-          : > src-tauri/resources/bridge.tar.gz
-          echo '{}' > src-tauri/resources/runtime-revision.json
+          # Upstream tags keep the leading v (dsh-v0.1.0-rc.8); stripping it
+          # here fabricated dsh-0.1.0-rc.8 and checkout failed on fetch.
+          ref=$(node -p "JSON.parse(require('fs').readFileSync('runtime/revision.json','utf8')).ref")
+          base="${ref%+zw.*}"
+          case "$base" in
+            v*.*) echo "tag=dsh-$base" >> "$GITHUB_OUTPUT" ;;
+            *) echo "runtime/revision.json carries no baseline: $ref"; exit 1 ;;
+          esac
+      - uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ steps.baseline.outputs.tag }}
+          path: harness
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            harness/pnpm-lock.yaml
+            plugin/dsh-desktop-bridge/pnpm-lock.yaml
+      # desktop:prepare typechecks the bridge (its step 1) before assembling
+      # the runtime, and the dsh anchor points here — the tree must carry
+      # node_modules and built lib/types or every @deepseek-ai/* import fails
+      # to resolve (the run red at 04:06 skipped these two steps).
+      - name: Install harness
+        working-directory: harness
+        run: pnpm install --frozen-lockfile
+      - name: Build harness (lib/types the bridge typechecks against)
+        working-directory: harness
+        run: pnpm run build
+      - name: Bridge deps + anchor (prepare builds the bridge tarball)
+        working-directory: plugin/dsh-desktop-bridge
+        run: |
+          pnpm install --no-frozen-lockfile
+          DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm run setup
+      - name: Prepare bundle resources
+        run: pnpm run desktop:prepare
       - name: cargo check
         working-directory: src-tauri
         run: cargo check
