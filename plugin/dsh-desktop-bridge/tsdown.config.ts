@@ -13,15 +13,19 @@
  */
 import { defineConfig } from 'tsdown'
 
-/** Module-table entries the browser shell seeds (mirror of the harness PLATFORM_MODULES list the plugin actually requires). */
+/** Module-table entries the browser shell answers natively (mirror of the
+ * harness rc.8+ implicit baseline: PLATFORM_MODULES — shell-seeded React,
+ * Cordis, and static UI libraries — plus the parser-preloaded runtime
+ * exemption). rc.8 moved web-react/ui-attachment/schema-form out of the
+ * platform table (ordinary libraries a browser bundle inlines); should the
+ * bridge ever need one, request it via package.json `dsh.client.external`
+ * or inline it — do not re-add it here. */
 const CLIENT_EXTERNALS = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
-  // Documented runtime exemption (snapshot-store engine) — the table answers it natively.
+  // Documented runtime exemption (snapshot-store engine; preloaded by the
+  // parser before the shell starts in rc.8+) — the table answers it natively.
   '@deepseek-ai/dsh-client-runtime/client',
 ] as const
 

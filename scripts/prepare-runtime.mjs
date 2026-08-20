@@ -88,7 +88,11 @@ const skipped = []
 // packing the clone — same bytes the world can install, one provenance.
 // Source of truth: fork repo FORK.md (the source packages of
 // `git diff upstream/master..master`). `dsh-client-ui-settings-models` was
-// retired by revert ffffaf39 and removed here on 2026-08-20.
+// retired by revert ffffaf39 and removed here on 2026-08-20. `dsh-tool-cordis`
+// joined on 2026-08-21: its generated api-catalog drifted with the fork's
+// service/event additions, so zw.2+ publishes it (it was already on npm in
+// zw.2; consuming it here closes the hoist/peer leak the fail-loud scan
+// could not see).
 const FORK_MODIFIED = new Set([
   '@deepseek-ai/dsh-agent-default-model',
   '@deepseek-ai/dsh-client-modules',
@@ -98,6 +102,7 @@ const FORK_MODIFIED = new Set([
   '@deepseek-ai/dsh-mcp-client',
   '@deepseek-ai/dsh-session-persistence',
   '@deepseek-ai/dsh-todo-completion-guard',
+  '@deepseek-ai/dsh-tool-cordis',
   '@deepseek-ai/dsh',
 ])
 const FORK_NPM_SCOPE = process.env.FORK_NPM_SCOPE ?? '@crazx'

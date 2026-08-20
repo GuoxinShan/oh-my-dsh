@@ -653,6 +653,11 @@ fn spawn_sidecar(runtime: &Runtime, dsh_home: &Path, port: u16) -> Result<PathBu
         .arg("web")
         .arg("--port")
         .arg(port.to_string())
+        // rc.8+ hands the ready URL to the system browser by default; the
+        // desktop shell owns its window, so opt out explicitly. Harmless on
+        // rc.7-era runtimes (the CLI parser allows unknown options and those
+        // never auto-opened).
+        .arg("--no-open")
         .env("DSH_HOME", dsh_home)
         .stdout(Stdio::from(log.try_clone().map_err(|e| format!("clone sidecar log: {e}"))?))
         .stderr(Stdio::from(log));
