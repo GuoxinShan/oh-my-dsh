@@ -186,13 +186,18 @@ jobs:
           DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-desktop-bridge install
 
-      - name: Import Authenticode certificate
-        if: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+      # NOTE: the certificate presence check lives INSIDE the script — the
+      # `secrets` context is not allowed in a step-level `if:` (GitHub rejects
+      # the whole workflow at parse time: "Unrecognized named-value:
+      # 'secrets'", which broke every release trigger since this job landed).
+      - name: Import Authenticode certificate (skipped when unset)
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: ./scripts/windows-import-cert.ps1
+        run: |
+          if ($env:WINDOWS_CERTIFICATE) { ./scripts/windows-import-cert.ps1 }
+          else { Write-Output "WINDOWS_CERTIFICATE empty - skipping import, NSIS ships unsigned (SmartScreen warning)" }
 
       - name: Build NSIS bundle
         shell: bash
