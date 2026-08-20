@@ -13,3 +13,13 @@ export function execPnpm(args, opts = {}) {
     shell: process.platform === 'win32' ? true : opts.shell,
   })
 }
+
+export const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+
+/** Same story as execPnpm: npm on Windows is npm.cmd (Node 20+ EINVAL). */
+export function execNpm(args, opts = {}) {
+  return execFileSync(npm, args, {
+    ...opts,
+    shell: process.platform === 'win32' ? true : opts.shell,
+  })
+}
