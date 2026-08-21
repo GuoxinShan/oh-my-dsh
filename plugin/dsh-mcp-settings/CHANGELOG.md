@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.5] - 2026-08-21
+
+### Fixed
+
+- Kept source-checkout installs on the status-capable fork MCP client. The official `@deepseek-ai/dsh-mcp-client@0.1.1-rc.1` connects and registers tools but does not emit the fork-only `mcp-client/status` event, leaving every enabled row displayed as connecting forever.
+
+### Verification
+
+- Added a package-metadata regression test that requires the `@deepseek-ai/dsh-mcp-client` devDependency to remain aliased to `@crazx/dsh-mcp-client@0.1.1-rc.1.zw.1`.
+
 ## [0.2.4] - 2026-08-21
 
 ### Fixed
