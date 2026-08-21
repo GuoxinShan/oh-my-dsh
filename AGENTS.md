@@ -30,6 +30,7 @@ docs/                        packaging-playbook.md + notes/（决策记录住仓
 
 ### 落点
 
+- **新插件目录一律经脚手架生成**：`pnpm run plugin:new -- <dsh-name> [--face host|client|dual] [--id <rowId>] [--description <text>] [--preset-owned]`（`scripts/new-plugin.mjs`）。三种形态从仓内在售插件蒸馏：`host`（蓝本 dsh-fs-observation-log）、`client`（蓝本 dsh-branding：空 host apply + `exports["./client"]` 浏览器半）、`dual`（蓝本 dsh-web-search-toggle）；`--preset-owned` 生成 install-only 空 patch + `preset-snippet.yml`（行归 agent preset）。脚本同时把 `plugin/<name>/lib/` 追加进根 `.gitignore`，devDeps 钉在生成时从蓝本包实时读取（基线 bump 后脚手架自动跟随，fallback 表在脚本内单点维护）。**手搓 manifest 禁止**（exports/dsh 块/peer range/tsdown 客户端契约三份样板极易漂移）；生成后仍需人工补：description、README、`docs/notes/` 决策记录、本清单行。决策见 `docs/notes/2026-08-21-plugin-scaffold-script.md`。
 - 每个插件一个目录：`plugin/<package.json name>/`。目录名必须等于未加 scope 的包名，因为 `dsh plugin --profile web add <path>` 按这个路径装包，entry id 也是这个名字。
 - 一个目录 = 一个可 `plugin add` 的安装单元，自带 `package.json`、`dsh.bundle`/`cordis.patch.yml`、源码、测试。mcp-settings 那种「一包三行」（manager / inventory / ui）仍是**一个**目录、一份 patch，不是三个目录。
 - 桥插件不能当容器：它的 apply 在非桌面环境必须零副作用；mcp-settings / provider-balance 在终端 `dsh web` 也要工作。塞进 `dsh-desktop-bridge` 会把「桌面门控」和「始终挂载」搅在一个 fiber 里。
@@ -150,6 +151,10 @@ M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
 ```sh
 pnpm run plugin:setup     # 根级：建 plugin/deepseek-harness 锚（link:source 与 mcp-settings 用）+ 桥自己的 dsh 锚
+pnpm run plugin:new -- <dsh-name> [--face host|client|dual] [--id <rowId>] [--preset-owned]
+                          # 新插件脚手架：plugin/<name>/ 下生成 package.json/cordis.patch.yml（或
+                          # preset-snippet.yml）/tsconfig/tsdown/源码骨架/node:test，并把 lib/ 追加进
+                          # 根 .gitignore；devDeps 钉读自蓝本包。用法详见「插件 monorepo 规范·落点」
 pnpm run plugins:check    # 全树：plugin/* 每包跑自己的 typecheck/test/build（--if-present，跳过 symlink 锚）
 pnpm run link:source      # 调试：受管插件 devDeps 切 link: 源码（见「npm 依赖纪律」；不可提交）
 pnpm run unlink:source    # 恢复 registry 版本（提交态）
