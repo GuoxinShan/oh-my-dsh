@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dsh-desktop-install-update"
+description = "Enables the dsh_desktop_install_update command without any pre-configured scope."
+commands.allow = ["dsh_desktop_install_update"]
+
+[[permission]]
+identifier = "deny-dsh-desktop-install-update"
+description = "Denies the dsh_desktop_install_update command without any pre-configured scope."
+commands.deny = ["dsh_desktop_install_update"]

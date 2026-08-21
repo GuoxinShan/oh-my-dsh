@@ -27,7 +27,7 @@ macOS 打开 DMG 后把 `dsh-desktop.app` 拖入 Applications。Windows 运行 N
 - **原生桌面窗口**：Tauri 负责随机回环端口、sidecar 启动、就绪检测和系统 WebView；macOS 使用融合标题栏与原生窗口控制。
 - **可靠的进程生命周期**：Unix 进程组、Windows Job Object、优雅退出阶梯和 stale-sidecar 注册表共同防止孤儿 Harness 进程。
 - **桌面系统集成**：系统浏览器外链、原生注意力通知、下载保存桥、窗口拖拽区和桌面专属侧栏控制。
-- **About 与自动更新**：About 页展示桌面版本和内置 runtime revision；后台静默检查更新，用户确认后才下载、验签、安装并重启，两个 UI 入口共享同一进度状态。
+- **标题带自动更新**：后台静默定时检查；发现新版本后在侧栏开关旁提供下载入口，按钮在下载和验签时原位旋转，完成后由用户确认是否安装并重启。
 - **可诊断日志**：Harness 日志与桌面 sidecar 日志写入 `$DSH_HOME/logs`，并维护 latest 软链接。
 - **桌面自有插件**：Release 只捆绑运行面直接依赖的 `dsh-desktop-bridge` 与 `dsh-compaction-hierarchical`，其他插件保持独立安装和独立发版。
 
@@ -57,7 +57,7 @@ macOS 打开 DMG 后把 `dsh-desktop.app` 拖入 Applications。Windows 运行 N
 
 ```text
 plugin/<name>/                  独立安装、测试和发版的 DSH 插件
-  dsh-desktop-bridge/           桌面门控桥、About/更新 UI、日志汇
+  dsh-desktop-bridge/           桌面门控桥、标题带更新 UI、日志汇
   dsh-compaction-hierarchical/  桌面随包的层次压缩 Provider
   dsh-mcp-settings/             MCP 设置插件
   dsh-provider-balance/         Provider 配额可视化

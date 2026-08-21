@@ -1,6 +1,12 @@
-/** Quiet title-band updater entry with shared shell progress. */
+/** Quiet periodic updater control shared by the rail and non-mac fallback. */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
-import { IconDownloadOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import {
+  Button,
+  IconCheckOutline16,
+  IconDownloadOutline16,
+  IconLoadingOutline16,
+  Modal,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   isUpdateBusy, isUpdateIndicatorVisible, statusFromCheck, updatePercent,
@@ -15,10 +21,12 @@ const UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
 /** First check delay after mount, beyond the boot request burst. */
 const FIRST_CHECK_DELAY_MS = 3000
 
-/** Top-right affordance: absent while current, compact live progress on update. */
-export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | null {
-  const { checkUpdate, getUpdateStatus, updateGeneration, applyUpdate, t } = props
+/** The compact updater button rendered beside the sidebar toggle. */
+export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null {
+  const { checkUpdate, getUpdateStatus, updateGeneration, downloadUpdate, installUpdate, t } = props
   const [status, setStatus] = useState<DesktopUpdateStatus>({ phase: 'idle' })
+  const [requested, setRequested] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const mounted = useRef(true)
   const statusRequest = useRef(0)
 
@@ -48,7 +56,10 @@ export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | nul
       const request = checkUpdate(force)
       const requestGeneration = updateGeneration()
       request.then(
-        (found) => { void refreshStatus(requestGeneration, statusFromCheck(found)) },
+        (found) => {
+          if (mounted.current && updateGeneration() === requestGeneration) setRequested(false)
+          void refreshStatus(requestGeneration, statusFromCheck(found))
+        },
         () => { void refreshStatus(requestGeneration) },
       )
     }
@@ -62,10 +73,8 @@ export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | nul
     }
   }, [checkUpdate, refreshStatus, updateGeneration])
 
-  // Available polls slowly so an About-initiated update is reflected here;
-  // active phases poll at UI cadence for live byte progress.
   useEffect(() => {
-    if (status.phase !== 'available' && !isUpdateBusy(status)) return
+    if (!isUpdateBusy(status)) return
     let pending = false
     const poll = (): void => {
       if (pending) return
@@ -73,28 +82,138 @@ export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | nul
       const requestGeneration = updateGeneration()
       refreshStatus(requestGeneration).finally(() => { pending = false })
     }
-    const timer = setInterval(poll, isUpdateBusy(status) ? 120 : 750)
+    const timer = setInterval(poll, 120)
     return () => { clearInterval(timer) }
   }, [refreshStatus, status, updateGeneration])
 
-  const onApply = useCallback(() => {
-    if (status.phase !== 'available') return
-    const request = applyUpdate()
-    const requestGeneration = updateGeneration()
-    setStatus({ phase: 'preparing', version: status.version })
-    request.catch(() => { void refreshStatus(requestGeneration) })
-  }, [applyUpdate, refreshStatus, status, updateGeneration])
+  useEffect(() => {
+    if (status.phase === 'ready') setConfirmOpen(true)
+  }, [status.phase, 'version' in status ? status.version : undefined])
 
-  if (!isUpdateIndicatorVisible(status)) return null
+  const onDownload = useCallback(() => {
+    if (status.phase === 'ready') {
+      setConfirmOpen(true)
+      return
+    }
+    if (isUpdateBusy(status)) return
+    const target = 'version' in status ? status.version : undefined
+    setRequested(true)
+    setStatus(target === undefined ? { phase: 'preparing' } : { phase: 'preparing', version: target })
+    void (async () => {
+      try {
+        if (status.phase === 'failed') {
+          const found = await checkUpdate(true)
+          if (found === null) {
+            setRequested(false)
+            setStatus({ phase: 'current' })
+            await refreshStatus(updateGeneration(), { phase: 'current' })
+            return
+          }
+        }
+        const request = downloadUpdate()
+        const requestGeneration = updateGeneration()
+        await request
+        await refreshStatus(requestGeneration)
+      } catch {
+        const fallback: DesktopUpdateStatus = target === undefined
+          ? { phase: 'failed', message: 'Update download failed' }
+          : { phase: 'failed', version: target, message: 'Update download failed' }
+        await refreshStatus(updateGeneration(), fallback)
+      }
+    })()
+  }, [checkUpdate, downloadUpdate, refreshStatus, status, updateGeneration])
+
+  const onInstall = useCallback(() => {
+    if (status.phase !== 'ready') return
+    setConfirmOpen(false)
+    const request = installUpdate()
+    const requestGeneration = updateGeneration()
+    setStatus({ phase: 'installing', version: status.version })
+    request.catch(() => {
+      void refreshStatus(requestGeneration, {
+        phase: 'failed',
+        version: status.version,
+        message: 'Update install failed',
+      })
+    })
+  }, [installUpdate, refreshStatus, status, updateGeneration])
+
+  const visible = isUpdateIndicatorVisible(status) || (requested && status.phase === 'failed')
+  if (!visible) return null
 
   const busy = isUpdateBusy(status)
   const percent = updatePercent(status)
   const title = status.phase === 'available'
-    ? t('update.indicator.available', { version: status.version })
+    ? t('update.available', { version: status.version })
     : status.phase === 'downloading' && percent !== undefined
-      ? t('update.indicator.progress', { percent })
-      : t('update.indicator.applying')
+      ? t('update.progress', { percent })
+      : status.phase === 'ready'
+        ? t('update.ready', { version: status.version })
+        : status.phase === 'failed'
+          ? t('update.failed')
+          : status.phase === 'installing' || status.phase === 'restarting'
+            ? t('update.installing')
+            : t('update.preparing')
+  const icon = status.phase === 'ready'
+    ? <IconCheckOutline16 />
+    : busy
+      ? <span data-desktop-update-spinner=""><IconLoadingOutline16 /></span>
+      : <IconDownloadOutline16 />
 
+  return (
+    <>
+      <style>{'@keyframes desktop-update-spin{to{transform:rotate(360deg)}}[data-desktop-update-spinner]{display:inline-flex;animation:desktop-update-spin .8s linear infinite}'}</style>
+      <button
+        type="button"
+        data-desktop-rail-button=""
+        data-desktop-update-button=""
+        aria-label={title}
+        aria-busy={busy}
+        title={title}
+        onClick={onDownload}
+        disabled={busy}
+        style={{
+          all: 'unset',
+          boxSizing: 'border-box',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '22px',
+          height: '22px',
+          borderRadius: '6px',
+          cursor: busy ? 'default' : 'pointer',
+          opacity: busy ? 0.72 : 1,
+          color: 'inherit',
+          pointerEvents: 'auto',
+        }}
+        onMouseEnter={(event) => { if (!busy) event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' }}
+        onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent' }}
+      >
+        {icon}
+      </button>
+      <Modal
+        open={confirmOpen && status.phase === 'ready'}
+        onClose={() => { setConfirmOpen(false) }}
+        title={t('update.confirm.title')}
+        closeLabel={t('update.confirm.later')}
+        description={status.phase === 'ready' ? t('update.confirm.description', { version: status.version }) : ''}
+        footer={(
+          <>
+            <Button variant="outline" size="sm" onClick={() => { setConfirmOpen(false) }}>
+              {t('update.confirm.later')}
+            </Button>
+            <Button variant="primary" size="sm" onClick={onInstall}>
+              {t('update.confirm.install')}
+            </Button>
+          </>
+        )}
+      />
+    </>
+  )
+}
+
+/** Non-macOS fallback where no overlay-titlebar rail exists. */
+export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement {
   return (
     <div
       data-desktop-update-indicator=""
@@ -110,38 +229,7 @@ export function UpdateIndicator(props: UpdateIndicatorProps): ReactElement | nul
         pointerEvents: 'none',
       }}
     >
-      <button
-        type="button"
-        data-desktop-update-button=""
-        aria-label={title}
-        title={title}
-        onClick={onApply}
-        disabled={busy}
-        style={{
-          all: 'unset',
-          boxSizing: 'border-box',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '4px',
-          minWidth: '22px',
-          height: '22px',
-          padding: percent === undefined ? 0 : '0 6px',
-          borderRadius: '6px',
-          cursor: busy ? 'default' : 'pointer',
-          opacity: busy && percent === undefined ? 0.55 : 1,
-          color: 'inherit',
-          pointerEvents: 'auto',
-          fontSize: '11px',
-          lineHeight: '16px',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-        onMouseEnter={(event) => { if (!busy) event.currentTarget.style.background = 'var(--dsw-alias-interactive-bg-hover)' }}
-        onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent' }}
-      >
-        <IconDownloadOutline16 />
-        {percent === undefined ? null : <span>{percent}%</span>}
-      </button>
+      <UpdateControl {...props} />
     </div>
   )
 }

@@ -6,13 +6,6 @@ export interface DesktopUpdateInfo {
   notes: string
 }
 
-/** Desktop and bundled Harness identity compiled into the shell. */
-export interface DesktopVersionInfo {
-  desktopVersion: string
-  runtimeVersion: string
-  runtimeSha: string
-}
-
 /** Process-wide updater snapshot exposed by the shell. */
 export type DesktopUpdateStatus =
   | { phase: 'idle' }
@@ -21,20 +14,23 @@ export type DesktopUpdateStatus =
   | { phase: 'available'; version: string; notes: string }
   | { phase: 'preparing'; version?: string }
   | { phase: 'downloading'; version: string; downloaded: number; total?: number }
+  | { phase: 'ready'; version: string }
   | { phase: 'installing'; version: string }
   | { phase: 'restarting'; version: string }
   | { phase: 'failed'; version?: string; message: string }
 
-/** IPC faces shared by the About page and title-band indicator. */
+/** IPC face consumed by the title-band updater control. */
 export interface DesktopUpdaterInjected {
   /** Check the release endpoint; force bypasses the client single-flight memo. */
   checkUpdate: (force?: boolean) => Promise<DesktopUpdateInfo | null>
   /** Read the shell's process-wide progress snapshot. */
   getUpdateStatus: () => Promise<DesktopUpdateStatus>
-  /** Shared browser generation used to discard stale cross-surface replies. */
+  /** Shared browser generation used to discard stale replies. */
   updateGeneration: () => number
-  /** Recheck, download, verify, install, and restart. */
-  applyUpdate: () => Promise<never>
+  /** Recheck, download, and verify the newest signed package. */
+  downloadUpdate: () => Promise<void>
+  /** Install the verified package and restart the desktop process. */
+  installUpdate: () => Promise<never>
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -74,6 +70,7 @@ export function decodeUpdateStatus(value: unknown): DesktopUpdateStatus {
         ...(total === undefined ? {} : { total }),
       }
     }
+    case 'ready':
     case 'installing':
     case 'restarting':
       return { phase, version: text(raw.version, '?') }
@@ -106,9 +103,9 @@ export function isUpdateBusy(status: DesktopUpdateStatus): boolean {
     || status.phase === 'restarting'
 }
 
-/** Quiet title-band visibility: background failures stay inside About. */
+/** Quiet title-band visibility: background failures remain silent. */
 export function isUpdateIndicatorVisible(status: DesktopUpdateStatus): boolean {
-  return status.phase === 'available' || isUpdateBusy(status)
+  return status.phase === 'available' || status.phase === 'ready' || isUpdateBusy(status)
 }
 
 /** Integer percentage when the server reports a usable content length. */

@@ -41,6 +41,11 @@ test('status helpers preserve check metadata and active phases', () => {
   assert.equal(isUpdateBusy({ phase: 'checking' }), true)
   assert.equal(isUpdateBusy({ phase: 'preparing', version: '0.3.0' }), true)
   assert.equal(isUpdateBusy({ phase: 'available', version: '0.3.0', notes: '' }), false)
+  assert.deepEqual(decodeUpdateStatus({ phase: 'ready', version: '0.3.0' }), {
+    phase: 'ready',
+    version: '0.3.0',
+  })
+  assert.equal(isUpdateBusy({ phase: 'ready', version: '0.3.0' }), false)
 })
 
 test('title-band visibility keeps background failures quiet', () => {
@@ -48,6 +53,7 @@ test('title-band visibility keeps background failures quiet', () => {
   assert.equal(isUpdateIndicatorVisible({ phase: 'current' }), false)
   assert.equal(isUpdateIndicatorVisible({ phase: 'available', version: '0.3.0', notes: '' }), true)
   assert.equal(isUpdateIndicatorVisible({ phase: 'downloading', version: '0.3.0', downloaded: 0 }), true)
+  assert.equal(isUpdateIndicatorVisible({ phase: 'ready', version: '0.3.0' }), true)
 })
 
 test('updatePercent clamps completed downloads and needs a total', () => {

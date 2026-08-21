@@ -61,7 +61,7 @@ git tag dsh-provider-balance-v0.4.2 && git push origin dsh-provider-balance-v0.4
 ## 2. 自动更新的接线（已内置，无需操作）
 
 - 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 macOS `dsh-desktop.app.tar.gz` 与 Windows `*-setup.exe`，签名校验用上面的 tauri 私钥对应的公钥；`latest.json` 的 `platforms` 必须同时带上已发布的每一个 OS，缺一项该平台的检查会失败；
-- 用户侧：**后台定时检查**（启动 3s 首查，之后每 2h）——有新版时窗口右上角亮出下载小图标，一键下载+校验+安装+自动重启；离线/无端点时图标不出现、完全静默（Zed/GitHub Desktop 的共识模式，Zed「过于激进」的教训取 2h 周期）；
+- 用户侧：**后台定时检查**（启动 3s 首查，之后每 2h）——macOS 有新版时左上角侧栏开关旁亮出下载图标（收起态 `+` 仍在其右侧），其他平台用右上角 fallback；点击后原位旋转并完成下载与签名校验，再弹确认框，只有确认才安装并自动重启；离线/无端点时入口不出现、完全静默；
 - **GitHub 的 latest 指向**：desktop Release `make_latest: true` 独占 latest；插件 Release 一律 `make_latest: false`（见 §0 的指针纪律）。
 
 ## 3. 手动发布路径（CI 不可用时的备胎）
@@ -86,8 +86,8 @@ xcrun notarytool submit src-tauri/target/release/bundle/dmg/dsh-desktop_*_aarch6
 | 公证失败 | `xcrun notarytool log <submission-id> --apple-id … --password … --team-id …`（submission-id 在 build 日志或 `notarytool history` 里）；`path` 字段直接点名是哪个文件 |
 | 401 Unauthenticated | 凭据错：App 专用密码 ≠ 账号密码 ≠ ASC API 密钥（个人密钥不可用） |
 | `errSecInternalComponent` | keychain 授权丢了：重跑 `security set-key-partition-list -S apple-tool:,apple:` |
-| About 页面「检查失败」 | 正常软失败路径：dev 构建无端点 / 离线 / Release 还没发过 latest.json；修复后点「重试」即可重新检查 |
-| 更新下载后校验失败 | About 会保留目标版本并进入失败态；tauri 私钥与包内公钥不匹配时需重发版，并确认 `TAURI_SIGNING_PRIVATE_KEY` 是当前这对 |
+| 后台没有出现更新入口 | dev 构建无端点 / 离线 / Release 还没发过 latest.json 都走静默软失败；先确认 `latest.json` 可达且其版本高于当前包 |
+| 更新下载后校验失败 | 标题带入口保留目标版本并进入可重试失败态；tauri 私钥与包内公钥不匹配时需重发版，并确认 `TAURI_SIGNING_PRIVATE_KEY` 是当前这对 |
 | DMG 安装页退化成默认布局 | `bash scripts/verify-dmg-layout.sh <dmg>`；若报 `.DS_Store` 缺失，检查 macOS build 是否保留 `TAURI_BUNDLER_DMG_IGNORE_CI=true` |
 
 ## 5. 开源注意事项

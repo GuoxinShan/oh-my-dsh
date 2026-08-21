@@ -4,8 +4,8 @@
  * fixed 56px control rail (SIDEBAR_COLLAPSED) and keeps the rail UI mounted.
  * Under the shell's floating traffic lights that rail is a dead strip under
  * the close/minimize/zoom buttons, so the desktop form factor hides the
- * column outright and replaces it with the two titlebar-band controls
- * (rail-controls.tsx).
+ * column outright and replaces it with titlebar-band controls
+ * (rail-controls.tsx), including the conditional updater affordance.
  *
  * The column width lives in the frame's INLINE grid-template-columns (React
  * writes `<sidebar>px minmax(0, 1fr) <details>px` per render), so a plain
@@ -61,11 +61,11 @@ export function railCss(): string {
     'div[data-sidebar-collapsed]:has(> [data-shell-overlay])>div:nth-child(1){border-right:none;}',
     "div[data-slot='sidebar']>div>div:first-child>button:last-child{display:none;}",
     '[data-desktop-rail-controls]{position:absolute;top:8px;left:86px;height:22px;display:flex;align-items:center;gap:8px;z-index:1;color:var(--dsw-alias-label-primary);pointer-events:none;}',
-    '[data-desktop-rail-controls] button{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;cursor:pointer;color:inherit;pointer-events:auto;}',
-    '[data-desktop-rail-controls] button:hover{background:var(--dsw-alias-interactive-bg-hover);}',
-    '[data-desktop-rail-controls] button:nth-child(2){opacity:0;visibility:hidden;transform:translateX(12px);pointer-events:none;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s;}',
-    'div[data-sidebar-collapsed] [data-desktop-rail-controls] button:nth-child(2){opacity:1;visibility:visible;transform:none;pointer-events:auto;transition:opacity .2s ease .18s,transform .2s ease .18s,visibility 0s;}',
-    '@media (prefers-reduced-motion: reduce){[data-desktop-rail-controls] button:nth-child(2),div[data-sidebar-collapsed] [data-desktop-rail-controls] button:nth-child(2){transition:none;}}',
+    '[data-desktop-rail-controls] [data-desktop-rail-button]{all:unset;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;cursor:pointer;color:inherit;pointer-events:auto;}',
+    '[data-desktop-rail-controls] [data-desktop-rail-button]:hover{background:var(--dsw-alias-interactive-bg-hover);}',
+    '[data-desktop-rail-controls] [data-desktop-new-session]{opacity:0;visibility:hidden;transform:translateX(12px);pointer-events:none!important;transition:opacity .16s ease,transform .16s ease,visibility 0s linear .16s;}',
+    'div[data-sidebar-collapsed] [data-desktop-rail-controls] [data-desktop-new-session]{opacity:1;visibility:visible;transform:none;pointer-events:auto!important;transition:opacity .2s ease .18s,transform .2s ease .18s,visibility 0s;}',
+    '@media (prefers-reduced-motion: reduce){[data-desktop-rail-controls] [data-desktop-new-session],div[data-sidebar-collapsed] [data-desktop-rail-controls] [data-desktop-new-session]{transition:none;}}',
   ].join('')
 }
 

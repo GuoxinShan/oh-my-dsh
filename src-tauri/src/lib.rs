@@ -57,9 +57,9 @@ static SIGNALED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::ne
 /// The e2e verdict reported through the IPC channel, if it works.
 static E2E_VERDICT: Mutex<Option<String>> = Mutex::new(None);
 
-/// Process-wide updater state shared by the About page and title-band entry.
-/// Tauri's updater streams chunk lengths through callbacks; keeping the
-/// accumulator here lets either surface attach midway through a download.
+/// Process-wide updater state consumed by the plugin's title-band control.
+/// Tauri streams chunk lengths through callbacks; keeping the accumulator here
+/// lets the control attach midway through a download.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "phase", rename_all = "camelCase")]
 enum DesktopUpdateStatus {
@@ -77,6 +77,9 @@ enum DesktopUpdateStatus {
         version: String,
         downloaded: u64,
         total: Option<u64>,
+    },
+    Ready {
+        version: String,
     },
     Installing {
         version: String,
@@ -109,6 +112,7 @@ impl DesktopUpdateStatus {
         match self {
             Self::Available { version, .. }
             | Self::Downloading { version, .. }
+            | Self::Ready { version }
             | Self::Installing { version }
             | Self::Restarting { version } => Some(version.clone()),
             Self::Preparing { version } | Self::Failed { version, .. } => version.clone(),
@@ -118,6 +122,14 @@ impl DesktopUpdateStatus {
 }
 
 static UPDATE_STATUS: Mutex<DesktopUpdateStatus> = Mutex::new(DesktopUpdateStatus::Idle);
+
+/// Signature-verified package retained only until the user confirms install.
+struct DownloadedUpdate {
+    update: tauri_plugin_updater::Update,
+    bytes: Vec<u8>,
+}
+
+static DOWNLOADED_UPDATE: Mutex<Option<DownloadedUpdate>> = Mutex::new(None);
 
 /// Run the shell.
 pub fn run() {
@@ -141,10 +153,10 @@ pub fn run() {
             dsh_desktop_notify,
             dsh_desktop_save_file,
             dsh_desktop_e2e_report,
-            dsh_desktop_version_info,
             dsh_desktop_check_update,
             dsh_desktop_update_status,
-            dsh_desktop_apply_update
+            dsh_desktop_download_update,
+            dsh_desktop_install_update
         ])
         .build(tauri::generate_context!())
         .expect("dsh-desktop: tauri context")
@@ -1649,6 +1661,9 @@ fn claim_update_check(status: &mut DesktopUpdateStatus) -> Result<Option<String>
     if status.is_busy() {
         return Err("update operation already in progress".to_string());
     }
+    if matches!(status, DesktopUpdateStatus::Ready { .. }) {
+        return Err("downloaded update awaiting confirmation".to_string());
+    }
     let version = status.version();
     *status = DesktopUpdateStatus::Checking;
     Ok(version)
@@ -1661,10 +1676,8 @@ fn begin_update_check() -> Result<Option<String>, String> {
     claim_update_check(&mut status)
 }
 
-/// Claim download/install only after a successful check exposed a target.
-/// Failed operations must return through an explicit check before retrying,
-/// preserving the rule that installation follows a fresh user-visible offer.
-fn claim_update_apply(status: &mut DesktopUpdateStatus) -> Result<String, String> {
+/// Download is allowed only after a successful check exposed a target.
+fn claim_update_download(status: &mut DesktopUpdateStatus) -> Result<String, String> {
     if status.is_busy() {
         return Err("update operation already in progress".to_string());
     }
@@ -1678,11 +1691,33 @@ fn claim_update_apply(status: &mut DesktopUpdateStatus) -> Result<String, String
     Ok(version)
 }
 
-fn begin_update_apply() -> Result<String, String> {
+fn begin_update_download() -> Result<String, String> {
     let mut status = UPDATE_STATUS
         .lock()
         .map_err(|_| "update status unavailable".to_string())?;
-    claim_update_apply(&mut status)
+    claim_update_download(&mut status)
+}
+
+/// Installation is a separate explicit action after signature verification.
+fn claim_update_install(status: &mut DesktopUpdateStatus) -> Result<String, String> {
+    if status.is_busy() {
+        return Err("update operation already in progress".to_string());
+    }
+    let version = match &*status {
+        DesktopUpdateStatus::Ready { version } => version.clone(),
+        _ => return Err("no downloaded update ready".to_string()),
+    };
+    *status = DesktopUpdateStatus::Installing {
+        version: version.clone(),
+    };
+    Ok(version)
+}
+
+fn begin_update_install() -> Result<String, String> {
+    let mut status = UPDATE_STATUS
+        .lock()
+        .map_err(|_| "update status unavailable".to_string())?;
+    claim_update_install(&mut status)
 }
 
 /// Add one updater download chunk without allowing integer wraparound.
@@ -1697,22 +1732,6 @@ fn add_update_chunk(status: &mut DesktopUpdateStatus, chunk: usize, content_leng
     if total.is_none() {
         *total = content_length;
     }
-}
-
-/// Compile-time desktop/runtime identity. The revision manifest is included in
-/// the binary so About never depends on the extracted runtime still existing.
-#[tauri::command]
-fn dsh_desktop_version_info() -> Result<serde_json::Value, String> {
-    let revision: serde_json::Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../runtime/revision.json"
-    )))
-    .map_err(|e| format!("runtime revision unavailable: {e}"))?;
-    Ok(serde_json::json!({
-        "desktopVersion": env!("CARGO_PKG_VERSION"),
-        "runtimeVersion": revision.get("ref").and_then(|value| value.as_str()).unwrap_or("?"),
-        "runtimeSha": revision.get("sha").and_then(|value| value.as_str()).unwrap_or("?"),
-    }))
 }
 
 /// IPC: check the updater endpoint for a newer release. The same result also
@@ -1761,15 +1780,20 @@ fn dsh_desktop_update_status() -> Result<DesktopUpdateStatus, String> {
     update_status_snapshot()
 }
 
-/// IPC: single-flight recheck, streaming download, signature verification,
-/// installation, then process restart. Successful calls never resolve in the
-/// browser because restart replaces this process.
+/// IPC: single-flight recheck plus streaming download and signature
+/// verification. The verified bytes remain process-local until confirmation.
 #[tauri::command]
-async fn dsh_desktop_apply_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn dsh_desktop_download_update(app: tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_updater::UpdaterExt as _;
 
-    let expected_version = begin_update_apply()?;
+    let expected_version = begin_update_download()?;
     let result = async {
+        {
+            let mut downloaded = DOWNLOADED_UPDATE
+                .lock()
+                .map_err(|_| "downloaded update storage unavailable".to_string())?;
+            *downloaded = None;
+        }
         let updater = app
             .updater()
             .map_err(|e| format!("updater unavailable: {e}"))?;
@@ -1784,27 +1808,24 @@ async fn dsh_desktop_apply_update(app: tauri::AppHandle) -> Result<(), String> {
             downloaded: 0,
             total: None,
         });
-
-        let restart_version = version.clone();
-        let install_version = version.clone();
-        update
-            .download_and_install(
+        let bytes = update
+            .download(
                 move |chunk, content_length| {
                     if let Ok(mut status) = UPDATE_STATUS.lock() {
                         add_update_chunk(&mut status, chunk, content_length);
                     }
                 },
-                move || {
-                    set_update_status(DesktopUpdateStatus::Installing {
-                        version: install_version,
-                    });
-                },
+                || {},
             )
             .await
-            .map_err(|e| format!("download/install failed: {e}"))?;
-        set_update_status(DesktopUpdateStatus::Restarting {
-            version: restart_version,
-        });
+            .map_err(|e| format!("download failed: {e}"))?;
+        {
+            let mut downloaded = DOWNLOADED_UPDATE
+                .lock()
+                .map_err(|_| "downloaded update storage unavailable".to_string())?;
+            *downloaded = Some(DownloadedUpdate { update, bytes });
+        }
+        set_update_status(DesktopUpdateStatus::Ready { version });
         Ok::<(), String>(())
     }
     .await;
@@ -1820,6 +1841,51 @@ async fn dsh_desktop_apply_update(app: tauri::AppHandle) -> Result<(), String> {
         });
         return Err(message);
     }
+    Ok(())
+}
+
+/// IPC: install the already verified package after explicit confirmation, then
+/// replace this process. Successful calls do not resolve in the browser.
+#[tauri::command]
+async fn dsh_desktop_install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let expected_version = begin_update_install()?;
+    let downloaded = DOWNLOADED_UPDATE
+        .lock()
+        .map_err(|_| "downloaded update storage unavailable".to_string())
+        .and_then(|mut downloaded| {
+            downloaded
+                .take()
+                .ok_or_else(|| "downloaded update missing".to_string())
+        });
+    let downloaded = match downloaded {
+        Ok(downloaded) => downloaded,
+        Err(message) => {
+            set_update_status(DesktopUpdateStatus::Failed {
+                version: Some(expected_version),
+                message: message.clone(),
+            });
+            return Err(message);
+        }
+    };
+    if downloaded.update.version != expected_version {
+        let message = "downloaded update version changed".to_string();
+        set_update_status(DesktopUpdateStatus::Failed {
+            version: Some(expected_version),
+            message: message.clone(),
+        });
+        return Err(message);
+    }
+    if let Err(error) = downloaded.update.install(&downloaded.bytes) {
+        let message = format!("install failed: {error}");
+        set_update_status(DesktopUpdateStatus::Failed {
+            version: Some(expected_version),
+            message: message.clone(),
+        });
+        return Err(message);
+    }
+    set_update_status(DesktopUpdateStatus::Restarting {
+        version: expected_version,
+    });
 
     // Never returns: the process is replaced by the new version.
     #[allow(unreachable_code)]
@@ -2022,10 +2088,10 @@ mod tests {
     }
 
     #[test]
-    fn updater_claims_require_a_target_and_preserve_it_across_rechecks() {
+    fn updater_claims_separate_check_download_and_confirmed_install() {
         let mut idle = DesktopUpdateStatus::Idle;
         assert_eq!(
-            claim_update_apply(&mut idle).unwrap_err(),
+            claim_update_download(&mut idle).unwrap_err(),
             "no checked update available"
         );
         assert_eq!(idle, DesktopUpdateStatus::Idle);
@@ -2034,14 +2100,28 @@ mod tests {
             version: "0.3.0".into(),
             notes: String::new(),
         };
+        assert_eq!(claim_update_download(&mut available).unwrap(), "0.3.0");
         assert_eq!(
-            claim_update_check(&mut available).unwrap().as_deref(),
-            Some("0.3.0")
+            available,
+            DesktopUpdateStatus::Preparing {
+                version: Some("0.3.0".into())
+            }
         );
-        assert_eq!(available, DesktopUpdateStatus::Checking);
-        assert!(
-            claim_update_apply(&mut available).is_err(),
-            "checking is single-flight"
+        assert!(claim_update_check(&mut available).is_err(), "download is single-flight");
+
+        let mut ready = DesktopUpdateStatus::Ready {
+            version: "0.3.0".into(),
+        };
+        assert_eq!(
+            claim_update_check(&mut ready).unwrap_err(),
+            "downloaded update awaiting confirmation"
+        );
+        assert_eq!(claim_update_install(&mut ready).unwrap(), "0.3.0");
+        assert_eq!(
+            ready,
+            DesktopUpdateStatus::Installing {
+                version: "0.3.0".into()
+            }
         );
 
         let mut failed = DesktopUpdateStatus::Failed {
@@ -2049,15 +2129,8 @@ mod tests {
             message: "offline".into(),
         };
         assert_eq!(
-            claim_update_apply(&mut failed).unwrap_err(),
+            claim_update_download(&mut failed).unwrap_err(),
             "no checked update available"
-        );
-        assert_eq!(
-            failed,
-            DesktopUpdateStatus::Failed {
-                version: Some("0.3.0".into()),
-                message: "offline".into(),
-            }
         );
     }
 

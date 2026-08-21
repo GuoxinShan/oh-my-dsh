@@ -2,17 +2,15 @@
  * Desktop webview bridge, browser half. Probes the desktop gate signal; in a
  * plain browser (terminal `dsh web`) the probe is 'absent' and apply returns
  * with zero registrations, so the row is always safe to mount. Inside the
- * shell it installs five effects — external-link routing, download saving,
- * attention notifications, the shell.overlay desktop badge, and the macOS
- * titlebar fusion — all as reversible effects collected by the plugin fiber.
+ * shell it installs external-link routing, download saving, attention
+ * notifications, shell.overlay desktop controls, and macOS titlebar fusion —
+ * all as reversible effects collected by the plugin fiber.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the 'shell.overlay' SlotMap declaration (ui-layout's
 // frame declares it) so the registration below typechecks against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-// Type-only: pulls the settings SlotMap declaration ('settings.section').
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { AttentionEdge, AttentionRow } from './attention.ts'
@@ -24,10 +22,8 @@ import { classifyDownload, saveViaShell } from './downloads.ts'
 import type { DesktopProbe, TauriInvoke } from './env.ts'
 import { probeDesktop } from './env.ts'
 import { DesktopBadge, type BadgeInjected } from './badge.tsx'
-import { AboutSection, type AboutInjected } from './about.tsx'
 import { UpdateIndicator, type UpdateIndicatorInjected } from './update-indicator.tsx'
 import { createUpdateCoordinator } from './update-coordinator.ts'
-import type { DesktopVersionInfo } from './updates.ts'
 import { en, zh, type DesktopBridgeKey } from './locales.ts'
 import { installRailCss, installRailHider } from './rail.ts'
 import { DesktopRailControls, type RailControlsInjected } from './rail-controls.tsx'
@@ -36,7 +32,7 @@ import { DesktopDragStrip } from './titlebar.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
-    /** The desktop bridge's copy (badge labels). */
+    /** The desktop bridge's localized labels. */
     'desktop-bridge': DesktopBridgeKey
   }
 }
@@ -53,7 +49,7 @@ interface WarnLog {
 }
 
 /**
- * Client plugin body: probe, then install the four bridges.
+ * Client plugin body: probe, then install the desktop integrations.
  * @param ctx - client root context.
  * @throws when the gate signal is present but malformed, or the Tauri IPC carrier is missing (shell-contract violation; the boot audit reports the failed fiber without affecting other plugins).
  */
@@ -88,38 +84,18 @@ export function apply(ctx: ClientContext): void {
   const injected = (): BadgeInjected => ({
     openExternal: (url) => { void callOpenExternal(invoke, url, logger) },
   })
-  // About and the title-band entry share one ordered browser coordinator;
-  // the Rust process remains the authoritative updater state owner.
+  // One ordered browser coordinator backs the quiet periodic check and the
+  // explicit download/install actions; Rust owns the durable process state.
   const updater = createUpdateCoordinator((command) => invoke.invoke(command))
-  const versionInfo = async (): Promise<DesktopVersionInfo> => {
-    const raw = (await invoke.invoke('dsh_desktop_version_info')) as {
-      desktopVersion?: unknown
-      runtimeVersion?: unknown
-      runtimeSha?: unknown
-    }
-    return {
-      desktopVersion: typeof raw.desktopVersion === 'string' ? raw.desktopVersion : '?',
-      runtimeVersion: typeof raw.runtimeVersion === 'string' ? raw.runtimeVersion : '?',
-      runtimeSha: typeof raw.runtimeSha === 'string' ? raw.runtimeSha : '?',
-    }
-  }
   const updateInjected = (): UpdateIndicatorInjected => updater
-  const aboutInjected = (): AboutInjected => ({ ...updater, versionInfo })
-  const t = ctx.locale.bind(NS)
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'desktop-about',
-    order: 100,
-    label: () => t('about.nav'),
-    locale: NS,
-    inject: aboutInjected,
-  }, AboutSection))
   // slots.inject waits on the ui-layout declaration (activation order is
   // unconstrained), reruns after redeclaration, and leaves with this fiber.
   ctx.slots.inject('shell.overlay', () => {
     const disposeBadge = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge)
-    const disposeUpdate = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-update-indicator', order: 6, locale: NS, inject: updateInjected }, UpdateIndicator)
-    if (!fuseTitlebar) return () => { disposeUpdate(); disposeBadge() }
+    if (!fuseTitlebar) {
+      const disposeUpdate = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-update-indicator', order: 6, locale: NS, inject: updateInjected }, UpdateIndicator)
+      return () => { disposeUpdate(); disposeBadge() }
+    }
     const disposeStrip = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-drag-strip', order: 0 }, DesktopDragStrip)
     // Resolve ctx.layout lazily per click, never at registration time:
     // slots.inject fires the moment ui-layout's declaration lands — inside
@@ -127,6 +103,7 @@ export function apply(ctx: ClientContext): void {
     // serves ACTIVE providers, so a registration-time read can miss a layout
     // that is about to exist (the controls would never appear).
     const railInjected = (): RailControlsInjected => ({
+      ...updater,
       toggleSidebar: () => {
         const layout = ctx.get('layout')
         if (layout === undefined) {
@@ -138,7 +115,7 @@ export function apply(ctx: ClientContext): void {
       startSession: () => { ctx.workspaces.startSession() },
     })
     const disposeControls = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-rail-controls', order: 5, locale: NS, inject: railInjected }, DesktopRailControls)
-    return () => { disposeControls(); disposeStrip(); disposeUpdate(); disposeBadge() }
+    return () => { disposeControls(); disposeStrip(); disposeBadge() }
   })
 }
 

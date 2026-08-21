@@ -41,15 +41,15 @@ describe('railCss', () => {
   })
   it('keeps the toggle always visible and clickable', () => {
     const css = railCss()
-    const toggleRule = css.match(/\[data-desktop-rail-controls\] button\{[^}]*\}/)
+    const toggleRule = css.match(/\[data-desktop-rail-controls\] \[data-desktop-rail-button\]\{[^}]*\}/)
     assert.ok(toggleRule !== null)
     assert.ok(toggleRule[0].includes('pointer-events:auto'))
     assert.ok(!toggleRule[0].includes('opacity:0'))
   })
   it('shows the New Session bubble only while collapsed, sliding in delayed', () => {
     const css = railCss()
-    assert.ok(css.includes('button:nth-child(2){opacity:0;visibility:hidden;transform:translateX(12px);pointer-events:none;'))
-    assert.ok(css.includes('div[data-sidebar-collapsed] [data-desktop-rail-controls] button:nth-child(2){opacity:1;visibility:visible;'))
+    assert.ok(css.includes('[data-desktop-rail-controls] [data-desktop-new-session]{opacity:0;visibility:hidden;transform:translateX(12px);pointer-events:none!important;'))
+    assert.ok(css.includes('div[data-sidebar-collapsed] [data-desktop-rail-controls] [data-desktop-new-session]{opacity:1;visibility:visible;'))
     assert.ok(css.includes('transition:opacity .2s ease .18s,transform .2s ease .18s'))
   })
   it('respects reduced motion', () => {

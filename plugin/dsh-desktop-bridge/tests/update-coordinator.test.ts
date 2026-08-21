@@ -45,7 +45,7 @@ test('coalesces concurrent checks and refreshes the successful memo only when fo
   assert.equal(updater.updateGeneration(), 2)
 })
 
-test('serializes apply behind an active check and rejects overtaking checks', async () => {
+test('serializes check, download, and confirmed install', async () => {
   const checkGate = deferred<unknown>()
   const order: string[] = []
   let checkCalls = 0
@@ -55,21 +55,32 @@ test('serializes apply behind an active check and rejects overtaking checks', as
       checkCalls += 1
       return checkCalls === 1 ? checkGate.promise : Promise.resolve({ update: null })
     }
-    if (command === 'dsh_desktop_apply_update') return Promise.resolve()
+    if (command === 'dsh_desktop_download_update') return Promise.resolve()
+    if (command === 'dsh_desktop_install_update') return Promise.resolve()
     throw new Error(`unexpected command: ${command}`)
   })
 
   const check = updater.checkUpdate(true)
   await Promise.resolve()
-  const apply = updater.applyUpdate()
-  assert.equal(updater.applyUpdate(), apply)
+  const download = updater.downloadUpdate()
+  assert.equal(updater.downloadUpdate(), download)
   await assert.rejects(updater.checkUpdate(true), /already in progress/)
   assert.deepEqual(order, ['dsh_desktop_check_update'])
 
   checkGate.resolve({ update: { version: '0.3.0', notes: '' } })
   await check
-  await assert.rejects(apply, /resolved without restarting/)
-  assert.deepEqual(order, ['dsh_desktop_check_update', 'dsh_desktop_apply_update'])
+  await download
+  assert.deepEqual(order, ['dsh_desktop_check_update', 'dsh_desktop_download_update'])
+
+  const install = updater.installUpdate()
+  assert.equal(updater.installUpdate(), install)
+  await assert.rejects(updater.checkUpdate(true), /already in progress/)
+  await assert.rejects(install, /resolved without restarting/)
+  assert.deepEqual(order, [
+    'dsh_desktop_check_update',
+    'dsh_desktop_download_update',
+    'dsh_desktop_install_update',
+  ])
 
   assert.equal(await updater.checkUpdate(true), null)
   assert.equal(checkCalls, 2)
