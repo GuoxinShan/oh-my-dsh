@@ -5,7 +5,7 @@
  *
  * @module dsh-web-search-toggle/client/WebSearchRow
  */
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { WebSearchToggleSnapshot } from '../toggle-types.ts'
 import css from './WebSearchRow.module.css'
@@ -33,6 +33,11 @@ export type WebSearchRowComponentProps =
   & PropsLocale<'web-search-toggle'>
   & InjectFace<WebSearchRowInjected>
 
+// The optimistic snapshot already matches the knob, so the state text only
+// swaps to "applying" when a commit outlives this window — fast commits never
+// flash the label.
+const PENDING_NOTICE_DELAY_MS = 300
+
 /**
  * Render the web search toggle row.
  * @param props - composed slot props.
@@ -40,6 +45,8 @@ export type WebSearchRowComponentProps =
  */
 export function WebSearchRow({ t, refresh, setEnabled }: WebSearchRowComponentProps) {
   const [state, setState] = useState<WebSearchRowState>({ status: 'loading' })
+  const [pendingShown, setPendingShown] = useState(false)
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const switchId = useId()
 
   useEffect(() => {
@@ -48,11 +55,20 @@ export function WebSearchRow({ t, refresh, setEnabled }: WebSearchRowComponentPr
     return () => { live = false }
   }, [refresh])
 
+  useEffect(() => () => { clearTimeout(pendingTimerRef.current) }, [])
+
   const commit = (enabled: boolean): void => {
+    clearTimeout(pendingTimerRef.current)
+    setPendingShown(false)
     setState(prev => prev.status === 'ready' && prev.snapshot !== undefined
       ? { status: 'ready', snapshot: { ...prev.snapshot, enabled }, pending: true }
       : prev)
-    void setEnabled(enabled).then(next => setState(next))
+    pendingTimerRef.current = setTimeout(() => { setPendingShown(true) }, PENDING_NOTICE_DELAY_MS)
+    void setEnabled(enabled).then((next) => {
+      clearTimeout(pendingTimerRef.current)
+      setPendingShown(false)
+      setState(next)
+    })
   }
 
   const snap = state.snapshot
@@ -82,9 +98,11 @@ export function WebSearchRow({ t, refresh, setEnabled }: WebSearchRowComponentPr
       {state.status === 'ready' && snap !== undefined && (
         <div className={css.controls}>
           <span className={css.controlState} aria-live="polite">
-            {state.pending === true
-              ? t('state.pending')
-              : snap.enabled ? t('toggle.on') : t('toggle.off')}
+            <span key={state.pending === true && pendingShown ? 'pending' : snap.enabled ? 'on' : 'off'}>
+              {state.pending === true && pendingShown
+                ? t('state.pending')
+                : snap.enabled ? t('toggle.on') : t('toggle.off')}
+            </span>
           </span>
           <label className={css.switch} htmlFor={switchId}>
             <input

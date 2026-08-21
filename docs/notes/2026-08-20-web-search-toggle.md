@@ -26,7 +26,7 @@
 
 ## 验证
 
-- 单测 11 个全过（含文案隐私回归、YAML 合法性、幂等、往返、注释保留）。
+- 单元测试 14 个全过：11 个 Host/文案/patch 回归，以及 3 个组件测试覆盖快速提交不闪「应用中」、慢提交延迟反馈与错误收敛。
 - scratch home 实机：`plugin add` → boot 200 → 通过构建产物执行 disable（写出的块 `parse` 为 `[{id:'tool-web',disabled:true}]`）→ HMR 重组后 host 存活零错误 → re-enable 回 `[]\n` → host 存活。
 
 ## 已知边界
