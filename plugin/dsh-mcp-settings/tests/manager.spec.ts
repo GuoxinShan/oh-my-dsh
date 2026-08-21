@@ -12,7 +12,13 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { CredentialProvider, credentialRef } from '@deepseek-ai/dsh-credentials'
-import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import type {
+  CredentialInfo,
+  CredentialKey,
+  CredentialRecord,
+  CredentialRef,
+  ResolvedCredential,
+} from '@deepseek-ai/dsh-credentials'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
@@ -101,6 +107,29 @@ class MemoryCredentials extends CredentialProvider {
   unset(ref: CredentialRef): Promise<void> {
     this.values.delete(ref)
     this.notifyUpdated(ref)
+    return Promise.resolve()
+  }
+
+  readRecord() {
+    return Promise.resolve(undefined)
+  }
+
+  describeRecord() {
+    return Promise.resolve({ configured: false, writable: true })
+  }
+
+  listRecords() {
+    return Promise.resolve([])
+  }
+
+  async modifyRecord(
+    _key: CredentialKey,
+    mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>,
+  ) {
+    return mutate(undefined)
+  }
+
+  deleteRecord() {
     return Promise.resolve()
   }
 }

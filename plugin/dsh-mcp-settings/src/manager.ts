@@ -210,7 +210,7 @@ export class McpManagerService extends Service {
 
     // Projected credentials are resolved at process/connect time. Restart only
     // clients that reference the changed value so rotations take effect.
-    ctx.on('credentials/updated', (ref) => {
+    ctx.on('credentials/reference-updated', (ref) => {
       for (const entry of this.configured) {
         const usesRef = entry.transport === 'stdio'
           ? Object.values(entry.envCredentialRefs ?? {}).includes(ref)
