@@ -7,7 +7,7 @@ on:
 
 jobs:
   plugin:
-    name: Bridge plugin (typecheck + tests + build)
+    name: Desktop-owned plugins (typecheck + tests + build)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -44,6 +44,7 @@ jobs:
             harness/pnpm-lock.yaml
             plugin/dsh-desktop-bridge/pnpm-lock.yaml
             plugin/dsh-compaction-hierarchical/pnpm-lock.yaml
+            plugin/dsh-web-search-toggle/pnpm-lock.yaml
       - name: Install harness
         working-directory: harness
         run: pnpm install --frozen-lockfile
@@ -60,6 +61,13 @@ jobs:
           pnpm run build
       - name: Hierarchical compaction checks
         working-directory: plugin/dsh-compaction-hierarchical
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm run test
+          pnpm run build
+      - name: Web Search toggle checks
+        working-directory: plugin/dsh-web-search-toggle
         run: |
           pnpm install --frozen-lockfile
           pnpm run typecheck
@@ -105,7 +113,8 @@ jobs:
             harness/pnpm-lock.yaml
             plugin/dsh-desktop-bridge/pnpm-lock.yaml
             plugin/dsh-compaction-hierarchical/pnpm-lock.yaml
-      # desktop:prepare checks both bundled plugins before assembling the
+            plugin/dsh-web-search-toggle/pnpm-lock.yaml
+      # desktop:prepare checks every Desktop-owned plugin before assembling the
       # runtime, and the bridge's dsh anchor points here — the tree must carry
       # node_modules and built lib/types or every @deepseek-ai/* import fails
       # to resolve (the run red at 04:06 skipped these two steps).
@@ -120,6 +129,7 @@ jobs:
           pnpm --dir plugin/dsh-desktop-bridge install --no-frozen-lockfile
           DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
+          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
       - name: Prepare bundle resources
         run: pnpm run desktop:prepare
       - name: cargo check
@@ -140,6 +150,7 @@ jobs:
           : > src-tauri/resources/runtime.tar.gz
           : > src-tauri/resources/bridge.tar.gz
           : > src-tauri/resources/compaction-hierarchical.tar.gz
+          : > src-tauri/resources/web-search-toggle.tar.gz
           echo '{}' > src-tauri/resources/runtime-revision.json
       - name: cargo test
         working-directory: src-tauri

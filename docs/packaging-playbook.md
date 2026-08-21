@@ -19,9 +19,9 @@ pnpm desktop:build
 
 `tauri.conf.json` 的 `beforeBuildCommand` 会先跑 `pnpm run desktop:prepare`（`scripts/prepare-desktop-bundle.mjs`）：
 
-1. 构建桌面自有插件：bridge 跑 typecheck + 单测 + tsdown，hierarchical compaction 跑 typecheck + 22 个单测 + tsdown；
+1. 构建桌面自有插件：bridge、hierarchical compaction 与 Web Search toggle 0.1.3 分别跑 typecheck + 单测 + build；
 2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）；
-3. 打 `src-tauri/resources/runtime.tar.gz`（`dsh/` + `tools/`，SHA 键控缓存）、`bridge.tar.gz` 与 `compaction-hierarchical.tar.gz`，把三个内容哈希写入 `runtime-revision.json` 副本；
+3. 打 `src-tauri/resources/runtime.tar.gz`（`dsh/` + `tools/`，SHA 键控缓存）、`bridge.tar.gz`、`compaction-hierarchical.tar.gz` 与 `web-search-toggle.tar.gz`，把四个内容哈希及 Web Search 插件版本写入 `runtime-revision.json` 副本；
 4. cargo release 编译 → tauri-bundler 出平台包：macOS `.app` + `.dmg`（无签名证书时为 ad-hoc 签名）；Windows NSIS `*-setup.exe`（currentUser）。
 
 产物：
@@ -44,7 +44,7 @@ Finder 是否真正采用这些设置取决于卷根的 `.DS_Store`，单有 `.b
 
 ## 2. 包结构与首启解压（原理）
 
-runtime 与两个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
+runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
 
 首次启动时壳把资源原子解压到 home：
 
@@ -54,13 +54,15 @@ runtime 与两个桌面自有插件以 **tar.gz 资源**进包（不是散目录
   bridge/{package.json,lib,cordis.patch.yml}  ← bridge.tar.gz 解压
   plugins/dsh-compaction-hierarchical/{package.json,lib,cordis.patch.yml,preset-snippet.yml,README.md}
                                       ← compaction-hierarchical.tar.gz 解压
+  plugins/dsh-web-search-toggle/{package.json,lib,cordis.patch.yml,README.md}
+                                      ← web-search-toggle.tar.gz 解压
 ```
 
 解压是「临时目录 + sentinel 校验 + rename 原子晋升」——半截解压不会被当作完整 runtime。缓存是**内容寻址**的：`.ok` 标记存 tarball 的 sha256（哈希写进 `runtime-revision.json`），同 revision 但内容变了（组装变更、任一插件重建）只会自动重解压对应目录；哈希命中秒过。
 
-两个插件 archive 都刻意不带 `node_modules`。壳在 `plugin add` 之后补 runtime-owned peer 链接：bridge 链 `@deepseek-ai/cordis`；hierarchical compaction 链 package.json 声明的六个 Harness peers。目标优先取 runtime 的 hoisted 包，回退到排序后的 `.pnpm` 实例，并 canonicalize 到 loader 同一 real path；这样既解决 Node ESM peer 解析，又避免 Cordis/Service 注册表因模块副本分裂。链接指向旧 revision 或悬空时会自愈重指；真实 dev 依赖目录不动，且 compaction 只在 shell-owned `.ok` 目录上受管。
+三个插件 archive 都刻意不带 `node_modules`。壳在 `plugin add` 之后补 runtime-owned peer 链接：bridge 链 `@deepseek-ai/cordis`；hierarchical compaction 链 package.json 声明的六个 Harness peers；Web Search toggle 链 Host/Client 使用的 Cordis、settings、credentials、Typert、tools、system-prompt、locale/runtime/settings/slots peers。目标优先取 runtime 的 hoisted 包，回退到排序后的 `.pnpm` 实例，并 canonicalize 到 loader 同一 real path；这样既解决 Node ESM peer 解析，又避免 Cordis/Service/Typert 注册表因模块副本分裂。链接指向旧 revision 或悬空时会自愈重指；真实 dev 依赖目录不动，且 compaction/Web Search toggle 只在 shell-owned `.ok` 目录上受管。
 
-sidecar runtime 解析顺序（`find_runtime`）：`$DSH_DESKTOP_RUNTIME` → 包内资源解压树（release）→ 仓库 `runtime/build/<sha>`（dev）→ DSH 源码 checkout（dev 兜底）。桌面插件分别由 `find_bridge` 与 `find_compaction_plugin` 解析 env override → release resource → dev tree。
+sidecar runtime 解析顺序（`find_runtime`）：`$DSH_DESKTOP_RUNTIME` → 仓库 `runtime/build/<sha>`（dev 主路径）→ 包内资源解压树（仅 release）→ DSH 源码 checkout（dev 兜底）。桌面插件分别由 `find_bridge`、`find_compaction_plugin` 与 `find_web_search_toggle_plugin` 解析 env override → release resource → dev tree。
 
 ## 3. 体积参考（aarch64，runtime 734f65…/desktop v0.1.1）
 
@@ -131,11 +133,13 @@ xcrun notarytool submit src-tauri/target/release/bundle/dmg/dsh-desktop_<ver>_aa
 
 分发通道推荐：curl 直链（最优）> 自建 brew tap > 浏览器直下（已公证，弹窗点「打开」即可）。
 
-## 6. 升级 runtime / 桥版本
+## 6. 升级 runtime / Desktop-owned 插件版本
 
-1. fork 侧打标签：`git tag v<基线>+zw.<n> <sha> && git push origin <tag>`（例 `v0.1.0-rc.7+zw.1`）
-2. 本仓库更新 `runtime/revision.json`（repo/ref/sha）
-3. `pnpm desktop:build`——prepare 检测到新 sha 自动重新组装、重新打 tar；壳按 sha 换解压目录，旧 `~/.dsh-desktop/runtime/<旧sha>` 不再被引用（可手动清理，壳不自动删）
+1. runtime 升级时，fork 侧打标签：`git tag v<基线>+zw.<n> <sha> && git push origin <tag>`，再更新本仓 `runtime/revision.json`（repo/ref/sha）。
+2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 Tauri resources、壳解压/安装链、runtime peer 链接与文档。
+3. 提升 Desktop 版本并执行 `pnpm desktop:build`。prepare 会重新生成相应 tarball 与内容哈希；壳按哈希换解压目录，旧缓存不再被引用。
+
+插件的独立 GitHub Release 不会替换已安装 Desktop 包内的资源，也不会更新用户 Web Profile。只要 Desktop-owned 插件版本变化，就必须发布新的 Desktop；Web Search toggle 0.1.3 首次由 Desktop `0.2.0-rc.14` 携带。
 
 ## 7. 已知边界
 

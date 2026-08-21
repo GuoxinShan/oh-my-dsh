@@ -32,4 +32,4 @@
 
 ## 分发注意
 
-本插件**不在**壳的 desktop-owned 分发清单（bridge + compaction）里：终端/浏览器由本仓 link: 安装；正式桌面安装包要带上它，需按 AGENTS.md「发版」节的纪律同步 prepare-desktop-bundle、Tauri resources、壳安装链并发新 desktop 版本——留待需要时做（当前用户两处都是本机 link:）。
+本插件**不在**壳的 desktop-owned 分发清单（bridge + compaction + Web Search toggle）里：终端/浏览器由本仓 link: 安装；正式桌面安装包要带上它，需按 AGENTS.md「发版」节的纪律同步 prepare-desktop-bundle、Tauri resources、壳安装链并发新 desktop 版本——留待需要时做（当前用户两处都是本机 link:）。

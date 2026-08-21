@@ -17,7 +17,8 @@
  *   src-tauri/resources/runtime.tar.gz.sha      (cache marker: revision sha)
  *   src-tauri/resources/bridge.tar.gz           (package.json + lib/ + patch)
  *   src-tauri/resources/compaction-hierarchical.tar.gz (host plugin package)
- *   src-tauri/resources/runtime-revision.json   (runtime + plugin hashes)
+ *   src-tauri/resources/web-search-toggle.tar.gz (host + client plugin package)
+ *   src-tauri/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
  * `src-tauri/resources/` is gitignored — regenerated per build via
  * `pnpm desktop:prepare` (also wired as tauri beforeBuildCommand).
@@ -34,13 +35,19 @@ const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.jso
 const runtimeDir = resolve(repoRoot, 'runtime/build', revision.sha)
 const bridgeDir = resolve(repoRoot, 'plugin/dsh-desktop-bridge')
 const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
+const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
 const resourcesDir = resolve(repoRoot, 'src-tauri/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
 const runtimeShaMarker = resolve(resourcesDir, 'runtime.tar.gz.sha')
 const bridgeTar = resolve(resourcesDir, 'bridge.tar.gz')
 const compactionTar = resolve(resourcesDir, 'compaction-hierarchical.tar.gz')
+const webSearchToggleTar = resolve(resourcesDir, 'web-search-toggle.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
+const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
+if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.3') {
+  throw new Error(`desktop requires dsh-web-search-toggle 0.1.3, found ${webSearchTogglePackage.name}@${webSearchTogglePackage.version}`)
+}
 
 function run(cmd, args, opts = {}) {
   const shell = opts.shell ?? (process.platform === 'win32' && /\.cmd$/i.test(String(cmd)))
@@ -78,8 +85,10 @@ function sha256(path) {
 // 1. Desktop-owned plugins: verify and build the exact packages bundled below.
 console.log('prepare-desktop-bundle: building desktop plugins...')
 run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-for (const script of ['typecheck', 'test', 'build']) {
-  run(pnpm, ['run', script], { cwd: compactionDir })
+for (const pluginDir of [compactionDir, webSearchToggleDir]) {
+  for (const script of ['typecheck', 'test', 'build']) {
+    run(pnpm, ['run', script], { cwd: pluginDir })
+  }
 }
 
 // 2. Runtime tree (SHA-keyed cache; seconds when warm).
@@ -168,6 +177,13 @@ tarCreate(compactionTar, compactionDir, [
   'lib',
 ])
 console.log(`prepare-desktop-bundle: compaction-hierarchical.tar.gz ${mb(compactionTar)} MB`)
+tarCreate(webSearchToggleTar, webSearchToggleDir, [
+  'package.json',
+  'cordis.patch.yml',
+  'README.md',
+  'lib',
+])
+console.log(`prepare-desktop-bundle: web-search-toggle.tar.gz ${mb(webSearchToggleTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
 // plus content hashes of every tarball. Each extraction .ok marker stores its
@@ -177,6 +193,8 @@ const manifest = {
   runtimeTarball: await sha256(runtimeTar),
   bridgeTarball: await sha256(bridgeTar),
   compactionHierarchicalTarball: await sha256(compactionTar),
+  webSearchToggleVersion: webSearchTogglePackage.version,
+  webSearchToggleTarball: await sha256(webSearchToggleTar),
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)

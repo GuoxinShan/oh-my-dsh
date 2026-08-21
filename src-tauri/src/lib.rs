@@ -28,6 +28,7 @@ mod win;
 
 const BRIDGE_PACKAGE: &str = "dsh-desktop-bridge";
 const COMPACTION_PACKAGE: &str = "dsh-compaction-hierarchical";
+const WEB_SEARCH_TOGGLE_PACKAGE: &str = "dsh-web-search-toggle";
 const MISSING_RESTORE_SOURCE: &str = "[missing-web-profile]";
 const COMPACTION_RUNTIME_PEERS: &[&str] = &[
     "@deepseek-ai/cordis",
@@ -36,6 +37,20 @@ const COMPACTION_RUNTIME_PEERS: &[&str] = &[
     "@deepseek-ai/dsh-llm",
     "@deepseek-ai/dsh-token-meter",
     "@deepseek-ai/schemastery",
+];
+// React is a browser platform module; only Harness peers need physical identity links.
+const WEB_SEARCH_TOGGLE_RUNTIME_PEERS: &[&str] = &[
+    "@deepseek-ai/cordis",
+    "@deepseek-ai/dsh-client-locale",
+    "@deepseek-ai/dsh-client-runtime",
+    "@deepseek-ai/dsh-client-ui-settings",
+    "@deepseek-ai/dsh-client-ui-slots",
+    "@deepseek-ai/dsh-credentials",
+    "@deepseek-ai/dsh-settings",
+    "@deepseek-ai/dsh-system-prompt",
+    "@deepseek-ai/dsh-tools",
+    "@deepseek-ai/dsh-typert-protocol",
+    "@deepseek-ai/dsh-typert-registry",
 ];
 
 /// Ready-probe cadence and budget (tsx cold start is slow).
@@ -260,6 +275,7 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<BootOutcome, String> {
     let runtime = find_runtime(app)?;
     let bridge = find_bridge(app)?;
     let compaction = find_compaction_plugin(app)?;
+    let web_search_toggle = find_web_search_toggle_plugin(app)?;
 
     // Reap sidecars orphaned by a previous shell before adding our own:
     // a `tauri dev` watcher restart SIGKILLs the app outright (see the
@@ -279,6 +295,7 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<BootOutcome, String> {
     let plugins = [
         (bridge.as_path(), BRIDGE_PACKAGE),
         (compaction.as_path(), COMPACTION_PACKAGE),
+        (web_search_toggle.as_path(), WEB_SEARCH_TOGGLE_PACKAGE),
     ];
     let outcome = install_with_profile_repair(
         &runtime,
@@ -296,6 +313,11 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<BootOutcome, String> {
     // packs managed links into the profile store.
     ensure_bridge_cordis_link(&bridge, &runtime);
     ensure_bundled_plugin_runtime_links(&compaction, &runtime, COMPACTION_RUNTIME_PEERS)?;
+    ensure_bundled_plugin_runtime_links(
+        &web_search_toggle,
+        &runtime,
+        WEB_SEARCH_TOGGLE_RUNTIME_PEERS,
+    )?;
 
     let port = free_port()?;
     let url = format!("http://127.0.0.1:{port}");
@@ -389,12 +411,13 @@ fn prepare_profile_adoption(
             "继续"
         };
         let message = format!(
-            "检测到现有 DSH 数据目录：{}\n\n其中有 {} 个 Web Profile 插件、{} 个 Agent 预设。Desktop 与终端 DSH 将共享该目录。\n\n继续后只会更新 Web Profile，添加或刷新 {} 和 {}。现有会话、凭据、设置、Agent 预设、其他 Profile 与其他插件都会保留。{}",
+            "检测到现有 DSH 数据目录：{}\n\n其中有 {} 个 Web Profile 插件、{} 个 Agent 预设。Desktop 与终端 DSH 将共享该目录。\n\n继续后只会更新 Web Profile，添加或刷新 {}、{} 和 {}。现有会话、凭据、设置、Agent 预设、其他 Profile 与其他插件都会保留。{}",
             summary.canonical_home.display(),
             summary.plugins.len(),
             summary.agent_preset_count,
             BRIDGE_PACKAGE,
             COMPACTION_PACKAGE,
+            WEB_SEARCH_TOGGLE_PACKAGE,
             backup_note,
         );
         match native_dialog::choose(&native_dialog::ChoiceSpec {
@@ -445,7 +468,7 @@ fn prepare_profile_adoption(
                 native_dialog::alert(
                     "Desktop 将修改的范围",
                     &format!(
-                        "DSH_HOME：{}\nWeb Profile：{}/profiles/web\n\n现有插件：\n- {}\n\nDesktop 只更新这个 Web Profile 的 package manifest、lockfile 与 node_modules，并新增或刷新两个 desktop-owned 包。\n\n不会修改 sessions、credentials、settings、.agent-presets、home cordis.patch.yml 或其他 profiles。",
+                        "DSH_HOME：{}\nWeb Profile：{}/profiles/web\n\n现有插件：\n- {}\n\nDesktop 只更新这个 Web Profile 的 package manifest、lockfile 与 node_modules，并新增或刷新三个 desktop-owned 包。\n\n不会修改 sessions、credentials、settings、.agent-presets、home cordis.patch.yml 或其他 profiles。",
                         summary.canonical_home.display(),
                         summary.canonical_home.display(),
                         plugins,
@@ -1190,6 +1213,65 @@ fn find_compaction_plugin(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
     Err(format!(
         "hierarchical compaction package not found at {} (set DSH_DESKTOP_COMPACTION_PLUGIN)",
+        dev.display()
+    ))
+}
+
+/// The Web Search toggle package: an explicit override, the release resource
+/// extracted under the shell-private plugin root, or the dev tree.
+fn find_web_search_toggle_plugin(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(from_env) = std::env::var("DSH_DESKTOP_WEB_SEARCH_TOGGLE_PLUGIN") {
+        let path = PathBuf::from(from_env);
+        if path.join("package.json").is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "DSH_DESKTOP_WEB_SEARCH_TOGGLE_PLUGIN={} has no package.json",
+            path.display()
+        ));
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        let tar = resources.join("resources/web-search-toggle.tar.gz");
+        if tar.is_file() {
+            let dir = shell_root()?
+                .join("plugins")
+                .join(WEB_SEARCH_TOGGLE_PACKAGE);
+            let hash = fs::read_to_string(resources.join("resources/runtime-revision.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|value| {
+                    value
+                        .get("webSearchToggleTarball")
+                        .and_then(|item| item.as_str())
+                        .map(str::to_string)
+                });
+            let fresh = hash
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    dir.join(".ok").is_file()
+                        && fs::read_to_string(dir.join(".ok"))
+                            .map(|text| text.trim() == value)
+                            .unwrap_or(false)
+                })
+                .unwrap_or_else(|| dir.join("package.json").is_file());
+            if !fresh {
+                extract_bundle_tar(&tar, &dir, "package.json", hash.as_deref().unwrap_or(""))?;
+                println!(
+                    "dsh-desktop: extracted bundled {} to {}",
+                    WEB_SEARCH_TOGGLE_PACKAGE,
+                    dir.display()
+                );
+            }
+            return Ok(dir);
+        }
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin/dsh-web-search-toggle");
+    if dev.join("package.json").is_file() {
+        return Ok(dev);
+    }
+    Err(format!(
+        "Web Search toggle package not found at {} (set DSH_DESKTOP_WEB_SEARCH_TOGGLE_PLUGIN)",
         dev.display()
     ))
 }
@@ -3111,6 +3193,9 @@ mod tests {
         let runtime_cwd = root.join("runtime/dsh");
         let peer = runtime_cwd.join("node_modules/@deepseek-ai/dsh-llm");
         fs::create_dir_all(&peer).unwrap();
+        for package in WEB_SEARCH_TOGGLE_RUNTIME_PEERS {
+            fs::create_dir_all(runtime_cwd.join("node_modules").join(package)).unwrap();
+        }
         let isolated = runtime_cwd.join(
             "node_modules/.pnpm/@deepseek-ai+dsh-agent@0.1.0/node_modules/@deepseek-ai/dsh-agent",
         );
@@ -3119,7 +3204,7 @@ mod tests {
             node: PathBuf::from("node"),
             args_prefix: Vec::new(),
             cli: PathBuf::from("dsh"),
-            cwd: runtime_cwd,
+            cwd: runtime_cwd.clone(),
             path_prepend: Vec::new(),
         };
         assert_eq!(
@@ -3135,12 +3220,30 @@ mod tests {
             fs::canonicalize(plugin.join("node_modules/@deepseek-ai/dsh-llm")).unwrap(),
             fs::canonicalize(peer).unwrap()
         );
+        ensure_bundled_plugin_runtime_links(
+            &plugin,
+            &runtime,
+            WEB_SEARCH_TOGGLE_RUNTIME_PEERS,
+        )
+        .unwrap();
+        for package in WEB_SEARCH_TOGGLE_RUNTIME_PEERS {
+            assert_eq!(
+                fs::canonicalize(plugin.join("node_modules").join(package)).unwrap(),
+                fs::canonicalize(runtime_cwd.join("node_modules").join(package)).unwrap()
+            );
+        }
 
         let dsh_home = root.join("home");
-        let profile_link = dsh_home.join("profiles/web/node_modules").join(COMPACTION_PACKAGE);
+        let profile_link = dsh_home
+            .join("profiles/web/node_modules")
+            .join(WEB_SEARCH_TOGGLE_PACKAGE);
         fs::create_dir_all(profile_link.parent().unwrap()).unwrap();
         link_dir(&plugin, &profile_link).unwrap();
-        assert!(plugin_already_in_profile(&plugin, COMPACTION_PACKAGE, &dsh_home));
+        assert!(plugin_already_in_profile(
+            &plugin,
+            WEB_SEARCH_TOGGLE_PACKAGE,
+            &dsh_home
+        ));
         fs::remove_dir_all(root).unwrap();
     }
 

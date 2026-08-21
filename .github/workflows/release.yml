@@ -107,11 +107,12 @@ jobs:
           pnpm install
           # Prime the fork clone (prepare-runtime is idempotent; cache hits
           # make this seconds), then point the bridge's dsh symlink at it and
-          # install both desktop-owned plugins' devDeps before bundle checks.
+          # install every desktop-owned plugin's devDeps before bundle checks.
           node scripts/prepare-runtime.mjs
           DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-desktop-bridge install
           pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
+          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
 
       - name: Build signed + notarized bundle
         env:
@@ -238,6 +239,7 @@ jobs:
           DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-desktop-bridge install
           pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
+          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
 
       # NOTE: the certificate presence check lives INSIDE the script — the
       # `secrets` context is not allowed in a step-level `if:` (GitHub rejects

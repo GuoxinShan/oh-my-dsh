@@ -28,7 +28,7 @@
 | [`dsh-mcp-settings`](plugin/dsh-mcp-settings) | Web 设置里的 MCP 服务器管理页：Form/JSON 编辑、启停、连接状态与工具计数 |
 | [`dsh-provider-balance`](plugin/dsh-provider-balance) | 供应商配额可视化：输入框旁胶囊 + 模型设置页徽标，实时显示各供应商剩余额度 |
 | [`dsh-reasoning-efforts`](plugin/dsh-reasoning-efforts) | 为手工声明的 OpenAI 兼容路由模型自动补 `reasoningEfforts`，让模型选择器出现推理等级面板 |
-| [`dsh-web-search-toggle`](plugin/dsh-web-search-toggle) | 通用设置页的 Web Search 开关：凭据状态提示 + 一键启停原生搜索工具 |
+| [`dsh-web-search-toggle`](plugin/dsh-web-search-toggle) | 通用设置页的 Web Search 开关：凭据状态提示 + 一键启停原生搜索工具；0.1.3 起随 Desktop 0.2.0-rc.14 分发 |
 | [`dsh-branding`](plugin/dsh-branding) | 品牌字标：侧栏字标替换为 "Oh My DSH" + 浏览器标题同步重写，终端/浏览器/桌面全形态生效 |
 
 ## 下载

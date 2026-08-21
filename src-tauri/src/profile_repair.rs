@@ -1462,33 +1462,55 @@ mod tests {
     }
 
     #[test]
-    fn validates_managed_manifest_and_link_targets() {
-        let home = scratch_home("managed-target");
-        let source = home.parent().unwrap().join("desktop-owned-source");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(
-            source.join("package.json"),
-            "{\"name\":\"desktop-owned\"}\n",
-        )
-        .unwrap();
-        let targets = [("desktop-owned", source.as_path())];
+    fn validates_all_desktop_owned_manifest_and_link_targets() {
+        let home = scratch_home("managed-targets");
+        let source_root = home.with_extension("desktop-owned-sources");
+        let packages = [
+            "dsh-desktop-bridge",
+            "dsh-compaction-hierarchical",
+            "dsh-web-search-toggle",
+        ];
+        let sources: Vec<_> = packages
+            .iter()
+            .map(|package| {
+                let source = source_root.join(package);
+                fs::create_dir_all(&source).unwrap();
+                fs::write(
+                    source.join("package.json"),
+                    format!("{{\"name\":\"{package}\"}}\n"),
+                )
+                .unwrap();
+                source
+            })
+            .collect();
+        let targets: Vec<_> = packages
+            .iter()
+            .zip(sources.iter())
+            .map(|(package, source)| (*package, source.as_path()))
+            .collect();
         mutate_web_profile(&home, &targets, |shadow_home, _| {
-            complete_shadow(shadow_home, "managed-target");
+            complete_shadow(shadow_home, "managed-targets");
             let profile = shadow_home.join("profiles/web");
             fs::write(
                 profile.join("package.json"),
-                "{\"name\":\"managed-target\",\"dependencies\":{\"desktop-owned\":\"link:fixture\"}}\n",
+                "{\"name\":\"managed-targets\",\"dependencies\":{\"dsh-desktop-bridge\":\"link:bridge\",\"dsh-compaction-hierarchical\":\"link:compaction\",\"dsh-web-search-toggle\":\"link:web-search-toggle\"}}\n",
             )
-            .map_err(|error| format!("write managed target fixture: {error}"))?;
-            super::super::link_dir(&source, &profile.join("node_modules/desktop-owned"))
+            .map_err(|error| format!("write managed targets fixture: {error}"))?;
+            for (package, source) in packages.iter().zip(sources.iter()) {
+                super::super::link_dir(source, &profile.join("node_modules").join(package))?;
+            }
+            Ok(())
         })
         .unwrap();
 
-        assert_eq!(
-            fs::canonicalize(home.join("profiles/web/node_modules/desktop-owned")).unwrap(),
-            fs::canonicalize(&source).unwrap()
-        );
+        for (package, source) in packages.iter().zip(sources.iter()) {
+            assert_eq!(
+                fs::canonicalize(home.join("profiles/web/node_modules").join(package)).unwrap(),
+                fs::canonicalize(source).unwrap()
+            );
+        }
         cleanup(&home);
+        let _ = fs::remove_dir_all(source_root);
     }
 
     #[test]

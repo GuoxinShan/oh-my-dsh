@@ -6,7 +6,7 @@
 
 | 发什么 | tag | Release 产物 | latest 指针 |
 |---|---|---|---|
-| 桌面公证版 | `v<semver>`（如 `v0.2.0-rc.2`） | dmg + app.tar.gz + Windows NSIS setup.exe + .sig + latest.json（含 darwin-aarch64 与 windows-x86_64） | **独占**（`make_latest: true`） |
+| 桌面公证版 | `v<semver>`（如 `v0.2.0-rc.14`） | dmg + app.tar.gz + Windows NSIS setup.exe + .sig + latest.json（含 darwin-aarch64 与 windows-x86_64） | **独占**（`make_latest: true`） |
 | 插件 | `<包名>-v<semver>`（如 `dsh-mcp-settings-v0.2.3`） | git archive 的插件源码 tarball + 安装说明 | **永不**（`make_latest: false`） |
 | runtime fork | `v<基线>+zw.<补丁>`（如 `v0.1.0-rc.7+zw.1`，在 fork 仓库） | 无 Release，仅 git tag 供 revision.json 钉 | — |
 
@@ -14,7 +14,7 @@
 
 ⚠️ **latest 指针纪律**：桌面自动更新端点是 `releases/latest/download/latest.json`——插件 Release 抢走 latest 会让桌面自动更新即刻 404。流水线已内置 `make_latest: false`；若手动在网页上发插件 Release，务必不勾 "Set as the latest release"。桌面版本号 = `tauri.conf.json` 与 `Cargo.toml` 两处同步；插件版本号 = 各包 `package.json`。runtime fork 标签用 `v<基线>+zw.<补丁>`（semver build metadata，行业标准的 fork 标识法）。
 
-**独立版本不等于独立交付面**：插件 tag 只发布可手动安装的插件 archive，不会更新已安装 desktop。若该插件属于 AGENTS.md 声明的 desktop-owned 资源集合，首次发布或版本升级必须同一轮更新 prepare/resources/壳安装链、提升 desktop 版本并再推 `v<semver>`；只有 desktop Release 才会把它交付给桌面用户。
+**独立版本不等于独立交付面**：插件 tag 只发布可手动安装的插件 archive，不会更新已安装 desktop。若该插件属于 AGENTS.md 声明的 desktop-owned 资源集合，首次发布或版本升级必须同一轮更新 prepare/resources/壳安装链、提升 desktop 版本并再推 `v<semver>`；只有 desktop Release 才会把它交付给桌面用户。具体到本次交付，`dsh-web-search-toggle` 0.1.3 必须由 Desktop `v0.2.0-rc.14` 携带，不能以插件 `dsh-web-search-toggle-v0.1.3` Release 替代。
 
 ## 0.5 一次性配置：Secrets（Settings → Secrets and variables → Actions）
 
@@ -41,7 +41,7 @@
 ```sh
 # 1. 版本号两处同步：src-tauri/tauri.conf.json 的 version 与 src-tauri/Cargo.toml 的 version
 # 2. （可选）runtime 升级：fork 打 v<基线>+zw.<补丁> 标签 + 更新 runtime/revision.json
-git tag v0.2.0-rc.2 && git push origin v0.2.0-rc.2
+git tag v0.2.0-rc.14 && git push origin v0.2.0-rc.14
 ```
 
 推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → 构建 → 校验 DMG Finder 布局 → Developer ID 签名 → Apple 公证 → DMG 单独公证）与 `desktop-windows`（同套 prepare，出 NSIS `*-setup.exe`）并行，`desktop-publish` 合并两份 updater fragment 为 `latest.json`（`darwin-aarch64` + `windows-x86_64`）后上传 Release（自动生成 Release Notes；dmg、app.tar.gz(+ .sig)、setup.exe(+ .sig)、latest.json；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版，避免 latest.json 缺平台把该平台的自动更新打穿。macOS job 必须保留 `TAURI_BUNDLER_DMG_IGNORE_CI=true`：否则 Tauri 因 `CI=true` 跳过 Finder AppleScript，发布 DMG 会有背景文件却没有启用背景/布局的 `.DS_Store`。
