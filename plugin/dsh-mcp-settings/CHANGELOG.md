@@ -7,7 +7,7 @@ All notable changes to this project are documented in this file.
 ### Fixed
 
 - Kept background connection polling and post-save refreshes from replacing the whole list with a loading state; only rows whose live inventory changed now update.
-- Serialized status responses and settings writes so a slow stale response cannot overwrite newer inventory, and an earlier save cannot announce success while a later save is still pending.
+- Ignored stale status responses, registered every optimistic write with SettingsScope immediately so its generation fence can suppress intermediate Host publications, and reserved save notices for the latest write.
 - Invalidated only the edited server's previous connection entry, preventing old connected/tool-count data from describing a pending configuration while preserving unaffected rows.
 
 ### Verification

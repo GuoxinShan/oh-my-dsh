@@ -199,7 +199,6 @@ export function McpServersTab(props: {
   const [query, setQuery] = useState('')
   const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null)
   const saveTimersRef = useRef<{ show: ReturnType<typeof setTimeout> | undefined, hide: ReturnType<typeof setTimeout> | undefined }>({ show: undefined, hide: undefined })
-  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const saveRevisionRef = useRef(0)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [inventory, setInventory] = useState<McpInventorySnapshot | null>(null)
@@ -286,10 +285,9 @@ export function McpServersTab(props: {
     // has no inventory entry until the Host reports its new connection, so it
     // renders as connecting without churning unrelated rows.
     if (awaitConnection) setConnectionPollsRemaining(0)
-    const request = saveQueueRef.current.then(async () => {
-      await scope.set('servers', next)
-    })
-    saveQueueRef.current = request.then(() => undefined, () => undefined)
+    // SettingsScope owns write serialization and suppresses stale Host
+    // publications, so every optimistic write must be registered immediately.
+    const request = scope.set('servers', next)
     void request.then(
       () => {
         if (saveRevisionRef.current !== revision) return

@@ -474,7 +474,7 @@ describe('McpServersTab', () => {
     expect(screen.queryByText(en.saved)).toBeNull()
   })
 
-  it('serializes overlapping writes and lets only the latest write own the notice', async () => {
+  it('registers overlapping writes immediately and lets only the latest write own the notice', async () => {
     vi.useFakeTimers()
     const first = deferred<void>()
     const second = deferred<void>()
@@ -486,7 +486,8 @@ describe('McpServersTab', () => {
     fireEvent.click(screen.getByLabelText(t('toggleServer', { name: 'alpha' })))
     fireEvent.click(screen.getAllByRole('button', { name: en.removeServer })[1]!)
     await act(async () => { await Promise.resolve() })
-    expect(set).toHaveBeenCalledTimes(1)
+    expect(set).toHaveBeenCalledTimes(2)
+    expect(set.mock.calls[0]?.[1]).not.toEqual(set.mock.calls[1]?.[1])
 
     await act(async () => { await vi.advanceTimersByTimeAsync(300) })
     expect(screen.getByText(en.saving)).toBeTruthy()
