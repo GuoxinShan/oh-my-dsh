@@ -76,7 +76,7 @@ Use Settings > MCP. The manager reads the same `mcp.servers` settings namespace 
 
 When `authorizationCredentialRef` is present, its resolved Bearer value is authoritative and replaces any case variant of an `Authorization` entry in `headers`. A `credentials/updated` event restarts only servers that use the changed reference, so rotations reach the next process or connection without editing MCP settings.
 
-The UI supports stdio and Streamable HTTP servers, Form and JSON editing, credential references, direct enable/disable, and live status/tool counts. An enabled server is queried immediately after save and every two seconds until connected or 60 seconds elapse.
+The UI supports stdio and Streamable HTTP servers, Form and JSON editing, credential references, direct enable/disable, and live status/tool counts. An enabled server is queried immediately after save and every two seconds until connected or 60 seconds elapse. Background polls update only rows whose live state changed; manual refresh keeps the full loading treatment.
 
 ## Remove
 

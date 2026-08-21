@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.4] - 2026-08-21
+
+### Fixed
+
+- Kept background connection polling and post-save refreshes from replacing the whole list with a loading state; only rows whose live inventory changed now update.
+- Serialized status responses and settings writes so a slow stale response cannot overwrite newer inventory, and an earlier save cannot announce success while a later save is still pending.
+- Invalidated only the edited server's previous connection entry, preventing old connected/tool-count data from describing a pending configuration while preserving unaffected rows.
+
+### Verification
+
+- TypeScript project typecheck, production bundle, and 59 Vitest tests, including slow-poll/manual-refresh ordering and overlapping-write notice ownership.
+
 ## [0.2.3] - 2026-08-18
 
 ### Fixed

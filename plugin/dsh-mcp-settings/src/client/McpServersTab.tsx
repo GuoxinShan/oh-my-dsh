@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { McpInventorySnapshot, McpServerStatus } from '../inventory-types.ts'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import {
@@ -30,11 +30,15 @@ import {
 } from './drafts.ts'
 import css from './McpSettingsSection.module.css'
 
-type SaveState = 'idle' | 'saving' | 'saved' | 'failed'
+type SaveNotice = 'saving' | 'saved' | 'failed'
 type EditorMode = 'form' | 'json'
 
 const CONNECTION_POLL_INTERVAL_MS = 2_000
 const CONNECTION_POLL_LIMIT = 30
+// Fast saves skip the "saving" label entirely — flashing it for a sub-300ms
+// roundtrip reads as a glitch, not feedback; "saved" holds briefly then clears.
+const SAVE_NOTICE_DELAY_MS = 300
+const SAVE_NOTICE_HOLD_MS = 2_000
 
 interface EditorState {
   readonly index: number | null
@@ -193,28 +197,43 @@ export function McpServersTab(props: {
   const [servers, setServers] = useState<McpServerEntry[]>([])
   const [hydratedFrom, setHydratedFrom] = useState<object | undefined>()
   const [query, setQuery] = useState('')
-  const [save, setSave] = useState<SaveState>('idle')
+  const [saveNotice, setSaveNotice] = useState<SaveNotice | null>(null)
+  const saveTimersRef = useRef<{ show: ReturnType<typeof setTimeout> | undefined, hide: ReturnType<typeof setTimeout> | undefined }>({ show: undefined, hide: undefined })
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const saveRevisionRef = useRef(0)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [inventory, setInventory] = useState<McpInventorySnapshot | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusFailed, setStatusFailed] = useState(false)
+  const statusRequestRef = useRef(0)
   const [connectionPollsRemaining, setConnectionPollsRemaining] = useState(CONNECTION_POLL_LIMIT)
   const [transportMenuOpen, setTransportMenuOpen] = useState(false)
 
-  const refreshStatus = useCallback((): void => {
-    setStatusLoading(true)
-    setStatusFailed(false)
-    void listStatus().then(
+  // Silent fetches skip the loading flag: polls and post-save refreshes must
+  // not churn the whole list (spinner swaps, disabled refresh button) — only
+  // the rows whose live state actually changed should re-render.
+  const fetchStatus = useCallback((silent: boolean): Promise<void> => {
+    const request = ++statusRequestRef.current
+    if (!silent) {
+      setStatusLoading(true)
+      setStatusFailed(false)
+    }
+    return listStatus().then(
       (next) => {
+        if (statusRequestRef.current !== request) return
         setInventory(next)
+        setStatusFailed(false)
         setStatusLoading(false)
       },
       () => {
+        if (statusRequestRef.current !== request) return
         setStatusFailed(true)
         setStatusLoading(false)
       },
     )
   }, [listStatus])
+
+  const refreshStatus = useCallback((): void => { fetchStatus(false) }, [fetchStatus])
 
   useEffect(() => { refreshStatus() }, [refreshStatus])
 
@@ -231,29 +250,60 @@ export function McpServersTab(props: {
 
   useEffect(() => {
     if (!waitingForConnection || statusLoading || connectionPollsRemaining === 0) return
+    let active = true
     const timer = setTimeout(() => {
-      setConnectionPollsRemaining(remaining => remaining - 1)
-      refreshStatus()
+      void fetchStatus(true).finally(() => {
+        if (active) setConnectionPollsRemaining(remaining => remaining - 1)
+      })
     }, CONNECTION_POLL_INTERVAL_MS)
-    return () => { clearTimeout(timer) }
-  }, [connectionPollsRemaining, refreshStatus, statusLoading, waitingForConnection])
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [connectionPollsRemaining, fetchStatus, statusLoading, waitingForConnection])
+
+  useEffect(() => {
+    const timers = saveTimersRef.current
+    return () => {
+      clearTimeout(timers.show)
+      clearTimeout(timers.hide)
+    }
+  }, [])
 
   const persist = (next: McpServerEntry[], awaitConnection = false): void => {
     setServers(next)
-    setSave('saving')
-    if (awaitConnection) {
-      setInventory(null)
-      setConnectionPollsRemaining(0)
-    }
-    void scope.set('servers', next).then(
+    const unchangedNames = new Set(next.filter(entry => servers.includes(entry)).map(entry => entry.serverName))
+    setInventory(current => current === null
+      ? null
+      : { ...current, servers: current.servers.filter(entry => unchangedNames.has(entry.serverName)) })
+    const revision = ++saveRevisionRef.current
+    const timers = saveTimersRef.current
+    clearTimeout(timers.show)
+    clearTimeout(timers.hide)
+    setSaveNotice(null)
+    timers.show = setTimeout(() => { setSaveNotice('saving') }, SAVE_NOTICE_DELAY_MS)
+    // Preserve live state only for unchanged rows. The edited or enabled row
+    // has no inventory entry until the Host reports its new connection, so it
+    // renders as connecting without churning unrelated rows.
+    if (awaitConnection) setConnectionPollsRemaining(0)
+    const request = saveQueueRef.current.then(async () => {
+      await scope.set('servers', next)
+    })
+    saveQueueRef.current = request.then(() => undefined, () => undefined)
+    void request.then(
       () => {
-        setSave('saved')
+        if (saveRevisionRef.current !== revision) return
+        clearTimeout(timers.show)
+        setSaveNotice('saved')
+        timers.hide = setTimeout(() => { setSaveNotice(null) }, SAVE_NOTICE_HOLD_MS)
         if (awaitConnection) setConnectionPollsRemaining(CONNECTION_POLL_LIMIT)
-        refreshStatus()
+        void fetchStatus(true)
       },
       () => {
+        if (saveRevisionRef.current !== revision) return
+        clearTimeout(timers.show)
         setConnectionPollsRemaining(0)
-        setSave('failed')
+        setSaveNotice('failed')
       },
     )
   }
@@ -395,7 +445,7 @@ export function McpServersTab(props: {
         )}
         <div className={css.editorActions}>
           {editor.attempted && invalid ? <p className={css.validationSummary} role="alert">{t('fixValidation')}</p> : null}
-          <Button variant="primary" size="sm" disabled={save === 'saving'} onClick={submit}>{t('save')}</Button>
+          <Button variant="primary" size="sm" onClick={submit}>{t('save')}</Button>
           <Button variant="ghost" size="sm" onClick={() => { setEditor(null) }}>{t('cancel')}</Button>
         </div>
       </div>
@@ -459,7 +509,7 @@ export function McpServersTab(props: {
                 </div>
                 <div className={css.rowActions}>
                   <label className={css.switch}>
-                    <input type="checkbox" checked={server.enabled} disabled={save === 'saving'} aria-label={t('toggleServer', { name: server.serverName })} onChange={() => { persist(servers.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: !item.enabled } : item), !server.enabled) }} />
+                    <input type="checkbox" checked={server.enabled} aria-label={t('toggleServer', { name: server.serverName })} onChange={() => { persist(servers.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: !item.enabled } : item), !server.enabled) }} />
                     <span />
                   </label>
                   <Tooltip label={t('editServer')} side="top"><button type="button" className={css.iconButton} aria-label={t('editServer')} onClick={() => { openEditor(index) }}><IconEditOutline16 size={15} /></button></Tooltip>
@@ -471,9 +521,9 @@ export function McpServersTab(props: {
         </ul>
       ) : null}
       <div className={css.saveStatus} aria-live="polite">
-        {save === 'saving' ? t('saving') : null}
-        {save === 'saved' ? t('saved') : null}
-        {save === 'failed' ? <span role="alert">{t('saveFailed', { message: '' }).replace(': ', '')}</span> : null}
+        {saveNotice === 'saving' ? <span>{t('saving')}</span> : null}
+        {saveNotice === 'saved' ? <span>{t('saved')}</span> : null}
+        {saveNotice === 'failed' ? <span role="alert">{t('saveFailed', { message: '' }).replace(': ', '')}</span> : null}
       </div>
     </div>
   )

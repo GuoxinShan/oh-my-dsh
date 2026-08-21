@@ -76,7 +76,7 @@ DSH CLI 是权威安装路径；这些脚本不会直接修改 profile 文件。
 
 配置 `authorizationCredentialRef` 后，解析得到的 Bearer 值是权威来源，会替换 `headers` 中任意大小写形式的 `Authorization` 项。收到 `credentials/updated` 事件时，仅重启使用该引用的服务器，因此轮换凭据无需修改 MCP 设置即可作用于下一次进程启动或连接。
 
-UI 支持 stdio 与 Streamable HTTP、表单与 JSON 编辑、凭据引用、直接启停以及实时状态/工具数量。保存已启用服务器后立即查询一次，随后每两秒查询，直到连接成功或经过 60 秒。
+UI 支持 stdio 与 Streamable HTTP、表单与 JSON 编辑、凭据引用、直接启停以及实时状态/工具数量。保存已启用服务器后立即查询一次，随后每两秒查询，直到连接成功或经过 60 秒。后台轮询只更新实时状态发生变化的行；手动刷新仍保留完整加载反馈。
 
 ## 移除
 

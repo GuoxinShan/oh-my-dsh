@@ -324,6 +324,38 @@ describe('McpServersTab', () => {
     expect(status).toHaveBeenCalledTimes(2)
   })
 
+  it('waits for a silent poll and ignores its stale result after a manual refresh', async () => {
+    vi.useFakeTimers()
+    const connecting: McpInventorySnapshot = {
+      servers: [
+        { serverName: 'alpha', transport: 'stdio', enabled: true, connection: 'connecting', toolCount: 0 },
+        STATUS_SNAPSHOT.servers[1]!,
+      ],
+    }
+    const slowPoll = deferred<McpInventorySnapshot>()
+    const status = vi.fn()
+      .mockResolvedValueOnce(connecting)
+      .mockReturnValueOnce(slowPoll.promise)
+      .mockResolvedValue(STATUS_SNAPSHOT)
+    const { scope } = fakeScope({ servers: STORED })
+    render(<McpServersTab scope={scope} listStatus={status} t={t} />)
+    await act(async () => { await Promise.resolve() })
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(status).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000) })
+    expect(status).toHaveBeenCalledTimes(2)
+
+    fireEvent.click(screen.getByRole('button', { name: en.refresh }))
+    await act(async () => { await Promise.resolve() })
+    expect(status).toHaveBeenCalledTimes(3)
+    expect(screen.getByRole('status', { name: en.connectionConnected })).toBeTruthy()
+
+    await act(async () => { slowPoll.reject(new Error('stale offline')); await Promise.resolve() })
+    expect(screen.queryByText(en.statusLoadFailed)).toBeNull()
+    expect(screen.getByRole('status', { name: en.connectionConnected })).toBeTruthy()
+  })
+
   it('polls after enabling and stops when the server connects', async () => {
     vi.useFakeTimers()
     const connecting: McpInventorySnapshot = {
@@ -420,19 +452,53 @@ describe('McpServersTab', () => {
     expect(refs.getAttribute('aria-invalid')).toBe('true')
   })
 
-  it('shows the saving label while a write is pending', async () => {
+  it('shows the saving label only while a slow write is pending', async () => {
+    vi.useFakeTimers()
     const pending = deferred<void>()
     const { scope, set } = fakeScope({ servers: STORED })
     set.mockReturnValueOnce(pending.promise)
     render(<McpServersTab scope={scope} listStatus={listStatus} t={t} />)
-    await waitFor(() => { expect(screen.getAllByRole('button', { name: en.editServer })).toHaveLength(2) })
+    await act(async () => { await Promise.resolve() })
     fireEvent.click(screen.getAllByRole('button', { name: en.editServer })[0]!)
     fireEvent.click(screen.getByRole('button', { name: en.save }))
+    expect(screen.getByRole('status', { name: en.connectionConnecting })).toBeTruthy()
+    expect(screen.queryByText(t('toolCount', { count: '3' }))).toBeNull()
+    // The label holds back past the fast-save window instead of flashing.
+    expect(screen.queryByText(en.saving)).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
     expect(screen.getByText(en.saving)).toBeTruthy()
-    expect(screen.getByLabelText(t('toggleServer', { name: 'alpha' }))).toHaveProperty('disabled', true)
-    pending.resolve()
-    await waitFor(() => { expect(screen.getByText(en.saved)).toBeTruthy() })
-    expect(screen.getByLabelText(t('toggleServer', { name: 'alpha' }))).toHaveProperty('disabled', false)
+    await act(async () => { pending.resolve(); await Promise.resolve() })
+    expect(screen.getByText(en.saved)).toBeTruthy()
+    // The saved notice clears itself after the hold window.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(screen.queryByText(en.saved)).toBeNull()
+  })
+
+  it('serializes overlapping writes and lets only the latest write own the notice', async () => {
+    vi.useFakeTimers()
+    const first = deferred<void>()
+    const second = deferred<void>()
+    const { scope, set } = fakeScope({ servers: STORED })
+    set.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    render(<McpServersTab scope={scope} listStatus={listStatus} t={t} />)
+    await act(async () => { await Promise.resolve() })
+
+    fireEvent.click(screen.getByLabelText(t('toggleServer', { name: 'alpha' })))
+    fireEvent.click(screen.getAllByRole('button', { name: en.removeServer })[1]!)
+    await act(async () => { await Promise.resolve() })
+    expect(set).toHaveBeenCalledTimes(1)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(screen.getByText(en.saving)).toBeTruthy()
+    await act(async () => { first.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(set).toHaveBeenCalledTimes(2)
+    expect(screen.getByText(en.saving)).toBeTruthy()
+    expect(screen.queryByText(en.saved)).toBeNull()
+
+    await act(async () => { second.reject(new Error('latest failed')); await Promise.resolve() })
+    expect(screen.getByRole('alert').textContent).toContain(en.saveFailed.split(':')[0])
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(screen.getByRole('alert').textContent).toContain(en.saveFailed.split(':')[0])
   })
 
   it('supports cancel and back without writing', async () => {
