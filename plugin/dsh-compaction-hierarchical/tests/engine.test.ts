@@ -17,7 +17,7 @@ import type {
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import HierarchicalCompactionEngine, { aggregateUsage } from '../src/index.ts'
-import { SUMMARY_SECTIONS } from '../src/prompts.ts'
+import { mapInstruction, reduceInstruction, SUMMARY_SECTIONS } from '../src/prompts.ts'
 
 const PROVIDER = 'hierarchy-test'
 const MODEL = 'small-context'
@@ -226,20 +226,40 @@ test('replayTools forwards schemas to every map and reduce call', async () => {
 })
 
 test('instruction reserves price the widest multi-digit source coordinates', async () => {
+  const totalUnits = 12
   const { adapter, agent, engine } = fixture()
   const messages = Array.from(
-    { length: 12 },
+    { length: totalUnits },
     (_, index) => user(`${index}: ${'x'.repeat(1200)}`),
   )
   await engine.run(messages, agent)
-  const widest = adapter.calls
-    .map(call => instruction(call))
-    .map(text => /source units (\d+)-(\d+) of (\d+)/.exec(text))
-    .filter((match): match is RegExpExecArray => match !== null)
-    .map(match => `${match[1]}${match[2]}${match[3]}`.length)
+
   assert.ok(adapter.calls.length > 0)
-  assert.ok(widest.length === adapter.calls.length)
-  assert.ok(widest.every(digits => digits >= 2))
+  let sawDoubleDigitOrdinal = false
+  for (const call of adapter.calls) {
+    const text = instruction(call)
+    const range = /source units (\d+)-(\d+) of (\d+)/.exec(text)
+    if (range === null) {
+      assert.fail(`call instruction lacks a source range: ${text.slice(0, 80)}`)
+    }
+    const startText = range[1] ?? ''
+    const endText = range[2] ?? ''
+    const totalText = range[3] ?? ''
+    assert.equal(Number(totalText), totalUnits)
+    sawDoubleDigitOrdinal ||= Number(startText) >= 10 || Number(endText) >= 10
+
+    // The widest-coordinate instruction is a true upper bound for every
+    // actual call, which is exactly what the fixed-input reserve prices.
+    const reduceRound = /reduce round (\d+)/.exec(text)?.[1]
+    const widest = reduceRound === undefined
+      ? mapInstruction(totalUnits, totalUnits, totalUnits)
+      : reduceInstruction(Number(reduceRound), totalUnits, totalUnits, totalUnits)
+    assert.ok(
+      text.length <= widest.length,
+      `actual instruction (${text.length}) exceeds the widest-coordinate reserve (${widest.length})`,
+    )
+  }
+  assert.ok(sawDoubleDigitOrdinal, 'expected at least one span with a two-digit ordinal')
 })
 
 test('oversized input maps chunks, reduces them, and aggregates usage honestly', async () => {
