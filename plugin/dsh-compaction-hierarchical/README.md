@@ -80,6 +80,8 @@ dsh plugin --profile web add "$PWD"
 ## 已知限制
 
 - 单个不可拆分的普通消息、闭合工具单元或 partial checkpoint 若超过静态预算，或在自适应二分后仍被 Provider 判定超窗，插件会报告具体 source-unit 范围；工具结果应先由同组 pruner 缩减。
+- Web 端切换模型后，新路由要等第一条请求构建时才落入 durable header，所以切换后的第一个 pre-step 仍按旧模型的容量做压力判断；该请求若超窗，stock overflow 恢复会在 durable header 已更新的情况下走本插件的自适应分块。要让压缩在切换后的第一条请求之前主动触发，需要 harness 在 `agent/pre-step` 暴露 assembled selection（上游变更，不属于本插件范围）。
+- reduce 最终只剩两个 partial 且合并调用被 Provider 判定超窗时，插件按无进展立即失败（不做 singleton 重写再合并的试探）：singleton 重写没有可证明的尺寸下降保证，可能无限重复。遇到此边界应调低 `mapMaxTokens` 或提高 `chunkInputRatio` 后重试。
 - 多阶段进度尚未独立持久化；进程退出或中间调用失败后，下次压缩从 map 阶段重新开始。
 - 摘要 token 计量沿用 `ctx.tokenMeter` 的固定密度估算，不是 Provider 的精确 tokenizer。
 - `replayTools: false` 适用于不要求历史工具结果必须伴随 schema 的 Provider；遇到严格 Provider 时改为 `true`，并相应降低历史消息预算。
