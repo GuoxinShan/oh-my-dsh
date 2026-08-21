@@ -25,14 +25,16 @@ const RULES = [
 ].map(rule => `- ${rule}`).join('\n')
 
 /**
- * Build the instruction for one chronological source chunk.
- * @param index - one-based chunk index.
- * @param total - total source chunks in this map stage.
+ * Build the instruction for one chronological source span.
+ * Source-unit coordinates remain stable when a rejected span is bisected.
+ * @param start - inclusive one-based source-unit ordinal.
+ * @param end - inclusive one-based source-unit ordinal.
+ * @param total - total source units in the map stage.
  * @returns final user instruction for the auxiliary call.
  */
-export function mapInstruction(index: number, total: number): string {
+export function mapInstruction(start: number, end: number, total: number): string {
   return [
-    `Summarize chronological conversation chunk ${index} of ${total} for a later reducer.`,
+    `Summarize chronological conversation source units ${start}-${end} of ${total} for a later reducer.`,
     'Capture only facts established in this chunk. Preserve chronology and mark unresolved or superseded facts clearly.',
     'Output exactly every Markdown section below, in order:',
     '',
@@ -44,15 +46,16 @@ export function mapInstruction(index: number, total: number): string {
 }
 
 /**
- * Build the instruction for one recursive reduction group.
+ * Build the instruction for one recursive reduction span.
  * @param round - one-based reduce round.
- * @param index - one-based group index in this round.
- * @param total - total groups in this round.
+ * @param start - inclusive one-based source-unit ordinal represented by the group.
+ * @param end - inclusive one-based source-unit ordinal represented by the group.
+ * @param total - total source units represented by the complete map stage.
  * @returns final user instruction for the auxiliary call.
  */
-export function reduceInstruction(round: number, index: number, total: number): string {
+export function reduceInstruction(round: number, start: number, end: number, total: number): string {
   return [
-    `Merge the ordered partial checkpoints above (reduce round ${round}, group ${index} of ${total}) into one checkpoint.`,
+    `Merge the ordered partial checkpoints above (reduce round ${round}, source units ${start}-${end} of ${total}) into one checkpoint.`,
     'Deduplicate repeated facts, keep later corrections over earlier statements, and retain everything needed to resume the work.',
     'Output exactly every Markdown section below, in order:',
     '',
@@ -66,8 +69,8 @@ export function reduceInstruction(round: number, index: number, total: number): 
 /**
  * Frame one partial checkpoint as reducer data.
  * @param text - validated checkpoint Markdown.
- * @param start - inclusive one-based map-chunk ordinal represented by the summary.
- * @param end - inclusive one-based map-chunk ordinal represented by the summary.
+ * @param start - inclusive one-based source-unit ordinal represented by the summary.
+ * @param end - inclusive one-based source-unit ordinal represented by the summary.
  * @returns tagged reducer input text.
  */
 export function framePartialSummary(text: string, start: number, end: number): string {

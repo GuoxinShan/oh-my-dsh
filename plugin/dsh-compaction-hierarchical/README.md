@@ -4,9 +4,9 @@ DSH 的 host-only 分块压缩 Provider，用较小上下文模型接管较大�
 
 ## 行为
 
-插件继承 `@deepseek-ai/dsh-compaction-basic`，保留其 token 压力策略、近期尾部保留、工具结果剪枝、持久锁、表层替换、失败回滚、`/compact` 和 `CONTEXT_WINDOW_EXCEEDED` 自动恢复。唯一变化是摘要阶段：完整输入能放进摘要模型预算时仍走 basic 的一次调用；超出预算时按完整消息和工具调用/结果边界切块，依次生成结构化局部检查点，再递归归并为一个最终检查点。
+插件继承 `@deepseek-ai/dsh-compaction-basic`，保留其 token 压力策略、近期尾部保留、工具结果剪枝、持久锁、表层替换、失败回滚、`/compact` 和 `CONTEXT_WINDOW_EXCEEDED` 自动恢复。唯一变化是摘要阶段：完整输入能放进摘要模型预算时仍走 basic 的一次调用；超出预算时按完整消息和工具调用/结果边界切块，依次生成结构化局部检查点，再递归归并为一个最终检查点。Provider 若仍判定某个 map/reduce span 超窗，插件会只二分失败 span 并保留已成功的兄弟结果，直到调用成功或定位到一个不可再拆的原子单元。
 
-任一 map/reduce 调用失败、输出截断、缺少固定章节、无法组合局部摘要或超过递归深度时，摘要事务失败关闭，原会话表层保持不变。可选的 stock tool-result pruner 若已在摘要前落地，其持久替换仍按 basic 的既有语义保留。
+除可自适应恢复的 Provider 超窗外，任一 map/reduce 调用失败、输出截断、缺少固定章节、无法组合局部摘要或超过递归深度时，摘要事务失败关闭，原会话表层保持不变。reduce 二分若不能减少 partial 数量也会立即失败，避免无进展重试。可选的 stock tool-result pruner 若已在摘要前落地，其持久替换仍按 basic 的既有语义保留。
 
 ## 安装与激活
 
@@ -75,11 +75,11 @@ dsh plugin --profile web add "$PWD"
 
 一次性输入走 stock basic 路径，并保留其 provider prefix cache 行为。分块路径会产生多个 `purpose: compaction` 私有调用；map 调用读取按时间排序的原始片段，reduce 调用只读取带范围标记的局部检查点。最终模型只看到一个 stock compaction checkpoint 和未压缩的近期尾部，不看到中间调用。
 
-分块路径牺牲完整前缀 KV cache 复用来换取可行性。预算内的 stock 单次调用若仍被 Provider 明确判定为上下文溢出，会在同一未提交事务中转入分块。持久 `compaction/summary` 记录最终输出、最终 Provider/模型；仅当整个成功路径的每个调用都上报 usage 时才记录完整聚合 usage，任一调用缺失或先有失败的单次尝试则整体省略。只有恰好一个成功 map 调用且此前没有失败尝试时才设置 `llmStreamCall: true`；所有多调用路径均不设置。
+分块路径牺牲完整前缀 KV cache 复用来换取可行性。预算内的 stock 单次调用若仍被 Provider 明确判定为上下文溢出，会在同一未提交事务中转入分块；map/reduce span 的 Provider 超窗会按稳定的原始 source-unit 范围继续二分，已成功 span 不会重放。持久 `compaction/summary` 记录最终输出、最终 Provider/模型；仅当整个成功路径的每个调用都上报 usage 且没有失败尝试时才记录完整聚合 usage。只有恰好一个成功 map 调用且此前没有失败尝试时才设置 `llmStreamCall: true`；所有多调用或自适应退避路径均不设置。
 
 ## 已知限制
 
-- 单个不可拆分的普通消息或闭合工具单元若大于分块预算，插件会失败并报告所需预算；工具结果应先由同组 pruner 缩减。
+- 单个不可拆分的普通消息、闭合工具单元或 partial checkpoint 若超过静态预算，或在自适应二分后仍被 Provider 判定超窗，插件会报告具体 source-unit 范围；工具结果应先由同组 pruner 缩减。
 - 多阶段进度尚未独立持久化；进程退出或中间调用失败后，下次压缩从 map 阶段重新开始。
 - 摘要 token 计量沿用 `ctx.tokenMeter` 的固定密度估算，不是 Provider 的精确 tokenizer。
 - `replayTools: false` 适用于不要求历史工具结果必须伴随 schema 的 Provider；遇到严格 Provider 时改为 `true`，并相应降低历史消息预算。

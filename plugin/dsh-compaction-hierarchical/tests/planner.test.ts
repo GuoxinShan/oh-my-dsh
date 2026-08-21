@@ -11,6 +11,7 @@ import {
   estimateMessages,
   OversizedCompactionUnitError,
   planMessageChunks,
+  splitMessageChunk,
   toolBalancedUnits,
 } from '../src/planner.ts'
 
@@ -72,6 +73,37 @@ test('tool calls and their results stay in one indivisible unit', () => {
     [request.id, assistant.id, resultA.id, resultB.id],
     [after.id],
   ])
+
+  const split = splitMessageChunk(messages, priced(messages, [2, 3, 2, 2, 2]))
+  assert.ok(split)
+  const toolSide = split.find(side => side.some(message => message.id === assistant.id))
+  assert.deepEqual(toolSide?.map(message => message.id), [
+    assistant.id,
+    resultA.id,
+    resultB.id,
+    after.id,
+  ])
+})
+
+test('adaptive splitting chooses the closest weighted balanced-unit boundary', () => {
+  const messages = [user('a'), user('b'), user('c'), user('d')]
+  const split = splitMessageChunk(messages, priced(messages, [8, 7, 2, 1]))
+  assert.ok(split)
+  assert.deepEqual(split.map(side => side.map(message => message.id)), [
+    [messages[0]?.id],
+    [messages[1]?.id, messages[2]?.id, messages[3]?.id],
+  ])
+})
+
+test('adaptive splitting bisects zero-priced units by count and stops at a singleton', () => {
+  const messages = [user('a'), user('b'), user('c'), user('d')]
+  const split = splitMessageChunk(messages, () => 0)
+  assert.ok(split)
+  assert.deepEqual(split.map(side => side.map(message => message.id)), [
+    [messages[0]?.id, messages[1]?.id],
+    [messages[2]?.id, messages[3]?.id],
+  ])
+  assert.equal(splitMessageChunk([messages[0] as Message], () => 1), null)
 })
 
 test('one oversized balanced unit fails instead of crossing the provider limit', () => {

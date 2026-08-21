@@ -12,11 +12,11 @@ const summary = SUMMARY_SECTIONS.map(section => `## ${section}\n- value`).join('
 
 test('map and reduce prompts require the complete checkpoint structure', () => {
   for (const section of SUMMARY_SECTIONS) {
-    assert.match(mapInstruction(1, 3), new RegExp(`## ${section}`))
-    assert.match(reduceInstruction(2, 1, 2), new RegExp(`## ${section}`))
+    assert.match(mapInstruction(1, 2, 3), new RegExp(`## ${section}`))
+    assert.match(reduceInstruction(2, 1, 2, 3), new RegExp(`## ${section}`))
   }
-  assert.match(mapInstruction(1, 3), /chunk 1 of 3/)
-  assert.match(reduceInstruction(2, 1, 2), /reduce round 2, group 1 of 2/)
+  assert.match(mapInstruction(1, 2, 3), /source units 1-2 of 3/)
+  assert.match(reduceInstruction(2, 1, 2, 3), /reduce round 2, source units 1-2 of 3/)
 })
 
 test('structured summary validation joins text blocks and rejects omissions', () => {
@@ -33,7 +33,7 @@ test('structured summary validation joins text blocks and rejects omissions', ()
   assert.throws(() => validateStructuredSummary([], 'map'), /no text/)
 })
 
-test('partial framing records the represented map-chunk range', () => {
+test('partial framing records the represented source-unit range', () => {
   assert.equal(
     framePartialSummary('checkpoint', 2, 5),
     '<partial-summary start="2" end="5">\ncheckpoint\n</partial-summary>',

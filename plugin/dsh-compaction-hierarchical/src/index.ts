@@ -27,7 +27,13 @@ import type {
 import type {} from '@deepseek-ai/dsh-token-meter'
 import { basicConfig, Config, resolveHierarchyConfig } from './config.ts'
 import type { HierarchicalCompactionConfig, ResolvedHierarchyConfig } from './config.ts'
-import { estimateMessages, planMessageChunks, toolBalancedUnits } from './planner.ts'
+import {
+  estimateMessages,
+  OversizedCompactionUnitError,
+  planMessageChunks,
+  splitMessageChunk,
+  toolBalancedUnits,
+} from './planner.ts'
 import {
   framePartialSummary,
   mapInstruction,
@@ -37,7 +43,12 @@ import {
 
 export type { HierarchicalCompactionConfig } from './config.ts'
 export { Config } from './config.ts'
-export { OversizedCompactionUnitError, planMessageChunks, toolBalancedUnits } from './planner.ts'
+export {
+  OversizedCompactionUnitError,
+  planMessageChunks,
+  splitMessageChunk,
+  toolBalancedUnits,
+} from './planner.ts'
 
 const PLUGIN_ID = 'dsh-compaction-hierarchical'
 const CHARS_PER_TOKEN = 4
@@ -72,6 +83,12 @@ interface StageResult {
   readonly summary: TextBlock[]
   readonly rawOutput: ContentBlock[]
   readonly usage?: TokenUsage
+}
+
+interface SourceSpan {
+  readonly messages: Message[]
+  readonly start: number
+  readonly end: number
 }
 
 interface PartialSummary {
@@ -120,13 +137,15 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
     this.assertHierarchyOutputReserve(contextWindow, inputBudget)
 
     const estimate = (message: Message): number => this.ctx.tokenMeter.estimateMessage(message)
+    const units = toolBalancedUnits(input.messages)
+    const totalUnits = units.length
     const oneShotTokens = this.estimateCallInput(
       input,
-      mapInstruction(input.messages.length, input.messages.length),
+      mapInstruction(totalUnits, totalUnits, totalUnits),
       true,
       estimate,
     )
-    let failedOneShot = false
+    let hadFailedLlmAttempt = false
     const oneShotFits = oneShotTokens <= inputBudget
       && inputBudget + target.oneShotMaxTokens <= contextWindow
     if (oneShotFits) {
@@ -134,14 +153,13 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
         return await super.summarize(input, agent, signal)
       } catch (error) {
         if (!hasErrorCode(error, CONTEXT_WINDOW_EXCEEDED_CODE)) throw error
-        failedOneShot = true
+        hadFailedLlmAttempt = true
       }
     }
 
-    const units = toolBalancedUnits(input.messages)
     const mapReserve = this.estimateFixedInput(
       input,
-      mapInstruction(units.length, units.length),
+      mapInstruction(totalUnits, totalUnits, totalUnits),
       this.hierarchy.replayTools,
       estimate,
     )
@@ -152,21 +170,42 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
     }
 
     const calls: StageResult[] = []
+    const pendingMap = this.sourceSpans(chunks)
     let partials: PartialSummary[] = []
-    for (let index = 0; index < chunks.length; index += 1) {
+    while (pendingMap.length > 0) {
       signal?.throwIfAborted()
-      const result = await this.runStage(
-        { ...input, messages: chunks[index] ?? [] },
-        mapInstruction(index + 1, chunks.length),
-        target,
-        this.hierarchy.mapMaxTokens,
-        agent,
-        signal,
-      )
-      calls.push(result)
-      partials.push(this.partial(result, index + 1, index + 1, `map chunk ${index + 1}`))
+      const span = pendingMap.shift()
+      if (span === undefined) break
+      try {
+        const result = await this.runStage(
+          { ...input, messages: span.messages },
+          mapInstruction(span.start, span.end, totalUnits),
+          target,
+          this.hierarchy.mapMaxTokens,
+          agent,
+          signal,
+        )
+        calls.push(result)
+        partials.push(this.partial(
+          result,
+          span.start,
+          span.end,
+          `map source units ${span.start}-${span.end}`,
+        ))
+      } catch (error) {
+        if (signal?.aborted || !hasErrorCode(error, CONTEXT_WINDOW_EXCEEDED_CODE)) throw error
+        hadFailedLlmAttempt = true
+        const split = this.splitMapSpan(span, estimate)
+        if (split === null) {
+          throw indivisibleOverflow(`map source unit ${span.start}`, error)
+        }
+        pendingMap.unshift(split[1])
+        pendingMap.unshift(split[0])
+      }
     }
+    this.assertCoverage(partials, totalUnits, 'map stage')
 
+    let usedReduce = false
     for (let round = 1; partials.length > 1; round += 1) {
       if (round > this.hierarchy.maxDepth) {
         throw new Error(
@@ -175,7 +214,7 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
       }
       const reduceReserve = this.estimateFixedInput(
         input,
-        reduceInstruction(round, partials.length, partials.length),
+        reduceInstruction(round, totalUnits, totalUnits, totalUnits),
         this.hierarchy.replayTools,
         estimate,
       )
@@ -200,57 +239,143 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
         )
       }
 
-      const byMessage = new Map(partials.map(partial => [partial.message.id, partial]))
+      const byMessage = new Map<string, PartialSummary>(
+        partials.map(partial => [partial.message.id, partial]),
+      )
+      const pendingReduce = groups.map(group => this.reduceSpan(group, byMessage))
       const next: PartialSummary[] = []
-      for (let index = 0; index < groups.length; index += 1) {
+      while (pendingReduce.length > 0) {
         signal?.throwIfAborted()
-        const group = groups[index] ?? []
-        const represented = group.map((message) => {
-          const partial = byMessage.get(message.id)
-          if (partial === undefined) {
-            throw new Error('hierarchical compaction: reducer group lost partial-summary identity')
+        const span = pendingReduce.shift()
+        if (span === undefined) break
+        try {
+          const result = await this.runStage(
+            { ...input, messages: span.messages },
+            reduceInstruction(round, span.start, span.end, totalUnits),
+            target,
+            this.hierarchy.reduceMaxTokens,
+            agent,
+            signal,
+          )
+          calls.push(result)
+          next.push(this.partial(
+            result,
+            span.start,
+            span.end,
+            `reduce round ${round} source units ${span.start}-${span.end}`,
+          ))
+        } catch (error) {
+          if (signal?.aborted || !hasErrorCode(error, CONTEXT_WINDOW_EXCEEDED_CODE)) throw error
+          hadFailedLlmAttempt = true
+          const splitMessages = splitMessageChunk(span.messages, estimate)
+          if (splitMessages === null) {
+            throw indivisibleOverflow(
+              `reduce round ${round} partial ${span.start}-${span.end}`,
+              error,
+            )
           }
-          return partial
-        })
-        const result = await this.runStage(
-          { ...input, messages: group },
-          reduceInstruction(round, index + 1, groups.length),
-          target,
-          this.hierarchy.reduceMaxTokens,
-          agent,
-          signal,
+          if (next.length + pendingReduce.length + 2 >= partials.length) {
+            throw new Error(
+              `hierarchical compaction: reduce round ${round} made no progress after adaptive splitting `
+              + `(${partials.length} -> ${next.length + pendingReduce.length + 2})`,
+              { cause: error },
+            )
+          }
+          pendingReduce.unshift(this.reduceSpan(splitMessages[1], byMessage))
+          pendingReduce.unshift(this.reduceSpan(splitMessages[0], byMessage))
+        }
+      }
+      if (next.length >= partials.length) {
+        throw new Error(
+          `hierarchical compaction: reduce round ${round} made no progress after adaptive splitting `
+          + `(${partials.length} -> ${next.length})`,
         )
-        calls.push(result)
-        next.push(this.partial(
-          result,
-          represented[0]?.start ?? 0,
-          represented.at(-1)?.end ?? 0,
-          `reduce round ${round} group ${index + 1}`,
-        ))
       }
       partials = next
+      usedReduce = true
+      this.assertCoverage(partials, totalUnits, `reduce round ${round}`)
     }
 
     const final = partials[0]
     if (final === undefined) throw new Error('hierarchical compaction: map stage produced no summaries')
-    const usage = failedOneShot
+    const usage = hadFailedLlmAttempt
       ? undefined
       : aggregateUsage(calls.map(call => call.usage))
-    const maxTokens = calls.length === chunks.length
-      ? this.hierarchy.mapMaxTokens
-      : this.hierarchy.reduceMaxTokens
     const result = {
       summary: final.result.summary,
       rawOutput: final.result.rawOutput,
       provider: target.provider,
       model: target.model,
-      maxTokens,
+      maxTokens: usedReduce ? this.hierarchy.reduceMaxTokens : this.hierarchy.mapMaxTokens,
       ...(usage === undefined ? {} : { usage }),
     }
-    if (!failedOneShot && calls.length === 1) {
+    if (!hadFailedLlmAttempt && calls.length === 1) {
       return { ...result, llmStreamCall: true }
     }
     return result
+  }
+
+  /** Assign stable source-unit ranges to the initial greedy map chunks. */
+  private sourceSpans(chunks: readonly Message[][]): SourceSpan[] {
+    let start = 1
+    return chunks.map((messages) => {
+      const unitCount = toolBalancedUnits(messages).length
+      const span = { messages, start, end: start + unitCount - 1 }
+      start = span.end + 1
+      return span
+    })
+  }
+
+  /** Bisect one failed map span while preserving its stable source coordinates. */
+  private splitMapSpan(
+    span: SourceSpan,
+    estimate: (message: Message) => number,
+  ): [SourceSpan, SourceSpan] | null {
+    const split = splitMessageChunk(span.messages, estimate)
+    if (split === null) return null
+    const leftEnd = span.start + toolBalancedUnits(split[0]).length - 1
+    return [
+      { messages: split[0], start: span.start, end: leftEnd },
+      { messages: split[1], start: leftEnd + 1, end: span.end },
+    ]
+  }
+
+  /** Recover one reduce group's stable source range from its partial identities. */
+  private reduceSpan(
+    messages: Message[],
+    byMessage: ReadonlyMap<string, PartialSummary>,
+  ): SourceSpan {
+    const represented = messages.map((message) => {
+      const partial = byMessage.get(message.id)
+      if (partial === undefined) {
+        throw new Error('hierarchical compaction: reducer group lost partial-summary identity')
+      }
+      return partial
+    })
+    const first = represented[0]
+    const last = represented.at(-1)
+    if (first === undefined || last === undefined) {
+      throw new Error('hierarchical compaction: reducer produced an empty work group')
+    }
+    return { messages, start: first.start, end: last.end }
+  }
+
+  /** Prove adaptive children preserve complete ordered source coverage. */
+  private assertCoverage(
+    partials: readonly PartialSummary[],
+    totalUnits: number,
+    stage: string,
+  ): void {
+    let expected = 1
+    for (const partial of partials) {
+      if (partial.start !== expected || partial.end < partial.start) {
+        throw new Error(`hierarchical compaction: ${stage} lost chronological source coverage`)
+      }
+      expected = partial.end + 1
+    }
+    if (partials.length === 0 || expected !== totalUnits + 1) {
+      throw new Error(`hierarchical compaction: ${stage} did not cover every source unit`)
+    }
   }
 
   /** Resolve the same configured/latest/agent summary route precedence as basic. */
@@ -405,6 +530,16 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
       source: { kind: 'plugin', plugin: PLUGIN_ID },
     })
   }
+}
+
+/** Build the terminal diagnostic for a provider-rejected atomic span. */
+function indivisibleOverflow(stage: string, cause: unknown): Error {
+  const error = new OversizedCompactionUnitError(
+    `hierarchical compaction: ${stage} still exceeds the provider context window and is indivisible`,
+    { cause },
+  ) as OversizedCompactionUnitError & { code?: string }
+  error.code = CONTEXT_WINDOW_EXCEEDED_CODE
+  return error
 }
 
 /** Match a structured error code without depending on an error class instance. */

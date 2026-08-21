@@ -24,17 +24,27 @@ const MODEL = 'small-context'
 const SIGNAL = new AbortController().signal
 const STRUCTURED = SUMMARY_SECTIONS.map(section => `## ${section}\n- retained`).join('\n\n')
 
+type OverflowWhen = (options: GenerateOptions, index: number) => boolean
+
 class SummaryAdapter extends LlmAdapter {
   readonly calls: GenerateOptions[] = []
+  readonly outcomes: ('overflow' | 'success')[] = []
   private readonly contextWindow: number
   private readonly output: string
+  private readonly overflowWhen: OverflowWhen
   private remainingOverflows: number
 
-  constructor(contextWindow: number, output = STRUCTURED, overflows = 0) {
+  constructor(
+    contextWindow: number,
+    output = STRUCTURED,
+    overflows = 0,
+    overflowWhen: OverflowWhen = () => false,
+  ) {
     super()
     this.contextWindow = contextWindow
     this.output = output
     this.remainingOverflows = overflows
+    this.overflowWhen = overflowWhen
   }
 
   override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
@@ -47,9 +57,11 @@ class SummaryAdapter extends LlmAdapter {
   }
 
   override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    const index = this.calls.length
     this.calls.push(options)
-    if (this.remainingOverflows > 0) {
-      this.remainingOverflows -= 1
+    if (this.remainingOverflows > 0 || this.overflowWhen(options, index)) {
+      this.remainingOverflows -= this.remainingOverflows > 0 ? 1 : 0
+      this.outcomes.push('overflow')
       yield {
         type: 'finish',
         reason: {
@@ -62,6 +74,7 @@ class SummaryAdapter extends LlmAdapter {
       }
       return
     }
+    this.outcomes.push('success')
     yield { type: 'text-delta', index: 0, text: this.output }
     yield { type: 'usage', usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2 } }
     yield { type: 'finish', reason: { kind: 'stop' } }
@@ -78,11 +91,16 @@ class ExposedEngine extends HierarchicalCompactionEngine {
   }
 }
 
-function fixture(output = STRUCTURED, overflows = 0, replayTools = false) {
+function fixture(
+  output = STRUCTURED,
+  overflows = 0,
+  replayTools = false,
+  overflowWhen: OverflowWhen = () => false,
+) {
   const ctx = new Context()
   void new LlmRuntime(ctx)
   void new TokenMeter(ctx)
-  const adapter = new SummaryAdapter(2400, output, overflows)
+  const adapter = new SummaryAdapter(2400, output, overflows, overflowWhen)
   ctx.llm.registerAdapter([PROVIDER], adapter)
   const engine = new ExposedEngine(ctx, {
     auto: false,
@@ -107,6 +125,26 @@ function user(text: string): Message {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
 }
 
+function instruction(options: GenerateOptions): string {
+  const block = options.messages.at(-1)?.content.find(candidate => candidate.type === 'text')
+  return block?.type === 'text' ? block.text : ''
+}
+
+function sourceRange(options: GenerateOptions): [number, number] | null {
+  const match = /source units (\d+)-(\d+) of \d+/.exec(instruction(options))
+  return match === null ? null : [Number(match[1]), Number(match[2])]
+}
+
+function isReduce(options: GenerateOptions): boolean {
+  return instruction(options).includes('reduce round')
+}
+
+function partialCount(options: GenerateOptions): number {
+  return options.messages.filter(message => message.content.some(block => (
+    block.type === 'text' && block.text.includes('<partial-summary')
+  ))).length
+}
+
 test('fitting input delegates to the stock one-shot summarizer', async () => {
   const { adapter, agent, engine, session } = fixture()
   const result = await engine.run([user('small')], agent)
@@ -123,6 +161,41 @@ test('a provider-confirmed one-shot overflow falls back to one bounded map call'
   assert.equal(result.llmStreamCall, undefined)
   assert.equal(result.maxTokens, 128)
   assert.equal(result.usage, undefined)
+})
+
+test('provider overflow on one atomic map unit terminates without retrying it', async () => {
+  const { adapter, agent, engine } = fixture(STRUCTURED, 2)
+  await assert.rejects(
+    engine.run([user('small')], agent),
+    /map source unit 1.*provider context window.*indivisible/,
+  )
+  assert.equal(adapter.calls.length, 2)
+  assert.deepEqual(adapter.outcomes, ['overflow', 'overflow'])
+})
+
+test('provider-overflowed map spans split recursively without replaying successful siblings', async () => {
+  const { adapter, agent, engine } = fixture(
+    STRUCTURED,
+    0,
+    false,
+    options => !isReduce(options) && (sourceRange(options)?.[1] ?? 0) > (sourceRange(options)?.[0] ?? 0),
+  )
+  const messages = Array.from({ length: 5 }, (_, index) => user(`${index}: ${'x'.repeat(1200)}`))
+  const result = await engine.run(messages, agent)
+  const mapAttempts = adapter.calls.map((call, index) => ({
+    range: sourceRange(call),
+    outcome: adapter.outcomes[index],
+    reduce: isReduce(call),
+  })).filter(attempt => !attempt.reduce && attempt.range !== null)
+  const successfulLeaves = mapAttempts
+    .filter(attempt => attempt.outcome === 'success')
+    .map(attempt => attempt.range)
+
+  assert.deepEqual(successfulLeaves, [[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]])
+  assert.equal(mapAttempts.filter(attempt => attempt.range?.[0] === 1 && attempt.range[1] === 1).length, 1)
+  assert.ok(mapAttempts.some(attempt => attempt.outcome === 'overflow'))
+  assert.equal(result.usage, undefined)
+  assert.equal(result.llmStreamCall, undefined)
 })
 
 test('omitting replayed tools can make hierarchy converge in one marked map call', async () => {
@@ -150,6 +223,23 @@ test('replayTools forwards schemas to every map and reduce call', async () => {
   await engine.runInput({ messages, tools }, agent)
   assert.ok(adapter.calls.length >= 3)
   assert.ok(adapter.calls.every(call => call.tools?.[0]?.name === 'read'))
+})
+
+test('instruction reserves price the widest multi-digit source coordinates', async () => {
+  const { adapter, agent, engine } = fixture()
+  const messages = Array.from(
+    { length: 12 },
+    (_, index) => user(`${index}: ${'x'.repeat(1200)}`),
+  )
+  await engine.run(messages, agent)
+  const widest = adapter.calls
+    .map(call => instruction(call))
+    .map(text => /source units (\d+)-(\d+) of (\d+)/.exec(text))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map(match => `${match[1]}${match[2]}${match[3]}`.length)
+  assert.ok(adapter.calls.length > 0)
+  assert.ok(widest.length === adapter.calls.length)
+  assert.ok(widest.every(digits => digits >= 2))
 })
 
 test('oversized input maps chunks, reduces them, and aggregates usage honestly', async () => {
@@ -181,6 +271,46 @@ test('oversized input maps chunks, reduces them, and aggregates usage honestly',
     .map(block => block.type === 'text' ? /^(\d+): /.exec(block.text)?.[1] : undefined)
     .filter((value): value is string => value !== undefined)
   assert.deepEqual(mappedOrdinals, ['0', '1', '2', '3', '4'])
+})
+
+test('provider-overflowed reduce spans split locally and omit incomplete usage', async () => {
+  let rejectedReduce = false
+  const { adapter, agent, engine } = fixture(
+    STRUCTURED,
+    0,
+    false,
+    (options) => {
+      if (!rejectedReduce && isReduce(options)) {
+        rejectedReduce = true
+        return true
+      }
+      return false
+    },
+  )
+  const messages = Array.from({ length: 5 }, (_, index) => user(`${index}: ${'x'.repeat(1200)}`))
+  const result = await engine.run(messages, agent)
+
+  assert.equal(rejectedReduce, true)
+  assert.ok(adapter.calls.some((call, index) => isReduce(call) && adapter.outcomes[index] === 'overflow'))
+  assert.ok(adapter.calls.some((call, index) => isReduce(call) && adapter.outcomes[index] === 'success'))
+  assert.equal(result.maxTokens, 256)
+  assert.equal(result.usage, undefined)
+  assert.equal(result.llmStreamCall, undefined)
+})
+
+test('adaptive reduce splitting stops before a no-progress round can repeat', async () => {
+  const { adapter, agent, engine } = fixture(
+    STRUCTURED,
+    0,
+    false,
+    options => isReduce(options) && partialCount(options) > 1,
+  )
+  const messages = Array.from({ length: 5 }, (_, index) => user(`${index}: ${'x'.repeat(1200)}`))
+  await assert.rejects(
+    engine.run(messages, agent),
+    /reduce round 1 made no progress after adaptive splitting/,
+  )
+  assert.equal(adapter.calls.some(call => instruction(call).includes('reduce round 2')), false)
 })
 
 test('a malformed map result fails before a checkpoint can be returned', async () => {

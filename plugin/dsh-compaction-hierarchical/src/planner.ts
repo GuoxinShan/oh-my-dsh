@@ -107,6 +107,42 @@ export function planMessageChunks(
   return chunks
 }
 
+/**
+ * Bisect one provider-rejected chunk at a tool-balanced unit boundary.
+ * The selected boundary minimizes estimated token imbalance, then unit-count
+ * imbalance when zero-priced units tie. Returning null proves the chunk is one
+ * indivisible unit and cannot make further progress.
+ * @param messages - one failed chronological chunk.
+ * @param estimate - shared message estimator.
+ * @returns two non-empty balanced halves, or null for one indivisible unit.
+ */
+export function splitMessageChunk(
+  messages: readonly Message[],
+  estimate: EstimateMessage,
+): [Message[], Message[]] | null {
+  const units = toolBalancedUnits(messages)
+  if (units.length < 2) return null
+  const weights = units.map(unit => estimateMessages(unit, estimate))
+  const total = weights.reduce((sum, value) => sum + value, 0)
+  let left = weights[0] ?? 0
+  let splitAt = 1
+  let bestTokenImbalance = Math.abs(total - 2 * left)
+  let bestUnitImbalance = Math.abs(units.length - 2)
+
+  for (let index = 2; index < units.length; index += 1) {
+    left += weights[index - 1] ?? 0
+    const tokenImbalance = Math.abs(total - 2 * left)
+    const unitImbalance = Math.abs(units.length - 2 * index)
+    if (tokenImbalance < bestTokenImbalance
+      || (tokenImbalance === bestTokenImbalance && unitImbalance < bestUnitImbalance)) {
+      splitAt = index
+      bestTokenImbalance = tokenImbalance
+      bestUnitImbalance = unitImbalance
+    }
+  }
+  return [units.slice(0, splitAt).flat(), units.slice(splitAt).flat()]
+}
+
 /** Validate one estimator result at its same-process API boundary. */
 function estimated(message: Message, estimate: EstimateMessage): number {
   const tokens = estimate(message)
