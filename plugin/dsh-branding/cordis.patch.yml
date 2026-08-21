@@ -1,0 +1,9 @@
+# The dsh-branding bundle patch: one browser-only row. The entry id doubles
+# as the client-bundle id (served at /plugins/dsh-branding/client.js); the
+# host half is an empty apply that only legitimizes the Loader row. The
+# browser half registers the sidebar wordmark and rewrites the document
+# title wherever this bundle is mounted — no desktop gate, so terminal
+# `dsh web`, plain browsers, and the desktop shell all get the same brand.
+- insert:
+    - id: dsh-branding
+      name: dsh-branding

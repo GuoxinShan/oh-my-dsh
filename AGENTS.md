@@ -2,7 +2,7 @@
 
 dsh-desktop 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（下称 DSH）的桌面化 monorepo：出树插件与 Tauri 壳同仓、独立发版。两个平面：
 
-- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。成员：`dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）、`dsh-mcp-settings`（2026-08-19 subtree 迁入）、`dsh-provider-balance`（2026-08-19 subtree 迁入，纯 DOM 注入）、`dsh-reasoning-efforts`（2026-08-20 新写，host-only：给手写 llm-pi-ai 模型补 `reasoningEfforts` 声明，契约见包内 README，决策见 `docs/notes/2026-08-20-reasoning-efforts.md`）、`dsh-web-search-toggle`（2026-08-20 新写，双面：通用设置页「Web Search」开关——DEEPSEEK_API_KEY 状态提示 + home patch 层受管块禁用 tool-web 行，契约见 `docs/notes/2026-08-20-web-search-toggle.md`）、`dsh-compaction-hierarchical`（2026-08-20 新写，host-only：继承 stock compaction 事务，以有界 map-reduce 让小上下文模型压缩大历史；契约见包内 README，决策见 `docs/notes/2026-08-20-hierarchical-compaction.md`）。
+- **`plugin/<name>/`** —— 可独立安装、独立打 tag 的 DSH 插件包。成员：`dsh-desktop-bridge`（桌面门控：外链路由、原生注意力通知、桌面指示）、`dsh-mcp-settings`（2026-08-19 subtree 迁入）、`dsh-provider-balance`（2026-08-19 subtree 迁入，纯 DOM 注入）、`dsh-reasoning-efforts`（2026-08-20 新写，host-only：给手写 llm-pi-ai 模型补 `reasoningEfforts` 声明，契约见包内 README，决策见 `docs/notes/2026-08-20-reasoning-efforts.md`）、`dsh-web-search-toggle`（2026-08-20 新写，双面：通用设置页「Web Search」开关——DEEPSEEK_API_KEY 状态提示 + home patch 层受管块禁用 tool-web 行，契约见 `docs/notes/2026-08-20-web-search-toggle.md`）、`dsh-compaction-hierarchical`（2026-08-20 新写，host-only：继承 stock compaction 事务，以有界 map-reduce 让小上下文模型压缩大历史；契约见包内 README，决策见 `docs/notes/2026-08-20-hierarchical-compaction.md`）、`dsh-branding`（2026-08-21 新写，browser-only：占用 `sidebar.brand.name` 替换字标为 "Oh My DSH"+"Harness" pill 并重写 document title——**始终挂载、无桌面门控**，终端/浏览器/桌面同一条路；决策见 `docs/notes/2026-08-21-branding-plugin.md`）。
 - **Tauri 2 Rust 壳** —— spawn harness sidecar、端口分配、就绪检测、窗口加载。壳层不含业务逻辑；harness 不感知壳的存在。业务集成只特殊对待桥插件（gate + IPC）；分发层另按本文件的 desktop-owned 清单打包/安装层次压缩，但不读取其 Provider 业务。
 
 规范层级：[README.md](README.md) 记录「为什么」（技术选型）；本文件记录「契约与约定」（怎么做）；代码是实现。冲突时以本文件为准。改契约必须同 PR 改本文件。
@@ -15,7 +15,7 @@ plugin/<name>/               一个可独立发版的 DSH 插件包（目录名 
     src/index.ts             host half：surface 插件，空 apply
     src/log-sink.ts          日志汇 host 行：ctx.logger → 每启动一个 JSONL 文件（见「日志汇行」）
     src/invariant.ts         伙伴不变量说明
-    src/client/              browser half：env 探测 + 三个桥 + shell.overlay 桌面指示
+    src/client/              browser half：env 探测 + 三个桥 + shell.overlay 桌面指示 + 标题栏融合
     tests/                   node:test 单测（纯函数）
 src-tauri/                   Tauri 2 壳（不感知插件业务）
 scripts/                     壳层与工具脚本：prepare-runtime.mjs、prepare-desktop-bundle.mjs
@@ -134,7 +134,7 @@ M2（下载桥与 i18n 已实现；其余规划，先改本表再动手）：
 
 ### 组合与 slot 纪律（沿用 DSH client 约定的最小子集）
 
-- UI 只经 `ctx.slots.register(...)` 组合；本插件只注册已声明的加性槽 `shell.overlay`（badge/拖拽条/带内 rail 控件，更新入口嵌在 rail 控件内），声明洞一律禁止。
+- UI 只经 `ctx.slots.register(...)` 组合；本插件只注册已声明的加性槽 `shell.overlay`（badge/拖拽条/带内 rail 控件，更新入口嵌在 rail 控件内），声明洞一律禁止。品牌字标等"始终挂载"关注点不归桥（见 roster 的 `dsh-branding`）。
 - 跨包只走 slot 与 ctx 服务，禁止 import 其他插件的实现符号；harness 包只做 type-only import（构建时擦除）。
 - 注册即 effect：所有监听、订阅、slot 注册经 `ctx.effect()` / register 返回的 disposer，卸载/HMR 全量回收。
 - 文案中文（M2 起接 `ctx.locale` 双语）；代码注释英文。
