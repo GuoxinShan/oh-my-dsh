@@ -1,0 +1,5 @@
+# Install-only profile bundle. The healing row is owned by each agent preset
+# (see preset-snippet.yml): the plugin contributes no host-layer service, so
+# activation happens only for sessions whose preset mounts it. Keeping this
+# patch empty mirrors dsh-compaction-hierarchical's install-only registration.
+[]

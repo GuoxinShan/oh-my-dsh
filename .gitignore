@@ -20,6 +20,8 @@ plugin/dsh-web-search-toggle/lib/
 plugin/dsh-branding/lib/
 # dsh-compaction-hierarchical：host-only 构建产物
 plugin/dsh-compaction-hierarchical/lib/
+# dsh-fs-observation-log：host-only 构建产物（依赖全钉 registry，无锚）
+plugin/dsh-fs-observation-log/lib/
 # dsh-mcp-settings 的同级 harness 锚（scripts/setup-plugins.mjs 再生）
 plugin/deepseek-harness
 

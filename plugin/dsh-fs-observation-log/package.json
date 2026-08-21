@@ -1,0 +1,53 @@
+{
+  "name": "dsh-fs-observation-log",
+  "version": "0.1.0",
+  "description": "Persist fs/observed evidence across process restarts and session forks, and restore a live observation before edit/write when the file's version token still matches — removing false FS_NOT_OBSERVED denials without weakening the stock guard",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown",
+    "watch": "tsdown --watch",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml",
+    "preset-snippet.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "fs-observation-policy",
+    "FS_NOT_OBSERVED"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-fs": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-fs-local": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-fs-observation-policy": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tool-fs": "0.1.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.1",
+    "@types/node": "^24.13.3",
+    "tsdown": "^0.22.2",
+    "tsx": "^4.19.2",
+    "typescript": "^6.0.3"
+  },
+  "packageManager": "pnpm@10.28.0"
+}
