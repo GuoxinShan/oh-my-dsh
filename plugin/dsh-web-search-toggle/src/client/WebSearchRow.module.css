@@ -109,6 +109,12 @@
   cursor: pointer;
 }
 
+.switch,
+.switch * {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .switch input {
   position: absolute;
   width: 1px;
