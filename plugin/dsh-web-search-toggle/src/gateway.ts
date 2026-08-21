@@ -2,23 +2,30 @@
  * Host gateway serving the web_search toggle over the Typert Remote seam.
  *
  * `get` projects the toggle state plus whether the DeepSeek search credential
- * resolves; `set` rewrites the managed block in the home patch file, whose
- * live watcher re-composes the tree so the row's next fiber reflects the
- * toggle without a restart. The tool row itself stays owned by the harness
- * composition — this gateway only edits the user patch layer, exactly as a
- * hand edit would.
+ * resolves; `set` rewrites the managed block in the home patch file. The same
+ * service enforces that state across Agent Preset scopes by filtering the final
+ * prompt assembly and guarding stale or indirect executions. The harness keeps
+ * ownership of every actual tool and provider row.
  *
  * @module dsh-web-search-toggle/gateway
  */
 
+import { readFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, } from '@deepseek-ai/dsh-credentials'
 import { settingsNamespace, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-tools'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { toggleStateFromText, withToggleEntry } from './patch-file.ts'
+import {
+  NATIVE_WEB_SEARCH_TOOL,
+  installNativeWebSearchAssemblyPolicy,
+  nativeWebSearchDenial,
+} from './policy.ts'
 import type { WebSearchToggleSnapshot } from './toggle-types.ts'
 
 /** Default credential reference web-search-deepseek resolves. */
@@ -50,12 +57,37 @@ async function readPatchText(path: string): Promise<string | undefined> {
   }
 }
 
-/** Remote-only gateway for the native web_search toggle. */
+/** Synchronous twin used only on an attempted web_search execution. */
+function readPatchTextSync(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+/** Remote gateway plus the host-wide native web_search policy. */
 export class WebSearchToggleGateway extends TypertRemoteService {
-  static inject = ['settings', 'credentials']
+  static inject = ['settings', 'credentials', 'systemPrompt', 'tools']
 
   constructor(ctx: Context) {
     super(ctx, 'webSearchToggle')
+
+    // Agent presets own their model-facing tool rows. Filtering the final
+    // structured assembly reaches every preset scope without rewriting shipped
+    // compositions or enumerating existing and future Agents.
+    installNativeWebSearchAssemblyPolicy(ctx, async () => {
+      return toggleStateFromText(await readPatchText(homePatchPath()))
+    })
+
+    // A stale request, replay, or Code Mode sub-dispatch can bypass the visible
+    // schema. Deny it before provider selection while the same switch is off.
+    ctx.tools.guard(execution => {
+      if (execution.name !== NATIVE_WEB_SEARCH_TOOL) return undefined
+      const enabled = toggleStateFromText(readPatchTextSync(homePatchPath()))
+      return nativeWebSearchDenial(execution.name, enabled)
+    })
   }
 
   /**
