@@ -21,6 +21,17 @@ const UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
 /** First check delay after mount, beyond the boot request burst. */
 const FIRST_CHECK_DELAY_MS = 3000
 
+/** Shared CSS for the spinner and indeterminate progress track. */
+const UPDATE_CONTROL_CSS = [
+  '@keyframes desktop-update-spin{to{transform:rotate(360deg)}}',
+  '@keyframes desktop-update-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}',
+  '[data-desktop-update-spinner]{display:inline-flex;animation:desktop-update-spin .8s linear infinite}',
+  '[data-desktop-update-progress]{position:absolute;left:2px;right:2px;bottom:1px;height:2px;overflow:hidden;border-radius:1px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 18%,transparent);pointer-events:none}',
+  '[data-desktop-update-progress]>span{display:block;height:100%;border-radius:inherit;background:var(--dsw-alias-label-primary)}',
+  '[data-desktop-update-progress][data-indeterminate=""]>span{width:40%;animation:desktop-update-indeterminate 1.1s ease-in-out infinite}',
+  '@media (prefers-reduced-motion:reduce){[data-desktop-update-spinner],[data-desktop-update-progress][data-indeterminate=""]>span{animation:none}[data-desktop-update-progress][data-indeterminate=""]>span{width:100%}}',
+].join('')
+
 /** The compact updater button rendered beside the sidebar toggle. */
 export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null {
   const { checkUpdate, getUpdateStatus, updateGeneration, downloadUpdate, installUpdate, t } = props
@@ -29,6 +40,8 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
   const [confirmOpen, setConfirmOpen] = useState(false)
   const mounted = useRef(true)
   const statusRequest = useRef(0)
+  /** One auto-download attempt per version per mount; failures stay click-to-retry. */
+  const autoDownloadVersion = useRef<string | undefined>()
 
   const refreshStatus = useCallback(async (
     requestGeneration: number,
@@ -49,6 +62,24 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
       }
     }
   }, [getUpdateStatus, updateGeneration])
+
+  const startDownload = useCallback((target?: string): void => {
+    setRequested(true)
+    setStatus(target === undefined ? { phase: 'preparing' } : { phase: 'preparing', version: target })
+    void (async () => {
+      try {
+        const request = downloadUpdate()
+        const requestGeneration = updateGeneration()
+        await request
+        await refreshStatus(requestGeneration)
+      } catch {
+        const fallback: DesktopUpdateStatus = target === undefined
+          ? { phase: 'failed', message: 'Update download failed' }
+          : { phase: 'failed', version: target, message: 'Update download failed' }
+        await refreshStatus(updateGeneration(), fallback)
+      }
+    })()
+  }, [downloadUpdate, refreshStatus, updateGeneration])
 
   useEffect(() => {
     mounted.current = true
@@ -86,9 +117,14 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
     return () => { clearInterval(timer) }
   }, [refreshStatus, status, updateGeneration])
 
+  const availableVersion = status.phase === 'available' ? status.version : undefined
+  // Discover → background download. Ready stays quiet until the user clicks.
   useEffect(() => {
-    if (status.phase === 'ready') setConfirmOpen(true)
-  }, [status.phase, 'version' in status ? status.version : undefined])
+    if (availableVersion === undefined) return
+    if (autoDownloadVersion.current === availableVersion) return
+    autoDownloadVersion.current = availableVersion
+    startDownload(availableVersion)
+  }, [availableVersion, startDownload])
 
   const onDownload = useCallback(() => {
     if (status.phase === 'ready') {
@@ -97,8 +133,6 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
     }
     if (isUpdateBusy(status)) return
     const target = 'version' in status ? status.version : undefined
-    setRequested(true)
-    setStatus(target === undefined ? { phase: 'preparing' } : { phase: 'preparing', version: target })
     void (async () => {
       try {
         if (status.phase === 'failed') {
@@ -109,11 +143,12 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
             await refreshStatus(updateGeneration(), { phase: 'current' })
             return
           }
+          autoDownloadVersion.current = found.version
+          startDownload(found.version)
+          return
         }
-        const request = downloadUpdate()
-        const requestGeneration = updateGeneration()
-        await request
-        await refreshStatus(requestGeneration)
+        if (target !== undefined) autoDownloadVersion.current = target
+        startDownload(target)
       } catch {
         const fallback: DesktopUpdateStatus = target === undefined
           ? { phase: 'failed', message: 'Update download failed' }
@@ -121,7 +156,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         await refreshStatus(updateGeneration(), fallback)
       }
     })()
-  }, [checkUpdate, downloadUpdate, refreshStatus, status, updateGeneration])
+  }, [checkUpdate, refreshStatus, startDownload, status, updateGeneration])
 
   const onInstall = useCallback(() => {
     if (status.phase !== 'ready') return
@@ -143,6 +178,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
 
   const busy = isUpdateBusy(status)
   const percent = updatePercent(status)
+  const downloading = status.phase === 'downloading' || status.phase === 'preparing'
   const title = status.phase === 'available'
     ? t('update.available', { version: status.version })
     : status.phase === 'downloading' && percent !== undefined
@@ -162,7 +198,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
 
   return (
     <>
-      <style>{'@keyframes desktop-update-spin{to{transform:rotate(360deg)}}[data-desktop-update-spinner]{display:inline-flex;animation:desktop-update-spin .8s linear infinite}'}</style>
+      <style>{UPDATE_CONTROL_CSS}</style>
       <button
         type="button"
         data-desktop-rail-button=""
@@ -175,6 +211,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         style={{
           all: 'unset',
           boxSizing: 'border-box',
+          position: 'relative',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -182,7 +219,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
           height: '22px',
           borderRadius: '6px',
           cursor: busy ? 'default' : 'pointer',
-          opacity: busy ? 0.72 : 1,
+          opacity: busy ? 0.92 : 1,
           color: 'inherit',
           pointerEvents: 'auto',
         }}
@@ -190,6 +227,19 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent' }}
       >
         {icon}
+        {downloading ? (
+          <span
+            data-desktop-update-progress=""
+            {...(percent === undefined ? { 'data-indeterminate': '' } : {})}
+            role="progressbar"
+            aria-label={title}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+          >
+            <span style={percent === undefined ? undefined : { width: `${percent}%` }} />
+          </span>
+        ) : null}
       </button>
       <Modal
         open={confirmOpen && status.phase === 'ready'}
