@@ -16,7 +16,7 @@
     "updater": {
       "active": true,
       "endpoints": [
-        "https://github.com/aka-danielZhang/dsh-desktop/releases/latest/download/latest.json"
+        "https://github.com/aka-danielZhang/oh-my-dsh/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM0NDJGQUExOTA0NEU2N0IKUldSNzVrU1FvZnBDTkhENFJCcDhmWWo4TWczb3BPdlNRUURBa0VGRU1pMWU5TmRjbzBzUXZKNTgK"
     }

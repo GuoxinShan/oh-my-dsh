@@ -533,7 +533,7 @@ function packageJson() {
     license: 'MIT',
     repository: {
       type: 'git',
-      url: 'git+https://github.com/aka-danielZhang/dsh-desktop.git',
+      url: 'git+https://github.com/aka-danielZhang/oh-my-dsh.git',
       directory: `plugin/${name}`,
     },
     ...(hasClient
