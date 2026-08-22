@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "0.2.0-rc.21"
+version = "0.2.0-rc.22"
 description = "Oh My DSH desktop shell for the DeepSeek Harness web UI"
 edition = "2021"
 license = "MIT"
