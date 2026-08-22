@@ -68,3 +68,6 @@ plugin/dsh-model-image-input/lib/
 
 # 沙箱会话的 pnpm 本地 store 回退（全局 store 不可写时 pnpm 落在仓根，机器本地再生）
 .pnpm-store/
+
+# dsh-send-while-running：构建产物（scripts/new-plugin.mjs 生成）
+plugin/dsh-send-while-running/lib/
