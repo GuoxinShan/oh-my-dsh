@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "dsh-desktop",
+  "productName": "Oh My DSH",
   "version": "0.2.0-rc.17",
   "identifier": "dev.dsh.desktop",
   "build": {

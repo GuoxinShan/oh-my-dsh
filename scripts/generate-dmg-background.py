@@ -74,12 +74,10 @@ def draw_arrow(img):
     d = ImageDraw.Draw(layer)
     brand = (42, 90, 201, 235)         # #2A5AC9 @ 92%
     rounded_line(d, (x0, y), (x1, y), shaft_w, brand)
-    # arrowhead: triangle with slightly rounded look via extra joint discs
+    # Keep the arrowhead as a clean triangle; corner discs become oversized
+    # dots after supersampling and make the installation cue look noisy.
     d.polygon([(x1 - 2 * S, y - head_half), (x1 - 2 * S, y + head_half), (tip, y)],
               fill=brand)
-    for p in [(x1 - 2 * S, y - head_half), (x1 - 2 * S, y + head_half), (tip, y)]:
-        r = 2.6 * S
-        d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=brand)
     img.alpha_composite(layer)
 
 
@@ -88,7 +86,7 @@ def draw_text(img):
     title = ImageFont.truetype(FONT_CJK, 21 * S, index=2)      # W6
     sub = ImageFont.truetype(FONT_CJK, 12 * S, index=0)        # W3
 
-    t = "安装 dsh-desktop"
+    t = "安装 Oh My DSH"
     tw = d.textlength(t, font=title)
     d.text(((PW - tw) / 2, 46 * S), t, font=title, fill=(22, 38, 76, 255))
 

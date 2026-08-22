@@ -22,7 +22,8 @@ Fix: `hide_painted_title()` in the shell calls
 via objc2-app-kit — already in the dependency tree through tao/wry, so the
 direct reference adds no compile cost. Hidden paints nothing but keeps the
 string readable by Mission Control / the Window menu (unlike `.title("")`,
-which empties those surfaces too). We keep `.title("DeepSeek Harness")`.
+which empties those surfaces too). At the time this note was written we kept
+`.title("DeepSeek Harness")`; the current product title is `Oh My DSH`.
 
 ## Root cause 2: padding the frame ≠ padding the content
 
