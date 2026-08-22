@@ -5,8 +5,11 @@ running and the composer draft has content (text or images), an extra
 **Send** button appears at the composer's bottom-right — left of the stock
 **Stop** button. When the turn stops (or the draft is empty) the button
 disappears and the composer returns to the shipped single-button layout.
-No harness source is modified: the button is one additive
-`conversation.input.right` list-seat entry declared by ui-conversation.
+Additionally the Stop button is recolored **danger-red in every state**
+(toned down per theme), so the destructive action always reads apart from
+the blue Send at a glance. No harness source is modified: everything rides
+one additive `conversation.input.right` list-seat entry declared by
+ui-conversation plus a seam-anchored stylesheet.
 
 ## Behavior
 
@@ -19,13 +22,26 @@ No harness source is modified: the button is one additive
   queued into the running turn (queue delivery; the keyboard-only
   busy-Enter preference is a gesture policy and does not apply to button
   presses).
-- Continuable child sessions are excluded: they already keep Send as the
-  primary with an independent Stop beside it.
+- Continuable child sessions are excluded from the twin (they already keep
+  Send as the primary with an independent Stop beside it) — but the red
+  Stop recolor still applies there (the subagent Stop is the same glyph).
 - Disabled during the input machine's admission phases
   (`adjudicating`/`submitting`), mirroring the stock button's
   `machineBusy` term.
 - Locale-aware label (`发送消息` / `Send message`) via the plugin's own
   `send-while-running` dictionary namespace.
+
+## Stop recolor (0.1.1)
+
+The stock primary swaps its GLYPH when it flips Send→Stop (arrow =
+`<path>`, stop = `<rect>`), so the stylesheet recolors
+`button:has(> svg > rect)` inside the composer trailing row — pure CSS
+that follows the stock state machine for free, in every state (running
+with or without draft, subagent Stop), and never touches the blue Send.
+One shade softer than the theme error-primary fill after visual review:
+light theme red-500 (coral) base / red-400 hover; dark theme red-400 base
+with a brightness-step hover (the static red scale has no shade between
+400 and the near-white 100).
 
 ## Install
 
@@ -57,9 +73,11 @@ through documented seams only: the render machinery's
 rule applies `order: 2` to the stock primary only while the Send twin is
 mounted, so every other state keeps the shipped layout untouched. No stock
 CSS-module class names are referenced (module-hash renames cannot break
-it); known edge: the `button:last-of-type` anchor assumes the stock primary
-stays the last direct button child of the composer's trailing row
-(ui-conversation structure changes need this selector re-checked).
+it); known edges: the `button:last-of-type` anchor assumes the stock
+primary stays the last direct button child of the composer's trailing row,
+and the recolor's `svg > rect` anchor assumes the stop glyph stays a rect
+while the send glyph stays a path (ui-conversation structure changes need
+these selectors re-checked).
 
 ## Config
 

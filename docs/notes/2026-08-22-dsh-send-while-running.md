@@ -77,11 +77,30 @@ div:has(> [data-slot="conversation.input.right"] .dsh-send-while-running)
 - 交互态（运行中 + 草稿非空时按钮出现）先以动态 Cordis 插件（swr-2/pkg-2，
   同一逻辑）在本会话 GUI 里验证通过，再落成出树插件。
 
+## 0.1.1：Stop 常红 + 降一档（视觉评审后调整）
+
+用户看板反馈两轮迭代：先要求双按钮时 Stop 与 Send 颜色区分（Send 蓝不变、
+Stop 红），预览后要求「Stop 任何状态都红，但红色再柔和一档」。
+
+- **状态锚＝图标形状**：stock 主按钮翻成 Stop 时图标是 `<rect>`（发送态是
+  `<path>`），`button:has(> svg > rect)` 精确命中「正处于停止态」的按钮——
+  纯 CSS 跟随 stock 状态机，无需 JS 镜像；子会话的独立 Stop 同为 rect 按钮，
+  一并染红（同一停止语义，刻意一致）。作用域经 slot 接缝限定在 composer 尾行。
+- **红色降档**：首版用 `--dsw-alias-state-error-primary`（浅 red-600）被评
+  「红过头」。终版：浅色主题 red-500（珊瑚红）/ hover red-400，深色主题
+  red-400 / hover red-500 + brightness(1.08)（static red 色阶在 400 与
+  近白 100 之间无档位，用亮度步进）。`error-primary` 别名弃用——它绑定
+  red-600/400 双档，无法表达「再柔一档」。
+- 排序规则不变（`:has()` 仍以孪生挂载为条件）；红色规则**不含**
+  `.dsh-send-while-running` 类选择器（单测固化：不随孪生可见性开关）。
+- 动态插件（swr-1/pkg-2）预览确认后落盘。
+
 ## 已知边界
 
 - `button:last-of-type` 依赖 stock 主按钮仍是 `.trailing` 的最后一个直接
-  button 子元素；ui-conversation 结构变更需同步重查该选择器（与桥插件
-  `nth-child` 锚点同性质的声明性假设，README 已注明）。
+  button 子元素；`svg > rect` 依赖停止图标恒为 rect、发送图标恒为 path——
+  ui-conversation 结构变更需同步重查这两条选择器（与桥插件 `nth-child`
+  锚点同性质的声明性假设，README 已注明）。
 - `.row` 在窄卡下 flex-wrap：极端窄宽时 [send][stop] 可能随 `.trailing`
   整组换行——与 stock [model][send] 的换行行为一致，非本插件引入。
 - 按钮点击固定 queue 投递（与 stock 按钮一致）；busyEnter=steer 偏好只

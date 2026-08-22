@@ -77,6 +77,29 @@ test('stylesheet targets only documented seams and stays scoped', () => {
   assert.doesNotMatch(css, /\._/)
 })
 
+test('stop button is red in every state, anchored on the stop glyph', () => {
+  const css = sendWhileRunningCss()
+  // The recolor keys on the stop GLYPH (rect; the send glyph is a path), so
+  // it follows the stock machine and never needs a JS state mirror.
+  assert.match(css, /button:has\(> svg > rect\)/)
+  // Light theme: red-500 base, red-400 hover (stock steps one shade lighter).
+  assert.match(css, /rect\) \{\s*\n\s*background: var\(--dsw-static-red-500\)/)
+  // Dark theme override exists and softens to red-400 on dark surfaces.
+  assert.match(css, /body\[data-ds-dark-theme\][^\{]*rect\) \{\s*\n\s*background: var\(--dsw-static-red-400\)/)
+})
+
+test('stop recolor rule is not gated on the send twin being mounted', () => {
+  const css = sendWhileRunningCss()
+  // The always-red rule must NOT embed the .dsh-send-while-running class in
+  // its selector (that would limit the red to states where the Send twin is
+  // visible); only the glyph anchor and the slot seam scope it.
+  for (const line of css.split('\n')) {
+    if (line.includes('> svg > rect')) {
+      assert.equal(line.includes('.dsh-send-while-running'), false, line)
+    }
+  }
+})
+
 test('stylesheet installer appends and removes the style element', () => {
   class StubStyle {
     textContent: string | null = null

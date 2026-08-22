@@ -59,8 +59,8 @@ if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPa
   throw new Error(`desktop requires dsh-model-image-input 0.1.0, found ${modelImageInputPackage.name}@${modelImageInputPackage.version}`)
 }
 const sendWhileRunningPackage = JSON.parse(readFileSync(resolve(sendWhileRunningDir, 'package.json'), 'utf8'))
-if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.0') {
-  throw new Error(`desktop requires dsh-send-while-running 0.1.0, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
+if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.1') {
+  throw new Error(`desktop requires dsh-send-while-running 0.1.1, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {
