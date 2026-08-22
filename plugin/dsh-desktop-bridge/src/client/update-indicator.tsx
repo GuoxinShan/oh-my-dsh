@@ -21,15 +21,11 @@ const UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
 /** First check delay after mount, beyond the boot request burst. */
 const FIRST_CHECK_DELAY_MS = 3000
 
-/** Shared CSS for the spinner and indeterminate progress track. */
+/** Shared CSS for the busy spinner. */
 const UPDATE_CONTROL_CSS = [
   '@keyframes desktop-update-spin{to{transform:rotate(360deg)}}',
-  '@keyframes desktop-update-indeterminate{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}',
   '[data-desktop-update-spinner]{display:inline-flex;animation:desktop-update-spin .8s linear infinite}',
-  '[data-desktop-update-progress]{position:absolute;left:2px;right:2px;bottom:1px;height:2px;overflow:hidden;border-radius:1px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 18%,transparent);pointer-events:none}',
-  '[data-desktop-update-progress]>span{display:block;height:100%;border-radius:inherit;background:var(--dsw-alias-label-primary)}',
-  '[data-desktop-update-progress][data-indeterminate=""]>span{width:40%;animation:desktop-update-indeterminate 1.1s ease-in-out infinite}',
-  '@media (prefers-reduced-motion:reduce){[data-desktop-update-spinner],[data-desktop-update-progress][data-indeterminate=""]>span{animation:none}[data-desktop-update-progress][data-indeterminate=""]>span{width:100%}}',
+  '@media (prefers-reduced-motion:reduce){[data-desktop-update-spinner]{animation:none}}',
 ].join('')
 
 /** The compact updater button rendered beside the sidebar toggle. */
@@ -178,7 +174,6 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
 
   const busy = isUpdateBusy(status)
   const percent = updatePercent(status)
-  const downloading = status.phase === 'downloading' || status.phase === 'preparing'
   const title = status.phase === 'available'
     ? t('update.available', { version: status.version })
     : status.phase === 'downloading' && percent !== undefined
@@ -211,7 +206,6 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         style={{
           all: 'unset',
           boxSizing: 'border-box',
-          position: 'relative',
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -219,7 +213,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
           height: '22px',
           borderRadius: '6px',
           cursor: busy ? 'default' : 'pointer',
-          opacity: busy ? 0.92 : 1,
+          opacity: busy ? 0.72 : 1,
           color: 'inherit',
           pointerEvents: 'auto',
         }}
@@ -227,19 +221,6 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent' }}
       >
         {icon}
-        {downloading ? (
-          <span
-            data-desktop-update-progress=""
-            {...(percent === undefined ? { 'data-indeterminate': '' } : {})}
-            role="progressbar"
-            aria-label={title}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent}
-          >
-            <span style={percent === undefined ? undefined : { width: `${percent}%` }} />
-          </span>
-        ) : null}
       </button>
       <Modal
         open={confirmOpen && status.phase === 'ready'}
