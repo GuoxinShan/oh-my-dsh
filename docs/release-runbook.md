@@ -60,7 +60,7 @@ git tag dsh-provider-balance-v0.4.2 && git push origin dsh-provider-balance-v0.4
 
 ## 2. 自动更新的接线（已内置，无需操作）
 
-- 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 macOS `dsh-desktop.app.tar.gz` 与 Windows `*-setup.exe`，签名校验用上面的 tauri 私钥对应的公钥；`latest.json` 的 `platforms` 必须同时带上已发布的每一个 OS，缺一项该平台的检查会失败；
+- 壳内 `tauri-plugin-updater` 端点：`releases/latest/download/latest.json`（随包配置）；更新包是 macOS `Oh My DSH.app.tar.gz` 与 Windows `*-setup.exe`，签名校验用上面的 tauri 私钥对应的公钥；`latest.json` 的 `platforms` 必须同时带上已发布的每一个 OS，缺一项该平台的检查会失败；
 - 用户侧：**后台定时检查**（启动 3s 首查，之后每 2h）——macOS 有新版时左上角侧栏开关旁亮出下载图标（收起态 `+` 仍在其右侧），其他平台用右上角 fallback；点击后原位旋转并完成下载与签名校验，再弹确认框，只有确认才安装并自动重启；离线/无端点时入口不出现、完全静默；
 - **GitHub 的 latest 指向**：desktop Release `make_latest: true` 独占 latest；插件 Release 一律 `make_latest: false`（见 §0 的指针纪律）。
 
@@ -73,7 +73,7 @@ export APPLE_SIGNING_IDENTITY="$DSH_CODESIGN_IDENTITY"
 export APPLE_ID="…" APPLE_PASSWORD="…" APPLE_TEAM_ID="…"
 export TAURI_SIGNING_PRIVATE_KEY="$(cat tauri-keys/dsh-desktop.key)"
 pnpm desktop:build
-xcrun notarytool submit src-tauri/target/release/bundle/dmg/dsh-desktop_*_aarch64.dmg \
+xcrun notarytool submit "src-tauri/target/release/bundle/dmg/Oh My DSH_*_aarch64.dmg" \
   --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
 # 上传：Releases 页手动拖 dmg + app.tar.gz + .sig + latest.json
 # （latest.json 用 CI 步骤里那段 node 脚本本地生成）

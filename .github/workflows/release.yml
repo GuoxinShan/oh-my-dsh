@@ -162,15 +162,23 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp src-tauri/target/release/bundle/dmg/*.dmg dist/
-          cp src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz dist/
-          cp src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig dist/
-          SIG=$(cat src-tauri/target/release/bundle/macos/dsh-desktop.app.tar.gz.sig)
+          shopt -s nullglob
+          APP_TARS=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
+          [ "${#APP_TARS[@]}" -eq 1 ] || { echo "::error::expected exactly one macOS updater archive, found ${#APP_TARS[@]}"; exit 1; }
+          APP_TAR=${APP_TARS[0]}
+          APP_TAR_SIG="$APP_TAR.sig"
+          [ -f "$APP_TAR_SIG" ] || { echo "::error::missing updater signature: $APP_TAR_SIG"; exit 1; }
+          cp "$APP_TAR" dist/
+          cp "$APP_TAR_SIG" dist/
+          SIG=$(cat "$APP_TAR_SIG")
+          APP_TAR_NAME=$(basename "$APP_TAR")
+          APP_TAR_URL_NAME=$(node -p "encodeURIComponent(process.argv[1])" "$APP_TAR_NAME")
           REPO="${{ github.repository }}"
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           node -e '
           const [sig, url] = process.argv.slice(1)
           require("fs").writeFileSync("dist/latest-darwin.json", JSON.stringify({ "darwin-aarch64": { signature: sig, url } }, null, 2) + "\n")
-          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/dsh-desktop.app.tar.gz"
+          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/$APP_TAR_URL_NAME"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -342,8 +350,8 @@ jobs:
           make_latest: true
           files: |
             dist/*.dmg
-            dist/dsh-desktop.app.tar.gz
-            dist/dsh-desktop.app.tar.gz.sig
+            dist/*.app.tar.gz
+            dist/*.app.tar.gz.sig
             dist/*-setup.exe
             dist/*-setup.exe.sig
             dist/latest.json

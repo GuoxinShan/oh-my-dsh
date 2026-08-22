@@ -166,7 +166,7 @@ pub fn run() {
                 Ok(BootOutcome::ExitRequested) => app_handle.exit(0),
                 Err(error) => {
                     eprintln!("dsh-desktop: boot failed: {error}");
-                    native_dialog::alert("无法启动 DeepSeek Harness", &error);
+                    native_dialog::alert("无法启动 Oh My DSH", &error);
                     app_handle.exit(1);
                 }
             });
@@ -2178,7 +2178,7 @@ fn open_main_window(app: &tauri::AppHandle, url: &str, e2e: bool) -> Result<(), 
     let load_parsed: tauri::Url = load_url.parse().map_err(|e| format!("parse {load_url}: {e}"))?;
     app.run_on_main_thread(move || {
         let builder = WebviewWindowBuilder::new(&handle, "main", WebviewUrl::External(load_parsed))
-            .title("DeepSeek Harness")
+            .title("Oh My DSH")
             .inner_size(1400.0, 900.0)
             .initialization_script(&init_script);
         // macOS: the traffic lights float over the page and no native title

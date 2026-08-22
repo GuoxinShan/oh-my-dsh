@@ -1,4 +1,4 @@
-# dsh-desktop 打包手册（macOS / Windows）
+# Oh My DSH 打包手册（macOS / Windows）
 
 面向「打出一个能在别的 mac 上跑的安装包」的完整操作指引。改流程先改本文件。
 
@@ -26,8 +26,8 @@ pnpm desktop:build
 
 产物：
 
-- macOS：`src-tauri/target/release/bundle/macos/dsh-desktop.app` 与 `.../dmg/dsh-desktop_<ver>_aarch64.dmg`
-- Windows：`src-tauri/target/release/bundle/nsis/dsh-desktop_<ver>_x64-setup.exe`
+- macOS：`src-tauri/target/release/bundle/macos/Oh My DSH.app` 与 `.../dmg/Oh My DSH_<ver>_aarch64.dmg`
+- Windows：`src-tauri/target/release/bundle/nsis/Oh My DSH_<ver>_x64-setup.exe`
 
 注意：`src-tauri/resources/` 是 gitignored 的再生产物；**裸 `cargo build` 会因 build.rs 校验资源缺失而失败**，必须经 `pnpm desktop:build`（或先 `pnpm run desktop:prepare`）。单独 `cargo check` 前也要先跑一次 prepare。
 
@@ -70,15 +70,15 @@ sidecar runtime 解析顺序（`find_runtime`）：`$DSH_DESKTOP_RUNTIME` → �
 |---|---|
 | runtime 树（未压缩） | ~510 MB（dsh 含 tsx + tools） |
 | runtime.tar.gz（资源） | ~115 MB |
-| dsh-desktop.app | ~121 MB |
-| dsh-desktop_0.1.1_aarch64.dmg | ~113 MB |
+| Oh My DSH.app | ~121 MB |
+| Oh My DSH_0.1.1_aarch64.dmg | ~113 MB |
 
 ## 4. 本机验证
 
 ```sh
 # e2e 冒烟（scratch home，不污染真实 ~/.dsh；探针走 gate→badge DOM→save_file IPC 往返）
 DSH_HOME=$(mktemp -d) DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
-  src-tauri/target/release/bundle/macos/dsh-desktop.app/Contents/MacOS/dsh-desktop
+  "src-tauri/target/release/bundle/macos/Oh My DSH.app/Contents/MacOS/dsh-desktop"
 echo "exit=$?"   # 0 = 通过
 ```
 
@@ -88,7 +88,7 @@ echo "exit=$?"   # 0 = 通过
 mv runtime/build runtime/build.off          # 摘掉 dev 解析路径
 rm -rf ~/.dsh-desktop/runtime               # 摘掉已解压缓存，强制重新解压
 DSH_HOME=$(mktemp -d) DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
-  src-tauri/target/release/bundle/macos/dsh-desktop.app/Contents/MacOS/dsh-desktop
+  "src-tauri/target/release/bundle/macos/Oh My DSH.app/Contents/MacOS/dsh-desktop"
 echo "exit=$?"                               # 0 = 资源分支完整可用
 mv runtime/build.off runtime/build
 ```
@@ -98,7 +98,7 @@ mv runtime/build.off runtime/build
 ```sh
 # 不设 DSH_HOME，用真实 ~/.dsh（含本地源码插件与用户 patch 层）：
 DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
-  src-tauri/target/release/bundle/macos/dsh-desktop.app/Contents/MacOS/dsh-desktop
+  "src-tauri/target/release/bundle/macos/Oh My DSH.app/Contents/MacOS/dsh-desktop"
 ```
 
 首次启动会解压 ~500MB（约十几秒），日志有 `extracted bundled runtime <sha>` 一行。真实 `~/.dsh` 手工过一遍：开窗、建会话、下载桥、外链、通知。
@@ -117,7 +117,7 @@ export APPLE_PASSWORD="<App 专用密码>"      # appleid.apple.com 生成，非
 export APPLE_TEAM_ID="<TEAMID>"
 pnpm desktop:build
 # DMG 单独公证（Tauri 只公证 app）：
-xcrun notarytool submit src-tauri/target/release/bundle/dmg/dsh-desktop_<ver>_aarch64.dmg \
+xcrun notarytool submit "src-tauri/target/release/bundle/dmg/Oh My DSH_<ver>_aarch64.dmg" \
   --apple-id … --password … --team-id … --wait
 ```
 
@@ -161,7 +161,7 @@ pnpm desktop:dev
 
 # 打包（本机组装 Windows runtime，约数分钟到十几分钟）
 pnpm desktop:build
-# 产物：src-tauri/target/release/bundle/nsis/dsh-desktop_*_x64-setup.exe
+# 产物：src-tauri/target/release/bundle/nsis/Oh My DSH_*_x64-setup.exe
 ```
 
 e2e（PowerShell）：
