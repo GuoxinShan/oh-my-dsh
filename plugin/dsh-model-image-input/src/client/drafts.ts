@@ -1,9 +1,10 @@
 /**
- * Pure model-catalog drafting for the image-input section: reading the routes
- * whose user layer owns a `models` array, mapping one row's declared request
- * modalities to and from a tri-state picker value, and folding picker edits
- * into minimal whole-array settings ops. No DOM, no framework, no I/O — every
- * function is total over its input shape and unit-tested in isolation.
+ * Pure drafting logic for the settings-card row injection: mapping one stored
+ * model entry's declared request modalities to and from a tri-state picker
+ * value, fingerprinting the user layer's catalogs, disambiguating which
+ * provider route an on-screen card edits, and building the whole-array write
+ * op. No DOM, no framework, no I/O — every function is total over its input
+ * shape and unit-tested in isolation.
  *
  * @module dsh-model-image-input/drafts
  */
@@ -27,16 +28,6 @@ export interface PiAiUserSection {
   providers?: Record<string, unknown>
 }
 
-/** One provider route whose user layer owns a model catalog. */
-export interface OwnedRoute {
-  /** Route key (`providers.<route>` in settings). */
-  route: string
-  /** Stored display name, falling back to the route key. */
-  displayName: string
-  /** The user-owned rows, records only. */
-  models: ModelEntry[]
-}
-
 /** A path op carrying one route's drafted models array. */
 export interface ModelPathOp {
   op: 'set'
@@ -44,40 +35,24 @@ export interface ModelPathOp {
   value: ModelEntry[]
 }
 
-/** True when the value is a plain record (a row this editor can render). */
-function isRecord(value: unknown): value is ModelEntry {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** A stored display name: a non-empty string after trimming paste artifacts. */
-function displayNameOf(profile: Record<string, unknown>, route: string): string {
-  const value = profile['displayName']
-  return typeof value === 'string' && value.trim().length > 0 ? value : route
-}
+/**
+ * Anchor for one stock model row's id input: the ui-settings-models
+ * dictionaries label them `Model ID <n>` / `模型 ID <n>`. Mirrored copy —
+ * the stock package owns the source; a harness copy change must update this.
+ */
+export const MODEL_ID_ARIA = /^(?:模型 ID|Model ID) \d+$/
 
 /**
- * Extract the routes whose USER layer owns a `models` array — exactly the
- * catalogs this page may edit. Catalog-served routes (no user array) are not
- * listed: their rows belong to the installed catalog, not to settings.
- * @param user - the namespace snapshot's raw user layer.
- * @returns routes in stored order.
+ * The action only the pi-ai model list carries (the DeepSeek catalog editor
+ * has none), which is what tells an injectable card from a DeepSeek card —
+ * the DeepSeek schema has no `input` field, so injecting there would break
+ * that card's saves. Mirrored copy of the stock dictionaries' button labels.
  */
-export function ownedRoutes(user: unknown): OwnedRoute[] {
-  if (!isRecord(user)) return []
-  const providers = user['providers']
-  if (!isRecord(providers)) return []
-  const routes: OwnedRoute[] = []
-  for (const [route, value] of Object.entries(providers)) {
-    if (!isRecord(value)) continue
-    const models = value['models']
-    if (!Array.isArray(models)) continue
-    routes.push({
-      route,
-      displayName: displayNameOf(value, route),
-      models: models.filter(isRecord),
-    })
-  }
-  return routes
+export const FETCH_MODELS_LABELS: readonly string[] = ['获取可用模型', 'Fetch available models']
+
+/** True when the value is a plain record (a row this plugin can read). */
+export function isRecord(value: unknown): value is ModelEntry {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
@@ -112,46 +87,110 @@ export function withChoice(model: ModelEntry, choice: InputChoice): ModelEntry {
 }
 
 /**
- * What a row reads as in the UI: the stored display name, else the id, else a
- * positional label for the not-yet-named row.
- * @param model - one stored row.
- * @param index - zero-based position, used only when neither field names it.
- * @returns the label text.
+ * Fingerprint the user layer: the routes whose `models` array the user owns,
+ * rows kept as records only. The PRESENCE of the array (not its values) is
+ * what marks a catalog editable here — catalog-served routes belong to the
+ * installed catalog, not to settings.
+ * @param user - the namespace snapshot's raw user layer.
+ * @returns route → its stored rows, in stored order.
  */
-export function rowLabel(model: ModelEntry, index: number): string {
-  for (const key of ['name', 'id'] as const) {
-    const value = model[key]
-    if (typeof value === 'string' && value.trim().length > 0) return value
+export function fingerprints(user: unknown): ReadonlyMap<string, readonly ModelEntry[]> {
+  const prints = new Map<string, readonly ModelEntry[]>()
+  if (!isRecord(user)) return prints
+  const providers = user['providers']
+  if (!isRecord(providers)) return prints
+  for (const [route, profile] of Object.entries(providers)) {
+    if (!isRecord(profile)) continue
+    const models = profile['models']
+    if (!Array.isArray(models)) continue
+    prints.set(route, models.filter(isRecord))
   }
-  return `#${String(index + 1)}`
+  return prints
 }
 
 /**
- * Fold every recorded picker edit onto the CURRENT stored arrays, producing
- * one whole-array op per changed route. Reads ride the live snapshot rather
- * than a stale copy, so an externally refreshed catalog is respected; an
- * override equal to what is already stored produces no change.
- * @param routes - the owned routes as the snapshot holds them now.
- * @param overrides - per route, the picked choice per row index (absent or
- *   undefined entries are untouched).
- * @returns ops in route order; empty when nothing would change.
+ * Decide which stored route an on-screen card edits: the card's row ids (its
+ * unsaved draft included) must equal some route's stored id sequence. An
+ * exact unique match names the route; zero matches (a draft the user has
+ * already reshaped, or a preset-catalog card) or an ambiguous one (two routes
+ * shipping identical sequences) both read as "not editable from this card".
+ * @param ids - the card's row ids as shown, in row order.
+ * @param prints - the stored catalogs.
+ * @returns the matched route key, or undefined.
  */
-export function collectOps(
-  routes: readonly OwnedRoute[],
-  overrides: ReadonlyMap<string, readonly (InputChoice | undefined)[]>,
-): ModelPathOp[] {
-  const ops: ModelPathOp[] = []
-  for (const route of routes) {
-    const draft = overrides.get(route.route)
-    if (draft === undefined) continue
-    let changed = false
-    const models = route.models.map((model, index) => {
-      const choice = draft[index]
-      if (choice === undefined || choice === choiceOf(model)) return model
-      changed = true
-      return withChoice(model, choice)
-    })
-    if (changed) ops.push({ op: 'set', path: ['providers', route.route, 'models'], value: models })
+export function matchRoute(
+  ids: readonly string[],
+  prints: ReadonlyMap<string, readonly ModelEntry[]>,
+): string | undefined {
+  const wanted = ids.filter(id => id.length > 0)
+  let hit: string | undefined
+  for (const [route, models] of prints) {
+    const stored = models
+      .map(model => (typeof model['id'] === 'string' ? model['id'] as string : ''))
+      .filter(id => id.length > 0)
+    if (stored.length !== wanted.length) continue
+    let same = true
+    for (let at = 0; at < stored.length; at++) {
+      if (stored[at] !== wanted[at]) {
+        same = false
+        break
+      }
+    }
+    if (!same) continue
+    if (hit !== undefined) return undefined
+    hit = route
   }
-  return ops
+  return hit
+}
+
+/**
+ * The stored row one on-screen row addresses, if any.
+ * @param route - the matched route key.
+ * @param modelId - the row's id as shown.
+ * @param prints - the stored catalogs.
+ * @returns the stored entry, or undefined when either half is missing.
+ */
+export function entryOf(
+  route: string | undefined,
+  modelId: string,
+  prints: ReadonlyMap<string, readonly ModelEntry[]>,
+): ModelEntry | undefined {
+  if (route === undefined || modelId.length === 0) return undefined
+  const models = prints.get(route)
+  if (models === undefined) return undefined
+  return models.find(model => model['id'] === modelId)
+}
+
+/**
+ * Build the whole-array op carrying one picker choice onto a STORED row —
+ * the same write shape the stock Models editor produces. A no-op choice (the
+ * row already declares it) and an absent row (unsaved draft, catalog-served
+ * route, or unknown provider) both produce no op.
+ * @param user - the namespace snapshot's raw user layer.
+ * @param provider - the matched route key.
+ * @param modelId - the row's model id.
+ * @param choice - the picked state.
+ * @returns the op, or undefined when nothing should be written.
+ */
+export function modelOpFor(
+  user: unknown,
+  provider: string,
+  modelId: string,
+  choice: InputChoice,
+): ModelPathOp | undefined {
+  if (!isRecord(user)) return undefined
+  const providers = user['providers']
+  if (!isRecord(providers)) return undefined
+  const profile = providers[provider]
+  if (!isRecord(profile)) return undefined
+  const models = profile['models']
+  if (!Array.isArray(models)) return undefined
+  let changed = false
+  const next = models.map(model => {
+    if (!isRecord(model) || model['id'] !== modelId) return model
+    if (choiceOf(model) === choice) return model
+    changed = true
+    return withChoice(model, choice)
+  })
+  return changed ? { op: 'set', path: ['providers', provider, 'models'], value: next } : undefined
 }

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { apply } from '../src/index.ts'
-import { apply as clientApply, inject } from '../src/client/index.ts'
+import { apply as clientApply, inject, PI_AI_NS } from '../src/client/index.ts'
 import {
-  choiceOf, collectOps, ownedRoutes, rowLabel, withChoice,
+  choiceOf, entryOf, fingerprints, FETCH_MODELS_LABELS, matchRoute, modelOpFor,
+  MODEL_ID_ARIA, withChoice,
 } from '../src/client/drafts.ts'
 import type { InputChoice, ModelEntry } from '../src/client/drafts.ts'
 import { SECTION_CSS, injectStyles } from '../src/client/styles.ts'
@@ -16,7 +17,7 @@ test('host half exports a loadable surface entry', () => {
 test('client half exports a loadable plugin', () => {
   assert.equal(typeof clientApply, 'function')
   assert.ok(Array.isArray(inject))
-  for (const service of ['slots', 'locale', 'settingsScope', 'connection']) {
+  for (const service of ['locale', 'settingsScope', 'connection']) {
     assert.ok(inject.includes(service), `inject must declare ${service}`)
   }
 })
@@ -28,8 +29,20 @@ test('dictionaries share one key set', () => {
 test('stylesheet injects only through --dsw-* tokens', () => {
   assert.equal(typeof SECTION_CSS, 'string')
   assert.ok(!/--[0-9a-f]{6}/i.test(SECTION_CSS), 'no hard-coded colors')
+  assert.ok(!/rgba?\(/i.test(SECTION_CSS), 'no hard-coded rgb colors')
   assert.ok(SECTION_CSS.includes('--dsw-alias-'))
+  assert.ok(SECTION_CSS.includes('--dsw-shadow-lv3'))
   assert.equal(typeof injectStyles(), 'function')
+})
+
+test('anchors mirror the stock dictionaries they must match', () => {
+  assert.equal(MODEL_ID_ARIA.test('模型 ID 3'), true)
+  assert.equal(MODEL_ID_ARIA.test('Model ID 12'), true)
+  assert.equal(MODEL_ID_ARIA.test('显示名称 3'), false)
+  assert.equal(MODEL_ID_ARIA.test('Model ID'), false)
+  for (const label of ['获取可用模型', 'Fetch available models']) {
+    assert.ok(FETCH_MODELS_LABELS.includes(label), label)
+  }
 })
 
 test('choiceOf maps stored declarations to picker choices', () => {
@@ -53,69 +66,87 @@ test('withChoice stores and clears declarations without mutating the row', () =>
   assert.deepEqual(model, { id: 'm', name: 'M', contextWindow: 1024, input: ['text', 'image'] })
 })
 
-test('ownedRoutes lists only user-owned model catalogs', () => {
-  assert.deepEqual(ownedRoutes(undefined), [])
-  assert.deepEqual(ownedRoutes('nope'), [])
-  const user = {
-    providers: {
-      catalog: { displayName: 'Catalog', baseURL: 'https://x' },
-      custom: { displayName: 'Custom', models: [{ id: 'a' }, 'junk', { id: 'b' }] },
+const USER = {
+  providers: {
+    one: {
+      models: [
+        { id: 'a', name: 'A' },
+        { id: 'b', input: ['text'], contextWindow: 4096 },
+        'junk',
+      ],
     },
+    two: { models: [{ id: 'c' }] },
+    presetLike: { baseURL: 'https://x' },
+  },
+}
+
+test('fingerprints lists only user-owned catalogs with record rows', () => {
+  const prints = fingerprints(USER)
+  assert.deepEqual(Array.from(prints.keys()).sort(), ['one', 'two'])
+  assert.deepEqual(prints.get('one'), [
+    { id: 'a', name: 'A' },
+    { id: 'b', input: ['text'], contextWindow: 4096 },
+  ])
+  // Absent section shapes yield an empty map.
+  assert.equal(fingerprints(undefined).size, 0)
+  assert.equal(fingerprints({}).size, 0)
+})
+
+test('matchRoute resolves the unique card whose row ids equal a stored sequence', () => {
+  const prints = fingerprints(USER)
+  assert.equal(matchRoute(['a', 'b'], prints), 'one')
+  // A trailing unsaved blank row is ignored, so saved rows remain editable.
+  assert.equal(matchRoute(['a', 'b', ''], prints), 'one')
+  // A renamed draft row is not editable from this card.
+  assert.equal(matchRoute(['a', 'renamed'], prints), undefined)
+  // Length mismatches never match.
+  assert.equal(matchRoute(['a'], prints), undefined)
+  assert.equal(matchRoute([], prints), undefined)
+  // Two routes shipping the same sequence are ambiguous by design.
+  const ambiguous = new Map([
+    ['x', [{ id: 'a' }, { id: 'b' }]],
+    ['y', [{ id: 'a' }, { id: 'b' }]],
+  ])
+  assert.equal(matchRoute(['a', 'b'], ambiguous), undefined)
+})
+
+test('entryOf finds the stored row a screen row addresses', () => {
+  const prints = fingerprints(USER)
+  assert.deepEqual(entryOf('one', 'b', prints), { id: 'b', input: ['text'], contextWindow: 4096 })
+  assert.equal(entryOf('one', 'zz', prints), undefined)
+  assert.equal(entryOf(undefined, 'a', prints), undefined)
+  assert.equal(entryOf('one', '', prints), undefined)
+})
+
+test('modelOpFor builds whole-array ops and refuses no-ops', () => {
+  // The write targets the stock editor's own path shape.
+  assert.equal(PI_AI_NS, 'llm-pi-ai')
+  // A real change carries every sibling row and field verbatim.
+  const op = modelOpFor(USER, 'one', 'a', 'text,image')
+  assert.deepEqual(op, {
+    op: 'set',
+    path: ['providers', 'one', 'models'],
+    value: [
+      { id: 'a', name: 'A', input: ['text', 'image'] },
+      { id: 'b', input: ['text'], contextWindow: 4096 },
+      'junk',
+    ],
+  })
+  // Restating the stored declaration writes nothing.
+  assert.equal(modelOpFor(USER, 'one', 'b', 'text'), undefined)
+  // Unsaved rows, unknown providers, and absent sections write nothing.
+  assert.equal(modelOpFor(USER, 'one', 'zz', 'text,image'), undefined)
+  assert.equal(modelOpFor(USER, 'presetLike', 'a', 'text,image'), undefined)
+  assert.equal(modelOpFor(undefined, 'one', 'a', 'text,image'), undefined)
+
+  // Clearing a declaration removes only the input key.
+  const cleared = modelOpFor(USER, 'one', 'b', 'inherit')
+  assert.deepEqual(cleared?.value[1], { id: 'b', contextWindow: 4096 })
+})
+
+test('choice round-trips through withChoice for every option', () => {
+  for (const option of ['inherit', 'text', 'text,image'] satisfies readonly InputChoice[]) {
+    const next = withChoice({ id: 'm', name: 'M' }, option)
+    assert.equal(choiceOf(next), option)
   }
-  assert.deepEqual(ownedRoutes(user), [
-    { route: 'custom', displayName: 'Custom', models: [{ id: 'a' }, { id: 'b' }] },
-  ])
-  // No display name stored → the route key names the route.
-  assert.equal(ownedRoutes({ providers: { acme: { models: [] } } })[0]?.displayName, 'acme')
-  // Non-record profiles are skipped, not fatal.
-  assert.deepEqual(
-    ownedRoutes({ providers: { broken: 'nope', good: { models: [] } } }).map(r => r.route),
-    ['good'],
-  )
-})
-
-test('collectOps folds overrides onto the current stored arrays', () => {
-  const routes = ownedRoutes({
-    providers: {
-      one: { models: [{ id: 'a' }, { id: 'b', input: ['text'] }] },
-      two: { models: [{ id: 'c' }] },
-    },
-  })
-  assert.deepEqual(collectOps(routes, new Map()), [])
-
-  // An override restating the stored declaration changes nothing.
-  const one = collectOps(routes, new Map([['one', ['text,image', 'text']]]))
-  assert.equal(one.length, 1)
-  assert.deepEqual(one[0]?.value, [
-    { id: 'a', input: ['text', 'image'] },
-    { id: 'b', input: ['text'] },
-  ])
-
-  // Untouched rows and fields ride along verbatim.
-  const extras = ownedRoutes({
-    providers: { one: { models: [{ id: 'a', name: 'A', contextWindow: 4096 }] } },
-  })
-  assert.deepEqual(collectOps(extras, new Map([['one', ['inherit']]])), [])
-  assert.deepEqual(
-    collectOps(extras, new Map([['one', ['text,image']]]))[0]?.value,
-    [{ id: 'a', name: 'A', contextWindow: 4096, input: ['text', 'image'] }],
-  )
-
-  // One op per changed route, in route order; undefined entries are untouched.
-  const both = collectOps(routes, new Map<string, (InputChoice | undefined)[]>([
-    ['two', ['text,image']],
-    ['one', [undefined, 'inherit']],
-  ]))
-  assert.deepEqual(both.map(op => op.path), [
-    ['providers', 'one', 'models'],
-    ['providers', 'two', 'models'],
-  ])
-  assert.deepEqual(both[0]?.value, [{ id: 'a' }, { id: 'b' }])
-  assert.deepEqual(both[1]?.value, [{ id: 'c', input: ['text', 'image'] }])
-})
-
-test('rowLabel prefers the display name, then the id, then the position', () => {
-  assert.equal(rowLabel({ id: 'm', name: 'M' }, 2), 'M')
-  assert.equal(rowLabel({ id: 'm' }, 2), 'm')
-  assert.equal(rowLabel({}, 2), '#3')
 })

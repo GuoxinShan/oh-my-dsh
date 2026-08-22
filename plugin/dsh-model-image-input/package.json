@@ -1,7 +1,7 @@
 {
   "name": "dsh-model-image-input",
   "version": "0.1.0",
-  "description": "Per-model image-input declarations for custom pi-ai providers, as a Web Settings section",
+  "description": "Per-model image-input controls injected into custom pi-ai model rows in Web Settings",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

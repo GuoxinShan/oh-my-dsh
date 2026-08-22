@@ -1,61 +1,101 @@
-# dsh-model-image-input：自定义供应商的图片输入声明页（2026-08-21）
+# dsh-model-image-input：自定义模型行内图片输入声明（2026-08-21）
 
 ## 需求
 
 设置页「新增供应商」没有暴露「模型是否支持图片」：pi-ai 的 settings schema
-本就接受每模型 `input: ['text','image']` 声明（`llm-pi-ai/src/config.ts` 的
-`modelFields.input`），API 代理也按它拦截图片附件（"does not support image
-input"），但 curated 的 Models 卡片只编辑 id/name/contextWindow/maxTokens。
-系统里没有预置的供应商要开图，只能手改 `settings.yaml`。
+本就接受每模型 `input: ['text','image']` 声明，API 代理也按它拦截图片附件，
+但 curated Models 卡片只编辑 id/name/contextWindow/maxTokens。系统里没有预置的
+供应商要开图，只能手改 `settings.yaml`。
 
-## 决策：出树插件，不动 harness 源码
+用户明确要求最终入口在：**设置 → 模型 → 供应商 → 自定义设置 → 模型列表行**，
+不能新增一个独立设置页，也不要原生 `<select>`。
 
-曾尝试直接改 harness 的 `ui-settings-models`（给 ModelListEditor 行展开区加
-三态 select），已回滚——harness fork 的改动要走「fork 发 zw 层 → bump
-revision → 重组装 runtime → 发 desktop 版」整条链，且污染上游面。而缺的只是
-编辑 UI，能力管道全在 runtime 里现成。`dsh-mcp-settings` 已证明插件可以经
-`settings.section` 槽位给设置面板加自己的页，并用 `settingsScope` /
-`settings.mutate` 读写任意命名空间——于是这成为纯插件方案：
+## 决策：browser-only DOM 注入插件
 
-- **client face**（空 host apply + `exports["./client"]`，脚手架 `--face client`
-  生成）：`ctx.slots.inject('settings.section', ...)` 注册 `model-image-input`
-  页（order 13）；`ctx.settingsScope.bind({ namespace: 'llm-pi-ai' })` 拿响应式
-  快照；写走 `connection.api.settings.mutate` 的整组数组 path op（与 stock
-  Models 编辑器同一路径、同一种 op）。成功写触发 Host 的
-  `settings/document-updated` → 共享 describe mirror 重载 → 本节快照自动刷新，
-  pi-ai adapter 同步重解析路由——**修改即时生效，无需重启**。
-- **编辑面只列用户层拥有 `models` 数组的路由**：正是自定义供应商（「系统里
-  没有预置的」）。目录服务的预置路由不出现——它们的行属于内置目录，不属于
-  settings；若日后要覆盖目录模态，正确姿势是 `modelOverrides`，不是这页。
-- **三态选择器**：跟随提供方默认（不写 `input`；自定义路由默认仅文本）/
-  仅文本（`['text']`，可纠正端点不认的目录图片声明）/ 文本和图片
-  （`['text','image']`）。
-- **编辑态是稀疏覆盖（route→行索引→choice），基面永远是当前快照**：外部改动
-  即时可见，保存时把覆盖折叠到最新存储数组上（`collectOps`），与存储值相等
-  的覆盖不产生写；每条变更路由一个整组 op，批量一次 mutate、revision 栅栏。
+`ui-settings-models` 的 ProviderEditor / ModelListEditor 是 stock 包手写的
+curated 卡片，折叠区内部没有 Slot。精确落在该位置只有两条路：把
+ui-settings-models 加进 fork 修改面，或像既有 `dsh-provider-balance` 一样做纯
+DOM 注入。用户选择后者：零 harness 改动、`plugin add` 即用，接受 stock DOM
+变更时要同步锚点的维护成本。
 
-## 边界与取舍
+`dsh-model-image-input` 是脚手架 `--face client` 生成的 client 插件（空 host
+apply）：
 
-- **不引 ui-primitives 值导入**：published lib 顶层 import `.module.css`，
-  node:test（脚手架基线测试器）无法加载。save 按钮用原生 `<button>` +
-  `.mii-save` 镜像 Button 原子 sm/primary 形态的同名 token 家族
-  （`--dsw-alias-button-primary-fill` 等）。client 半因此回到「零
-  @deepseek-ai 值导入」，bundle 只 require react——纯度门恒过，node:test 可
-  直接 import client 入口做 smoke。
-- **样式走 dsh-desktop-bridge 的 `railCss()` 形态**（CSS 字符串 + 一次性
-  `<style>` 注入，`mii-` 前缀防撞），不用 CSS modules——本包 tsdown 无 CSS
-  管线，脚手架蓝本（branding）用内联样式，桥用注入式样式表；本页有
-  focus/disabled 伪类态，选后者。
-- **写入粒度**：整组 `models` 数组一个 set op（不用数组下标路径 op）——这是
-  stock 编辑器已验证的粒度，schema 对路径深度的接受面以它为准。
-- `dsh.client.inject` 列 runtime/ui-settings/locale/connection 四个平台模块
-  （对齐 dsh-mcp-settings：settingsScope/locale/connection 服务的提供方先于
-  本插件加载）；devDeps 额外钉 `dsh-api-remotes`/`dsh-client-locale`/
-  `dsh-client-ui-settings`（全部 type-only，0.1.1-rc.1 registry 姿态）。
+- 用 MutationObserver 识别 pi-ai ModelListEditor 的已保存模型行；
+- 每行在名称输入与 disclosure 之间插一个 26px 图片按钮；
+- 点击打开自绘菜单：跟随默认 / 仅文本 / 文本 + 图片；
+- `settingsScope` 读 user 层与 revision，`connection.api.settings.mutate` 写整组
+  `providers.<route>.models` 数组 op；settings/document-updated 刷新 scope 后重画
+  图标，立即生效、无需重启。
+
+## DOM 锚点与边界
+
+DOM 注入必须 fail-invisible：锚点失配时不注入、不写入，不猜路由。
+
+- 行锚点：stock 中英文 aria label `Model ID <n>` / `模型 ID <n>`；
+- pi-ai 卡片判别：`Fetch available models` / `获取可用模型` 按钮；DeepSeek
+  编辑器没有该按钮，且其 schema 不支持 `input`，因此天然排除；
+- 路由判别：屏幕模型 ID 序列与 user 层各 route 的已存 `models[].id` 序列做
+  唯一精确匹配；零匹配（未保存/已改草稿/预置目录）或多匹配均只读；尾部空白
+  新行过滤后不影响已保存行。
+
+Stock 卡片另有自己的 React draft。插件写入立即生效，但若用户随后继续在同一
+已打开卡片改其他字段并点 Apply，旧 draft 可能覆盖刚写的 `input`；正确工作流是
+先重开卡片，让 stock draft 读到新声明。该限制记录在 README，不在紧凑弹窗内放
+长说明（会撑大 UI）。
+
+## 弹窗规格
+
+用户实机迭代否决了 264px/220px：桌面 settings 面板靠右，向右下展开会撞壳边界。
+最终规格：
+
+- 固定 **196px**，选项 12px/16px、4px 外 padding、9px 圆角；
+- 右边缘与行按钮右边缘对齐，默认向左生长；
+- append 到 document.body 后读取真实高度，下方放不下则向上翻转；
+- 标题/副标题单行省略；不放底部长说明；
+- 阴影用 `--dsw-shadow-lv3`，颜色只用 `--dsw-*` token；
+- 非原生 select：按钮行 + SVG check + hover/disabled 状态。
+
+## 包边界
+
+- client bundle 零 `@deepseek-ai/*` 值导入；Harness imports 全是 type-only；
+- locale 字典注册、样式、observer、document listeners、injected buttons、popup、
+  settings scope subscription 全绑定当前 fiber disposer；
+- npm registry 姿态：额外 type-only devDeps
+  dsh-api-remotes/dsh-client-locale/dsh-client-ui-settings 均钉 0.1.1-rc.1；
+- `dsh.client.inject` 列 runtime/ui-settings/locale/connection 四个提供方。
+
+## 动态原型记录
+
+会话插件 `mii-1` 验证了几个方向：
+
+1. pkg-1 独立 settings 页（用户否决位置）；
+2. pkg-2/3 composer 模型选择器旁控件（用户再次澄清位置）；
+3. pkg-4 DOM 行内注入（方向确认）；
+4. pkg-5 264px、pkg-6 220px、pkg-7 196px + 向左/上下自适应（宽度定版）；
+5. pkg-8 弹窗滚动跟随（fixed 元素在面板内容滚动时"飘走"的修复）；
+6. pkg-9 双图标状态 + 第五列网格（垃圾桶归位）。
+
+pkg-1 还暴露一个 lifecycle 教训：直接丢弃 `locale.register` disposer 会在 update 后
+留下命名空间，下一版本报 already has locale。后续动态包改为
+`ctx.effect(() => locale.register(...))`；正式包同样全量绑定 fiber。
+
+## 冻结事故：observer 下的非守卫 DOM 写入（pkg-9 实测）
+
+pkg-9 为切换图标在 repaint 里**无条件**重写按钮 `innerHTML`。注入引擎的
+MutationObserver 监听整个 body 子树的 childList——重写 innerHTML 就是
+childList 变更 → observer 再次触发 decorate → decorate 尾部再次 repaint →
+再写 innerHTML……自激发死循环把主线程打满，整个页面点不动（用户实测"点击
+直接卡住"）。pkg-4~8 只写属性（attribute 变更不在 childList 观察范围内）故
+无此问题；双图标一上就爆。
+
+**铁律：凡在 body 级 MutationObserver 回调链里写 DOM，必须守卫式写入——值
+未变化绝不碰 DOM。** 修复后 repaint 对 data-on / dataset.miiIcon+innerHTML /
+aria-label 三处逐一比较后再写；`row.classList.add` 与 `input.dataset.mii`
+标记天然幂等安全。正式包同款守卫。
 
 ## 验证
 
-`pnpm run typecheck` / `pnpm test`（node:test 9 例：三态映射、行重建、ops
-折叠、字典键集、样式 token 纯度）/ `pnpm run build`（0.44 kB host + 19.1 kB
-client closure）/ 实机 scratch-home 挂载（boot graph 含行、`/plugins/
-dsh-model-image-input/client.js` 200）。
+正式包：typecheck、node:test（锚点、模态映射、路由指纹/歧义、整组 op、字典
+键集、样式 token 纯度）、tsdown host/client closure、node --check、scratch-home
+plugin add + boot graph/client.js 200。

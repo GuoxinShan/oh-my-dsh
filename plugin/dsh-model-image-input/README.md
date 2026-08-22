@@ -1,11 +1,13 @@
 # dsh-model-image-input
 
-A Web Settings section that declares, per model, whether a custom provider's
-models accept **image input** — without hand-editing `settings.yaml` and
-without patching the harness. The pi-ai adapter already honors
-`providers.<route>.models[].input` modality declarations (and the API proxy
-refuses image attachments for models without `image` in them); this plugin
-supplies the editing surface the stock Models page lacks.
+A browser-only Web plugin that adds a compact, styled **image input** control
+to every saved custom pi-ai model row inside the stock Models settings card:
+**Settings → Models → provider → Customized settings → Models**. It does not
+add another settings page and does not patch the harness.
+
+The pi-ai adapter already honors `providers.<route>.models[].input` modality
+declarations, and the API proxy rejects image attachments when `image` is not
+declared. This plugin supplies the missing editing surface.
 
 ## Install
 
@@ -13,45 +15,62 @@ supplies the editing surface the stock Models page lacks.
 dsh plugin --profile web add <repo>/plugin/dsh-model-image-input
 ```
 
-The bundle patch mounts the `dsh-model-image-input` row for every profile that installs
-this plugin. Requires the stock Web profile peers (slots / locale /
-connection / ui-settings' settings scope) — any normal `dsh web` deployment
-provides them.
+The bundle patch mounts the `dsh-model-image-input` client row for every Web
+profile that installs the package. It requires the stock locale, connection,
+and ui-settings settings-scope peers supplied by a normal `dsh web` profile.
 
 ## Behavior
 
-- Adds an **Image input** page to the Web Settings panel (bilingual, follows
-  the UI language).
-- Lists exactly the pi-ai routes whose user layer owns a `models` array — the
-  catalogs you configured yourself (custom providers, i.e. "providers the
-  system has no preset for"). Catalog-served preset routes are not listed;
-  their rows belong to the installed catalog.
-- Each row offers a tri-state picker:
-  - **Provider default** — no declaration stored; a custom route's default is
-    text-only.
-  - **Text only** — stores `input: ['text']`; also corrects an inherited
-    image claim your endpoint refuses.
-  - **Text and images** — stores `input: ['text', 'image']`.
-- **Save changes** writes one whole-array op per changed route through
-  `settings.mutate` on the `llm-pi-ai` namespace (revision-fenced), so edits
-  take effect immediately — no restart.
-- Edits are held as sparse per-row overrides against the live settings
-  snapshot; external changes are respected, and an override equal to what is
-  already stored produces no write.
+- Watches the stock Models editor and decorates every saved pi-ai custom-model
+  row with a 26px image icon between the name field and the row disclosure.
+- Clicking the icon opens a custom popup — no native `<select>`:
+  **Provider default**, **Text only**, or **Text + images**, with a check mark
+  on the stored state.
+- The popup is 196px wide, aligns its right edge with the row button so it
+  grows left inside the desktop settings panel, and flips above the button
+  when the rendered height cannot fit below it.
+- An image-capable row uses the product brand color; neutral rows use the
+  stock tertiary label color.
+- Writes one whole `providers.<route>.models` array op through
+  `settings.mutate`, with the namespace revision fence. The adapter updates
+  immediately; no restart and no extra Apply action are required.
+- Only user-owned catalogs are writable. New unsaved rows and catalog-served
+  preset routes stay read-only until the card is saved/reopened.
 
-## Client half
+## Known DOM Contract
 
-`lib/client.js` is the ModuleLoader closure artifact (window.__ModuleLoader__
-.load) with platform modules externalized — the build contract lives in this
-package's `tsdown.config.ts`; keep `CLIENT_EXTERNALS` in sync with the
-harness `PLATFORM_MODULES` baseline when it moves.
+The stock `ui-settings-models` provider card exposes no slot inside its
+hand-written Customized settings fold. This plugin therefore follows the
+existing `dsh-provider-balance` DOM-injection posture. It identifies rows by
+both of these stock anchors:
 
-## Design notes
+- `Model ID <n>` / `模型 ID <n>` input aria labels;
+- the pi-ai-only `Fetch available models` / `获取可用模型` action, which
+  excludes the DeepSeek catalog editor (its schema has no `input` field).
 
-- Decision record: `docs/notes/2026-08-21-dsh-model-image-input.md` (repo root).
-- Contracts live in the repo root `AGENTS.md` (plugin monorepo rules, npm
-  dependency discipline, client bundle build contract).
-- The section reads the raw **user layer** of the namespace (a route's
-  `models` presence there is what marks the catalog user-owned) and writes
-  the same whole-array path ops the stock Models editor produces — it never
-  patches harness behavior, only edits settings through `ctx` services.
+A harness UI copy or structure change may silence the injection; update the
+anchors in `src/client/drafts.ts` when that happens. Failure is invisible and
+non-destructive — no matching row means no injected control and no write.
+
+The control writes immediately while the stock card owns a separate React
+draft. If you change image input and then edit other fields in the already-open
+card, reopen the card before pressing Apply so its draft includes the new
+`input` declaration.
+
+## Client Half
+
+`lib/client.js` is the ModuleLoader closure artifact
+(`window.__ModuleLoader__.load`) with platform modules externalized. The
+client bundle carries no `@deepseek-ai/*` value imports; cross-package work
+go through Cordis services and all Harness imports are type-only.
+
+## Development
+
+```sh
+pnpm install
+pnpm run typecheck
+pnpm test
+pnpm run build
+```
+
+Decision record: `docs/notes/2026-08-21-dsh-model-image-input.md`.
