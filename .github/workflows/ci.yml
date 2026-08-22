@@ -130,6 +130,8 @@ jobs:
           DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm --dir plugin/dsh-desktop-bridge run setup
           pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
           pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
+          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile
+          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile
       - name: Prepare bundle resources
         run: pnpm run desktop:prepare
       - name: cargo check
@@ -151,6 +153,8 @@ jobs:
           : > src-tauri/resources/bridge.tar.gz
           : > src-tauri/resources/compaction-hierarchical.tar.gz
           : > src-tauri/resources/web-search-toggle.tar.gz
+          : > src-tauri/resources/model-image-input.tar.gz
+          : > src-tauri/resources/send-while-running.tar.gz
           echo '{}' > src-tauri/resources/runtime-revision.json
       - name: cargo test
         working-directory: src-tauri
