@@ -371,6 +371,31 @@ test('output reserve incompatible with the summary model fails before streaming'
   assert.equal(adapter.calls.length, 0)
 })
 
+test('a single map result does not require an unused reduce reserve', async () => {
+  const ctx = new Context()
+  void new LlmRuntime(ctx)
+  void new TokenMeter(ctx)
+  const adapter = new SummaryAdapter(1000)
+  ctx.llm.registerAdapter([PROVIDER], adapter)
+  const engine = new ExposedEngine(ctx, {
+    auto: false,
+    summarizationProvider: PROVIDER,
+    summarizationModel: MODEL,
+    chunkInputRatio: 0.5,
+    maxTokens: 900,
+    mapMaxTokens: 100,
+    reduceMaxTokens: 600,
+  })
+  const agent = {
+    session: Session.create(SessionId('single-map-reserve')),
+    options: { provider: PROVIDER, model: MODEL },
+  } as Agent
+  const result = await engine.run([user('small')], agent)
+  assert.equal(adapter.calls.length, 1)
+  assert.equal(result.llmStreamCall, true)
+  assert.equal(result.maxTokens, 100)
+})
+
 test('a model-specific one-shot cap that cannot fit routes directly to hierarchy', async () => {
   const ctx = new Context()
   void new LlmRuntime(ctx)

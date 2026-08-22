@@ -134,7 +134,12 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
       )
     }
     const inputBudget = Math.floor(contextWindow * this.hierarchy.chunkInputRatio)
-    this.assertHierarchyOutputReserve(contextWindow, inputBudget)
+    this.assertStageOutputReserve(
+      contextWindow,
+      inputBudget,
+      this.hierarchy.mapMaxTokens,
+      'map',
+    )
 
     const estimate = (message: Message): number => this.ctx.tokenMeter.estimateMessage(message)
     const units = toolBalancedUnits(input.messages)
@@ -204,6 +209,14 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
       }
     }
     this.assertCoverage(partials, totalUnits, 'map stage')
+    if (partials.length > 1) {
+      this.assertStageOutputReserve(
+        contextWindow,
+        inputBudget,
+        this.hierarchy.reduceMaxTokens,
+        'reduce',
+      )
+    }
 
     let usedReduce = false
     for (let round = 1; partials.length > 1; round += 1) {
@@ -414,18 +427,16 @@ export class HierarchicalCompactionEngine extends BasicCompactionEngine {
     }
   }
 
-  /** Ensure the hierarchy generation caps fit outside its input budget. */
-  private assertHierarchyOutputReserve(
+  /** Ensure one stage generation cap fits outside its input budget. */
+  private assertStageOutputReserve(
     contextWindow: number,
     inputBudget: number,
+    outputTokens: number,
+    stage: string,
   ): void {
-    const outputTokens = Math.max(
-      this.hierarchy.mapMaxTokens,
-      this.hierarchy.reduceMaxTokens,
-    )
     if (inputBudget + outputTokens > contextWindow) {
       throw new Error(
-        `hierarchical compaction: input budget ${inputBudget} plus output reserve ${outputTokens} `
+        `hierarchical compaction: ${stage} input budget ${inputBudget} plus output reserve ${outputTokens} `
         + `exceeds summary context ${contextWindow}`,
       )
     }

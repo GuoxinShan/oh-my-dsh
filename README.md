@@ -33,7 +33,7 @@ dsh plugin --profile web add <name>                 # mcp-settings 与 provider-
 |---|---|
 | [`dsh-desktop-bridge`](plugin/dsh-desktop-bridge) | 桌面集成桥：外链走系统浏览器、后台完成/等待输入的原生通知、下载保存、macOS 融合标题栏与应用内更新入口；非桌面环境自动静默 |
 | [`dsh-branding`](plugin/dsh-branding) | 侧栏品牌字标替换为 "Oh My DSH"，浏览器标题同步重写 |
-| [`dsh-compaction-hierarchical`](plugin/dsh-compaction-hierarchical) | 分层压缩长会话历史：小上下文模型也能整理超长对话 |
+| [`dsh-compaction-hierarchical`](plugin/dsh-compaction-hierarchical) | 官方 upstream 与既有用户 preset 的分层压缩兼容 Provider；Oh My DSH 默认由 fork stock basic 自动处理超长历史 |
 | [`dsh-fs-observation-log`](plugin/dsh-fs-observation-log) | 持久化文件观察记录并在重启后恢复，减少编辑前不必要的重复读取 |
 | [`dsh-mcp-settings`](plugin/dsh-mcp-settings) | Web 设置中的 MCP 服务器管理页：编辑、启停、连接状态 |
 | [`dsh-model-image-input`](plugin/dsh-model-image-input) | 在模型设置的每一行内为自定义模型开启图片输入 |

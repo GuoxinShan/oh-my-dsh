@@ -24,7 +24,7 @@ import { execNpm, execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 7
+const SCRIPT_REV = 8
 const cacheToken = `${SCRIPT_REV} ${process.platform} ${process.arch}`
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -96,17 +96,17 @@ const skipped = []
 // Fork-modified packages ship as npm releases under the fork scope (FORK.md
 // 「发布纪律」); the runtime consumes those published versions instead of
 // packing the clone — same bytes the world can install, one provenance.
-// Source of truth: fork repo FORK.md (the source packages of
-// `git diff upstream/master..master`). `dsh-client-ui-settings-models` was
-// retired by revert ffffaf39 and removed here on 2026-08-20. `dsh-tool-cordis`
-// joined on 2026-08-21: its generated api-catalog drifted with the fork's
-// service/event additions, so zw.2+ publishes it (it was already on npm in
-// zw.2; consuming it here closes the hoist/peer leak the fail-loud scan
-// could not see).
+// Source of truth: fork repo FORK.md (`node scripts/publish-fork.mjs --list`).
+// `dsh-client-ui-settings-models` was retired by revert ffffaf39 and removed
+// here on 2026-08-20. `dsh-tool-cordis` joined on 2026-08-21 to close its
+// generated catalog drift. `dsh-compaction-basic` joins in zw.2 on 2026-08-22:
+// the stock Provider now owns the bounded hierarchy fallback used by every
+// shipped preset.
 const FORK_MODIFIED = new Set([
   '@deepseek-ai/dsh-agent-default-model',
   '@deepseek-ai/dsh-client-modules',
   '@deepseek-ai/dsh-client-ui-model-selection',
+  '@deepseek-ai/dsh-compaction-basic',
   '@deepseek-ai/dsh-host-apiproxy',
   '@deepseek-ai/dsh-host-frontend-static',
   '@deepseek-ai/dsh-mcp-client',

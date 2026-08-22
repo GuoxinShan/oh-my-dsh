@@ -131,7 +131,7 @@ test('failed auto-download keeps a retry entry that rechecks then downloads', as
   expect(update.installUpdate).not.toHaveBeenCalled()
 })
 
-test('download progress renders a determinate bar from status bytes', async () => {
+test('download progress keeps the compact spinner without a progress bar', async () => {
   const initial = deferred<unknown>()
   let generation = 0
   let snapshot: DesktopUpdateStatus = {
@@ -156,9 +156,8 @@ test('download progress renders a determinate bar from status bytes', async () =
   await waitFor(() => { expect(screen.getByRole('button', { name: progressTitle })).toBeTruthy() })
   const button = screen.getByRole('button', { name: progressTitle })
   expect(button.style.width).toBe('22px')
-  const bar = within(button).getByRole('progressbar')
-  expect(bar.getAttribute('aria-valuenow')).toBe('25')
-  const fill = bar.querySelector('span') as HTMLElement | null
-  expect(fill?.style.width).toBe('25%')
+  expect(button.querySelector('[data-desktop-update-spinner]')).toBeTruthy()
+  expect(within(button).queryByRole('progressbar')).toBeNull()
+  expect(button.querySelector('[data-desktop-update-progress]')).toBeNull()
   expect(update.downloadUpdate).not.toHaveBeenCalled()
 })

@@ -1,6 +1,49 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveHierarchyConfig } from '../src/config.ts'
+import { basicConfig, basicSupportsHierarchy, resolveHierarchyConfig } from '../src/config.ts'
+
+test('pre-hierarchy basic strips fields its strict resolver rejects', () => {
+  const schema = { dict: { thresholdRatio: {} } }
+  assert.equal(basicSupportsHierarchy(schema), false)
+  assert.deepEqual(basicConfig({
+    thresholdRatio: 0.7,
+    chunkInputRatio: 0.5,
+    mapMaxTokens: 512,
+    reduceMaxTokens: 768,
+    maxDepth: 3,
+    replayTools: true,
+  }, schema), {
+    thresholdRatio: 0.7,
+  })
+})
+
+test('hierarchy-aware basic receives the compatibility provider policy', () => {
+  const schema = {
+    dict: {
+      chunkInputRatio: {},
+      mapMaxTokens: {},
+      reduceMaxTokens: {},
+      maxDepth: {},
+      replayTools: {},
+    },
+  }
+  const config = {
+    thresholdRatio: 0.7,
+    chunkInputRatio: 0.5,
+    mapMaxTokens: 512,
+    reduceMaxTokens: 768,
+    maxDepth: 3,
+    replayTools: true,
+  }
+  assert.equal(basicSupportsHierarchy(schema), true)
+  assert.deepEqual(basicConfig(config, schema), config)
+})
+
+test('partial hierarchy schema support fails closed to legacy basic fields', () => {
+  const schema = { dict: { chunkInputRatio: {}, mapMaxTokens: {} } }
+  assert.equal(basicSupportsHierarchy(schema), false)
+  assert.deepEqual(basicConfig({ chunkInputRatio: 0.5, mapMaxTokens: 512 }, schema), {})
+})
 
 test('hierarchy config resolves conservative defaults', () => {
   assert.deepEqual(resolveHierarchyConfig(), {
