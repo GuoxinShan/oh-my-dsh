@@ -2,11 +2,17 @@
 
 DSH 的 host-only 分块压缩 Provider，用较小上下文模型接管较大模型积累的长会话。
 
+## 发行定位
+
+Oh My DSH `v0.2.0-rc.17` 起使用的 fork 已把自动有界层次压缩并入 stock `@deepseek-ai/dsh-compaction-basic`，因此 shipped preset 保持原 Provider 行即可获得同类恢复能力，不再依赖本插件作为默认后端。本包继续发布并由 Desktop 安装，服务两个兼容场景：尚未合入该修复的官方 upstream 安装，以及已经在用户自有 preset 中显式引用 `dsh-compaction-hierarchical` 的现有配置。Desktop 只保证 Loader 仍能解析这些引用，不会重写或删除用户 `.agent-presets`。
+
+新建 Oh My DSH preset 不需要替换 stock Provider；官方 upstream 用户或需要保留显式 Provider 身份的用户仍可按下文安装。完整输入可放入窗口时，两条实现都优先保留 stock 单次摘要路径。
+
 ## 行为
 
 插件继承 `@deepseek-ai/dsh-compaction-basic`，保留其 token 压力策略、近期尾部保留、工具结果剪枝、持久锁、表层替换、失败回滚、`/compact` 和 `CONTEXT_WINDOW_EXCEEDED` 自动恢复。唯一变化是摘要阶段：完整输入能放进摘要模型预算时仍走 basic 的一次调用；超出预算时按完整消息和工具调用/结果边界切块，依次生成结构化局部检查点，再递归归并为一个最终检查点。Provider 若仍判定某个 map/reduce span 超窗，插件会只二分失败 span 并保留已成功的兄弟结果，直到调用成功或定位到一个不可再拆的原子单元。
 
-除可自适应恢复的 Provider 超窗外，任一 map/reduce 调用失败、输出截断、缺少固定章节、无法组合局部摘要或超过递归深度时，摘要事务失败关闭，原会话表层保持不变。reduce 二分若不能减少 partial 数量也会立即失败，避免无进展重试。可选的 stock tool-result pruner 若已在摘要前落地，其持久替换仍按 basic 的既有语义保留。
+除可自适应恢复的 Provider 超窗外，任一 map/reduce 调用失败、输出截断、缺少固定章节、无法组合局部摘要或超过递归深度时，摘要事务失败关闭，原会话表层保持不变。reduce 二分若不能减少 partial 数量也会立即失败，避免无进展重试。可选的 stock tool-result pruner 若已在摘要前落地，其持久替换仍按 basic 的既有语义保留。运行在已经声明 hierarchy 配置字段的新版 stock basic 上时，本插件会把五个 hierarchy 字段完整传给 superclass，保证其内部 overflow fallback 仍遵守现有用户 preset 的调优值；旧版 official basic 不认识这些字段时则继续剥离，避免其严格配置解析报错。
 
 ## 安装与激活
 
@@ -69,7 +75,7 @@ dsh plugin --profile web add "$PWD"
 | `maxDepth` | `4` | map 之后最多递归归并轮数，范围 `1..8`。 |
 | `replayTools` | `false` | 是否在每个分块调用中重复发送原工具 schema；默认不发送以释放预算，消息中的历史 tool call/result 仍原样保留。 |
 
-`summarizationProvider` 和 `summarizationModel` 建议显式指向接管会话的模型或专用摘要模型。插件会查询该模型声明的 `contextWindow`；缺失容量时 fail loud。`chunkInputRatio × contextWindow + max(mapMaxTokens, reduceMaxTokens)` 不得超过 context window。
+`summarizationProvider` 和 `summarizationModel` 建议显式指向接管会话的模型或专用摘要模型。插件会查询该模型声明的 `contextWindow`；缺失容量时 fail loud。map 开始前要求 `chunkInputRatio × contextWindow + mapMaxTokens` 不超过 context window；只有 map 产生多个 partial、确实需要 reduce 时，才另外要求同一输入预算加 `reduceMaxTokens` 仍能放入窗口。
 
 ## 模型与 Token 影响
 

@@ -39,15 +39,37 @@ export const Config = z.intersect([
   }),
 ]) as unknown as z<HierarchicalCompactionConfig>
 
+const HIERARCHY_FIELDS = [
+  'chunkInputRatio',
+  'mapMaxTokens',
+  'reduceMaxTokens',
+  'maxDepth',
+  'replayTools',
+] as const
+
+interface ObjectSchema {
+  readonly dict?: Readonly<Record<string, unknown>>
+}
+
+/** Detect whether the installed stock Provider owns the hierarchy contract. */
+export function basicSupportsHierarchy(schema: ObjectSchema): boolean {
+  const dict = schema.dict
+  return dict !== undefined
+    && HIERARCHY_FIELDS.every(field => Object.hasOwn(dict, field))
+}
+
 /**
- * Remove subclass-only fields before stock basic config validation.
+ * Adapt subclass fields to both pre-hierarchy upstream and hierarchy-aware stock.
  * @param config - complete hierarchical plugin configuration.
- * @returns the exact field set accepted by BasicCompactionEngine.
+ * @param schema - installed BasicCompactionEngine configuration schema.
+ * @returns hierarchy fields only when the superclass can honor all of them.
  */
 export function basicConfig(
   config: HierarchicalCompactionConfig,
+  schema: ObjectSchema = BasicCompactionEngine.Config as unknown as ObjectSchema,
 ): BasicCompactionConfig {
   const base = { ...config }
+  if (basicSupportsHierarchy(schema)) return base
   delete base.chunkInputRatio
   delete base.mapMaxTokens
   delete base.reduceMaxTokens
