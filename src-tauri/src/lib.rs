@@ -29,6 +29,7 @@ mod win;
 const BRIDGE_PACKAGE: &str = "dsh-desktop-bridge";
 const COMPACTION_PACKAGE: &str = "dsh-compaction-hierarchical";
 const WEB_SEARCH_TOGGLE_PACKAGE: &str = "dsh-web-search-toggle";
+const MODEL_IMAGE_INPUT_PACKAGE: &str = "dsh-model-image-input";
 const MISSING_RESTORE_SOURCE: &str = "[missing-web-profile]";
 const COMPACTION_RUNTIME_PEERS: &[&str] = &[
     "@deepseek-ai/cordis",
@@ -276,6 +277,7 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<BootOutcome, String> {
     let bridge = find_bridge(app)?;
     let compaction = find_compaction_plugin(app)?;
     let web_search_toggle = find_web_search_toggle_plugin(app)?;
+    let model_image_input = find_model_image_input_plugin(app)?;
 
     // Reap sidecars orphaned by a previous shell before adding our own:
     // a `tauri dev` watcher restart SIGKILLs the app outright (see the
@@ -296,6 +298,7 @@ fn boot_sequence(app: &tauri::AppHandle) -> Result<BootOutcome, String> {
         (bridge.as_path(), BRIDGE_PACKAGE),
         (compaction.as_path(), COMPACTION_PACKAGE),
         (web_search_toggle.as_path(), WEB_SEARCH_TOGGLE_PACKAGE),
+        (model_image_input.as_path(), MODEL_IMAGE_INPUT_PACKAGE),
     ];
     let outcome = install_with_profile_repair(
         &runtime,
@@ -411,13 +414,14 @@ fn prepare_profile_adoption(
             "继续"
         };
         let message = format!(
-            "检测到现有 DSH 数据目录：{}\n\n其中有 {} 个 Web Profile 插件、{} 个 Agent 预设。Desktop 与终端 DSH 将共享该目录。\n\n继续后只会更新 Web Profile，添加或刷新 {}、{} 和 {}。现有会话、凭据、设置、Agent 预设、其他 Profile 与其他插件都会保留。{}",
+            "检测到现有 DSH 数据目录：{}\n\n其中有 {} 个 Web Profile 插件、{} 个 Agent 预设。Desktop 与终端 DSH 将共享该目录。\n\n继续后只会更新 Web Profile，添加或刷新 {}、{}、{} 和 {}。现有会话、凭据、设置、Agent 预设、其他 Profile 与其他插件都会保留。{}",
             summary.canonical_home.display(),
             summary.plugins.len(),
             summary.agent_preset_count,
             BRIDGE_PACKAGE,
             COMPACTION_PACKAGE,
             WEB_SEARCH_TOGGLE_PACKAGE,
+            MODEL_IMAGE_INPUT_PACKAGE,
             backup_note,
         );
         match native_dialog::choose(&native_dialog::ChoiceSpec {
@@ -1272,6 +1276,67 @@ fn find_web_search_toggle_plugin(app: &tauri::AppHandle) -> Result<PathBuf, Stri
     }
     Err(format!(
         "Web Search toggle package not found at {} (set DSH_DESKTOP_WEB_SEARCH_TOGGLE_PLUGIN)",
+        dev.display()
+    ))
+}
+
+/// The model image-input package: an explicit override, the release resource
+/// extracted under the shell-private plugin root, or the dev tree. Unlike the
+/// other bundled plugins it needs no runtime peer links: its client bundle
+/// carries zero `@deepseek-ai/*` value imports and its host half is empty.
+fn find_model_image_input_plugin(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(from_env) = std::env::var("DSH_DESKTOP_MODEL_IMAGE_INPUT_PLUGIN") {
+        let path = PathBuf::from(from_env);
+        if path.join("package.json").is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "DSH_DESKTOP_MODEL_IMAGE_INPUT_PLUGIN={} has no package.json",
+            path.display()
+        ));
+    }
+    if let Ok(resources) = app.path().resource_dir() {
+        let tar = resources.join("resources/model-image-input.tar.gz");
+        if tar.is_file() {
+            let dir = shell_root()?
+                .join("plugins")
+                .join(MODEL_IMAGE_INPUT_PACKAGE);
+            let hash = fs::read_to_string(resources.join("resources/runtime-revision.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|value| {
+                    value
+                        .get("modelImageInputTarball")
+                        .and_then(|item| item.as_str())
+                        .map(str::to_string)
+                });
+            let fresh = hash
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    dir.join(".ok").is_file()
+                        && fs::read_to_string(dir.join(".ok"))
+                            .map(|text| text.trim() == value)
+                            .unwrap_or(false)
+                })
+                .unwrap_or_else(|| dir.join("package.json").is_file());
+            if !fresh {
+                extract_bundle_tar(&tar, &dir, "package.json", hash.as_deref().unwrap_or(""))?;
+                println!(
+                    "dsh-desktop: extracted bundled {} to {}",
+                    MODEL_IMAGE_INPUT_PACKAGE,
+                    dir.display()
+                );
+            }
+            return Ok(dir);
+        }
+    }
+    let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin/dsh-model-image-input");
+    if dev.join("package.json").is_file() {
+        return Ok(dev);
+    }
+    Err(format!(
+        "Model image-input package not found at {} (set DSH_DESKTOP_MODEL_IMAGE_INPUT_PLUGIN)",
         dev.display()
     ))
 }
