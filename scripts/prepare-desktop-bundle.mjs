@@ -19,6 +19,7 @@
  *   src-tauri/resources/compaction-hierarchical.tar.gz (host plugin package)
  *   src-tauri/resources/web-search-toggle.tar.gz (host + client plugin package)
  *   src-tauri/resources/model-image-input.tar.gz (client-only plugin package)
+ *   src-tauri/resources/send-while-running.tar.gz (client-only plugin package)
  *   src-tauri/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
  * `src-tauri/resources/` is gitignored — regenerated per build via
@@ -38,6 +39,7 @@ const bridgeDir = resolve(repoRoot, 'plugin/dsh-desktop-bridge')
 const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
 const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
 const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
+const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
 const resourcesDir = resolve(repoRoot, 'src-tauri/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
@@ -46,6 +48,7 @@ const bridgeTar = resolve(resourcesDir, 'bridge.tar.gz')
 const compactionTar = resolve(resourcesDir, 'compaction-hierarchical.tar.gz')
 const webSearchToggleTar = resolve(resourcesDir, 'web-search-toggle.tar.gz')
 const modelImageInputTar = resolve(resourcesDir, 'model-image-input.tar.gz')
+const sendWhileRunningTar = resolve(resourcesDir, 'send-while-running.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
 if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.3') {
@@ -54,6 +57,10 @@ if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePa
 const modelImageInputPackage = JSON.parse(readFileSync(resolve(modelImageInputDir, 'package.json'), 'utf8'))
 if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPackage.version !== '0.1.0') {
   throw new Error(`desktop requires dsh-model-image-input 0.1.0, found ${modelImageInputPackage.name}@${modelImageInputPackage.version}`)
+}
+const sendWhileRunningPackage = JSON.parse(readFileSync(resolve(sendWhileRunningDir, 'package.json'), 'utf8'))
+if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.0') {
+  throw new Error(`desktop requires dsh-send-while-running 0.1.0, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {
@@ -92,7 +99,7 @@ function sha256(path) {
 // 1. Desktop-owned plugins: verify and build the exact packages bundled below.
 console.log('prepare-desktop-bundle: building desktop plugins...')
 run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir]) {
+for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir]) {
   for (const script of ['typecheck', 'test', 'build']) {
     run(pnpm, ['run', script], { cwd: pluginDir })
   }
@@ -198,6 +205,13 @@ tarCreate(modelImageInputTar, modelImageInputDir, [
   'lib',
 ])
 console.log(`prepare-desktop-bundle: model-image-input.tar.gz ${mb(modelImageInputTar)} MB`)
+tarCreate(sendWhileRunningTar, sendWhileRunningDir, [
+  'package.json',
+  'cordis.patch.yml',
+  'README.md',
+  'lib',
+])
+console.log(`prepare-desktop-bundle: send-while-running.tar.gz ${mb(sendWhileRunningTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
 // plus content hashes of every tarball. Each extraction .ok marker stores its
@@ -211,6 +225,8 @@ const manifest = {
   webSearchToggleTarball: await sha256(webSearchToggleTar),
   modelImageInputVersion: modelImageInputPackage.version,
   modelImageInputTarball: await sha256(modelImageInputTar),
+  sendWhileRunningVersion: sendWhileRunningPackage.version,
+  sendWhileRunningTarball: await sha256(sendWhileRunningTar),
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)

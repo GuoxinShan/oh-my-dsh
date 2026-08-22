@@ -113,6 +113,8 @@ jobs:
           pnpm --dir plugin/dsh-desktop-bridge install
           pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
           pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
+          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile
+          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile
 
       - name: Build signed + notarized bundle
         env:
@@ -240,6 +242,8 @@ jobs:
           pnpm --dir plugin/dsh-desktop-bridge install
           pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
           pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
+          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile
+          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile
 
       # NOTE: the certificate presence check lives INSIDE the script — the
       # `secrets` context is not allowed in a step-level `if:` (GitHub rejects
