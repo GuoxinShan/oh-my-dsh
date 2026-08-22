@@ -1,6 +1,6 @@
 {
   "name": "dsh-send-while-running",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH web plugin: keeps a Send button beside the Stop button in the composer while the agent turn is running and the draft has content, so pointer users can queue follow-ups without the keyboard",
   "type": "module",
   "main": "lib/index.js",
