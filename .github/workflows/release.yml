@@ -161,18 +161,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp src-tauri/target/release/bundle/dmg/*.dmg dist/
           shopt -s nullglob
+          DMGS=(src-tauri/target/release/bundle/dmg/*.dmg)
+          [ "${#DMGS[@]}" -eq 1 ] || { echo "::error::expected exactly one macOS DMG, found ${#DMGS[@]}"; exit 1; }
+          DMG_NAME=$(basename "${DMGS[0]}")
+          DMG_ASSET_NAME=${DMG_NAME// /.}
+          cp "${DMGS[0]}" "dist/$DMG_ASSET_NAME"
           APP_TARS=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
           [ "${#APP_TARS[@]}" -eq 1 ] || { echo "::error::expected exactly one macOS updater archive, found ${#APP_TARS[@]}"; exit 1; }
           APP_TAR=${APP_TARS[0]}
           APP_TAR_SIG="$APP_TAR.sig"
           [ -f "$APP_TAR_SIG" ] || { echo "::error::missing updater signature: $APP_TAR_SIG"; exit 1; }
-          cp "$APP_TAR" dist/
-          cp "$APP_TAR_SIG" dist/
-          SIG=$(cat "$APP_TAR_SIG")
           APP_TAR_NAME=$(basename "$APP_TAR")
-          APP_TAR_URL_NAME=$(node -p "encodeURIComponent(process.argv[1])" "$APP_TAR_NAME")
+          APP_TAR_ASSET_NAME=${APP_TAR_NAME// /.}
+          cp "$APP_TAR" "dist/$APP_TAR_ASSET_NAME"
+          cp "$APP_TAR_SIG" "dist/$APP_TAR_ASSET_NAME.sig"
+          SIG=$(cat "$APP_TAR_SIG")
+          APP_TAR_URL_NAME=$(node -p "encodeURIComponent(process.argv[1])" "$APP_TAR_ASSET_NAME")
           REPO="${{ github.repository }}"
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           node -e '
@@ -288,16 +293,18 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           EXE=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
-          cp "$EXE" dist/
-          cp "$EXE.sig" dist/
-          SIG=$(tr -d '\r' < "$EXE.sig")
           BASENAME=$(basename "$EXE")
+          ASSET_NAME=${BASENAME// /.}
+          cp "$EXE" "dist/$ASSET_NAME"
+          cp "$EXE.sig" "dist/$ASSET_NAME.sig"
+          SIG=$(tr -d '\r' < "$EXE.sig")
           REPO="${{ github.repository }}"
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          ASSET_URL_NAME=$(node -p "encodeURIComponent(process.argv[1])" "$ASSET_NAME")
           node -e '
           const [sig, url] = process.argv.slice(1)
           require("fs").writeFileSync("dist/latest-windows.json", JSON.stringify({ "windows-x86_64": { signature: sig, url } }, null, 2) + "\n")
-          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/$BASENAME"
+          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/$ASSET_URL_NAME"
 
       - uses: actions/upload-artifact@v4
         with:
