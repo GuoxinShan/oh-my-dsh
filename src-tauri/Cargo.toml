@@ -25,14 +25,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 libc = "0.2"
 
 # Already in the dependency tree via tao/wry; a direct reference costs no
-# extra compile. Used for the two AppKit adjustments Overlay windows still
-# need: hiding the painted title (`NSWindowTitleVisibility::Hidden`) without
-# losing the title string (Mission Control, the Window menu), and dropping
-# the traffic-light row onto the bridge plugin's band-toggle line
-# (`standardWindowButton` frame origins; NSButton→NSControl→NSView chain).
+# extra compile. Used for the AppKit adjustments Overlay windows still need:
+# hiding the painted title (`NSWindowTitleVisibility::Hidden`) without losing
+# the title string (Mission Control, the Window menu), dropping the
+# traffic-light row onto the bridge plugin's band-toggle line
+# (`standardWindowButton` frame origins; NSButton→NSControl→NSView chain),
+# and pinning the WKWebView's internal scroll view content insets to zero
+# (NSScrollView `automaticallyAdjustsContentInsets`) so the titlebar height
+# never becomes scrollable document range.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSControl", "NSView"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSButton", "NSControl", "NSView", "NSScrollView"] }
 objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSNotification", "block2"] }
 block2 = "0.6"
 

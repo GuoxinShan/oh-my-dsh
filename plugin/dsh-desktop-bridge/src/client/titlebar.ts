@@ -37,11 +37,23 @@ export function shouldFuseTitlebar(platform: string): boolean {
  * layer still spans the full frame, so the drag strip lands exactly inside
  * the band. `:has()` and `:nth-child(-n+3)` are supported by every WKWebView
  * new enough to run Tauri 2.
+ *
+ * The same sheet locks the document itself non-scrollable: the app is a
+ * fixed-viewport shell (html/body/#root height 100%), and any scrollable
+ * surplus on the root scroller — e.g. AppKit handing the WKWebView's scroll
+ * view titlebar-height content insets under the Overlay titlebar, which the
+ * shell also disables natively — only ever manifests as chained scrolling
+ * shifting the whole page a few pixels under the lights (the band controls
+ * "drifting up" until a resize clamps it). `overflow: hidden` on the root
+ * pair makes the document unscrollable so the band geometry stays put.
  * @param zonePx - reserved band height in px.
  * @returns the stylesheet text.
  */
 export function titlebarCss(zonePx: number): string {
-  return `div:has(> [data-shell-overlay])>div:nth-child(-n+3){box-sizing:border-box;padding-top:${String(zonePx)}px;}`
+  return [
+    'html,body{overflow:hidden;}',
+    `div:has(> [data-shell-overlay])>div:nth-child(-n+3){box-sizing:border-box;padding-top:${String(zonePx)}px;}`,
+  ].join('')
 }
 
 /**

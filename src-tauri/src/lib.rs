@@ -2194,6 +2194,7 @@ fn open_main_window(app: &tauri::AppHandle, url: &str, e2e: bool) -> Result<(), 
                 {
                     hide_painted_title(&window);
                     inset_traffic_lights(&window);
+                    disable_webview_auto_content_insets(&window);
                     observe_titlebar_layout(&window);
                 }
                 println!("dsh-desktop: window built, loading {load_url}");
@@ -2295,6 +2296,61 @@ fn set_titlebar_container_hidden(window: &tauri::WebviewWindow, hidden: bool) {
     };
     if let Some(title_bar) = unsafe { close.superview().and_then(|view| view.superview()) } {
         title_bar.setHidden(hidden);
+    }
+}
+
+/// The Overlay titlebar floats the traffic lights over the web view, and
+/// AppKit answers that by auto-adjusting the WKWebView's internal scroll
+/// view content insets (`automaticallyAdjustsContentInsets`, default on):
+/// the titlebar height becomes real scrollable range on the document's root
+/// scroller. The web app is a fixed-viewport shell — that range never
+/// carries content, so it only manifests as chained trackpad scrolling
+/// shifting the whole document a few pixels up under the lights (the
+/// titlebar-band controls appear to "drift" until a resize clamps the
+/// offset back to zero). Disable the automatic adjustment and zero the
+/// already-applied insets: reserving the band is the page's own job
+/// (bridge `titlebar.ts` column padding). Mirrors the standard Electron
+/// recipe for overlay titlebars.
+///
+/// Must run on the main thread (with_webview dispatches there anyway).
+#[cfg(target_os = "macos")]
+fn disable_webview_auto_content_insets(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSScrollView, NSView};
+    use objc2_foundation::NSEdgeInsetsZero;
+    // The scroll view sits a couple of levels under the WKWebView; the bound
+    // only guards against pathological cycles, never real hierarchies.
+    const MAX_DEPTH: usize = 6;
+    fn visit(view: &NSView, depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for sub in view.subviews().iter() {
+            if let Some(scroll) = sub.downcast_ref::<NSScrollView>() {
+                let before = scroll.contentInsets();
+                scroll.setAutomaticallyAdjustsContentInsets(false);
+                // SAFETY: the extern static is WebKit's own constant value.
+                scroll.setContentInsets(unsafe { NSEdgeInsetsZero });
+                println!(
+                    "dsh-desktop: webview scroll view insets pinned zero (previously top={:.1} bottom={:.1})",
+                    before.top, before.bottom,
+                );
+            }
+            visit(&sub, depth + 1);
+        }
+    }
+    let pinned = window.with_webview(|webview| {
+        let raw = webview.inner();
+        if raw.is_null() {
+            eprintln!("dsh-desktop: no webview handle, content insets left automatic");
+            return;
+        }
+        // The pointer is the live WKWebView, an NSView subclass; the walk
+        // below only uses NSView-level APIs (plus the scroll-view downcast).
+        let webview_view: &NSView = unsafe { &*(raw as *const NSView) };
+        visit(webview_view, 0);
+    });
+    if let Err(error) = pinned {
+        eprintln!("dsh-desktop: pinning webview content insets failed: {error}");
     }
 }
 

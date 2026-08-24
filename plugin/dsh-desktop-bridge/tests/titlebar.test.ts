@@ -19,6 +19,9 @@ describe('titlebarCss', () => {
     assert.ok(css.includes('padding-top:28px'))
     assert.ok(css.includes('box-sizing:border-box'))
   })
+  it('locks the document scrollable root pair', () => {
+    assert.ok(titlebarCss(28).includes('html,body{overflow:hidden;}'), 'the fixed-viewport shell must not be scrollable')
+  })
   it('embeds the configured band height', () => {
     assert.ok(titlebarCss(TITLEBAR_ZONE_PX).includes(`padding-top:${String(TITLEBAR_ZONE_PX)}px`))
     assert.ok(titlebarCss(40).includes('padding-top:40px'))
