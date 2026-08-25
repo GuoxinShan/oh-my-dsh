@@ -2,8 +2,9 @@
  * Desktop webview bridge, browser half. Probes the desktop gate signal; in a
  * plain browser (terminal `dsh web`) the probe is 'absent' and apply returns
  * with zero registrations, so the row is always safe to mount. Inside the
- * shell it installs external-link routing, download saving, attention
- * notifications, shell.overlay desktop controls, and macOS titlebar fusion —
+ * shell it installs external-link routing, download saving, native
+ * notifications, an in-app notification center, shell.overlay desktop
+ * controls, and macOS titlebar fusion —
  * all as reversible effects collected by the plugin fiber.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
@@ -13,8 +14,6 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type { AttentionEdge, AttentionRow } from './attention.ts'
-import { attentionIndex, diffAttention } from './attention.ts'
 import type { LinkDecision } from './links.ts'
 import { classifyAnchor } from './links.ts'
 import type { DownloadDecision } from './downloads.ts'
@@ -29,6 +28,9 @@ import { installRailCss, installRailHider } from './rail.ts'
 import { DesktopRailControls, type RailControlsInjected } from './rail-controls.tsx'
 import { installTitlebarCss, shouldFuseTitlebar, TITLEBAR_ZONE_PX } from './titlebar.ts'
 import { DesktopDragStrip } from './titlebar.tsx'
+import { installNotifications } from './notifications.ts'
+import { createNotifyInbox } from './notify-inbox.ts'
+import { NotifyIndicator, type NotifyCenterInjected } from './notify-center.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -76,11 +78,20 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'desktop-bridge: dictionaries')
   ctx.effect(() => installExternalLinks(document, invoke, logger), 'desktop-bridge: external links')
   ctx.effect(() => installDownloads(document, invoke, logger), 'desktop-bridge: downloads')
-  ctx.effect(() => installAttention(
-    ctx.sessions.list,
-    invoke,
-    logger,
-  ), 'desktop-bridge: attention')
+  const inbox = createNotifyInbox()
+  const openSession = (sessionId: string): void => { ctx.sessions.open(sessionId) }
+  ctx.effect(() => {
+    const t = ctx.locale.bind(NS)
+    return installNotifications({
+      list: ctx.sessions.list,
+      invoke,
+      logger,
+      copy: () => ({ turnDone: t('notify.turnDone'), awaitInput: t('notify.awaitInput') }),
+      openSession,
+      record: (edge) => { inbox.push(edge) },
+    })
+  }, 'desktop-bridge: notifications')
+  const notifyInjected = (): NotifyCenterInjected => ({ inbox, openSession })
   const injected = (): BadgeInjected => ({
     openExternal: (url) => { void callOpenExternal(invoke, url, logger) },
   })
@@ -94,7 +105,8 @@ export function apply(ctx: ClientContext): void {
     const disposeBadge = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-badge', order: 10, locale: NS, inject: injected }, DesktopBadge)
     if (!fuseTitlebar) {
       const disposeUpdate = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-update-indicator', order: 6, locale: NS, inject: updateInjected }, UpdateIndicator)
-      return () => { disposeUpdate(); disposeBadge() }
+      const disposeNotify = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-notify-center', order: 7, locale: NS, inject: notifyInjected }, NotifyIndicator)
+      return () => { disposeNotify(); disposeUpdate(); disposeBadge() }
     }
     const disposeStrip = ctx.slots.register({ name: 'shell.overlay', id: 'desktop-drag-strip', order: 0 }, DesktopDragStrip)
     // Resolve ctx.layout lazily per click, never at registration time:
@@ -104,6 +116,7 @@ export function apply(ctx: ClientContext): void {
     // that is about to exist (the controls would never appear).
     const railInjected = (): RailControlsInjected => ({
       ...updater,
+      ...notifyInjected(),
       toggleSidebar: () => {
         const layout = ctx.get('layout')
         if (layout === undefined) {
@@ -198,56 +211,6 @@ async function callOpenExternal(invoke: TauriInvoke, url: string, logger: WarnLo
     logger.warn(`dsh-desktop-bridge: open_external failed for ${url}, falling back to window.open: ${String(error)}`)
     window.open(url, '_blank', 'noopener')
   }
-}
-
-/**
- * Attention notification installer: subscribe the sessions list observable,
- * diff consecutive snapshots, gate on document visibility, and fire native
- * notifications for crossed edges.
- * @param list - the sessions list snapshot feed (raf-batched).
- * @param invoke - the shell IPC carrier.
- * @param logger - warning sink for rejected invokes.
- * @returns the unsubscriber.
- */
-export function installAttention(
-  list: { getSnapshot(): { ids: readonly string[]; byId: Readonly<Record<string, AttentionRowLike>> }; subscribe(fn: () => void): () => void },
-  invoke: TauriInvoke,
-  logger: WarnLog,
-): () => void {
-  let previous: ReadonlyMap<string, AttentionRow> | undefined
-  const rowOf = (row: AttentionRowLike): AttentionRow => ({
-    id: row.id,
-    displayTitle: row.displayTitle,
-    running: row.running,
-    ...(row.pendingInteraction !== undefined ? { pendingInteraction: row.pendingInteraction } : {}),
-  })
-  const snapshot = (): AttentionRow[] => {
-    const state = list.getSnapshot()
-    return state.ids.map((id) => state.byId[id]).filter((row) => row !== undefined).map(rowOf)
-  }
-  const notify = (edge: AttentionEdge): void => {
-    const body = edge.kind === 'await-input' ? '等待你的输入' : '回合已完成'
-    void invoke.invoke('dsh_desktop_notify', { title: edge.title, body })
-      .catch((error: unknown) => { logger.warn(`dsh-desktop-bridge: notify rejected: ${String(error)}`) })
-  }
-  const onFlush = (): void => {
-    const rows = snapshot()
-    const next = attentionIndex(rows)
-    const edges = diffAttention(previous, next)
-    previous = next
-    if (!document.hidden) return
-    for (const edge of edges) notify(edge)
-  }
-  previous = attentionIndex(snapshot())
-  return list.subscribe(onFlush)
-}
-
-/** Structural slice of SessionSummary the attention diff consumes. */
-interface AttentionRowLike {
-  id: string
-  displayTitle: string
-  running: boolean
-  pendingInteraction?: string
 }
 
 /** Re-exported probe type for same-package tests through ./src. */

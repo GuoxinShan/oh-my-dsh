@@ -1,8 +1,8 @@
 /**
  * Assemble the shell's bundled assets (release packaging): the self-contained
  * runtime tarball, the desktop-owned plugin tarballs, and the revision
- * manifest, all placed under src-tauri/resources/ for tauri.conf.json
- * bundle.resources.
+ * manifest, all placed under src-electron/resources/ for electron-builder
+ * extraResources.
  *
  * Why tarballs instead of loose resource directories: the runtime tree is a
  * pnpm install (3k+ symlinks, two layers) and tauri-bundler gives no
@@ -12,18 +12,18 @@
  * and immune to App Translocation read-only volumes). Apple's notary scanner
  * still descends into archives, so every nested Mach-O is signed before pack.
  *
- * Fixed file names so tauri.conf.json never churns with revisions:
- *   src-tauri/resources/runtime.tar.gz          (dsh/ + tools/, keyed by SHA)
- *   src-tauri/resources/runtime.tar.gz.sha      (cache marker: revision sha)
- *   src-tauri/resources/bridge.tar.gz           (package.json + lib/ + patch)
- *   src-tauri/resources/compaction-hierarchical.tar.gz (host plugin package)
- *   src-tauri/resources/web-search-toggle.tar.gz (host + client plugin package)
- *   src-tauri/resources/model-image-input.tar.gz (client-only plugin package)
- *   src-tauri/resources/send-while-running.tar.gz (client-only plugin package)
- *   src-tauri/resources/runtime-revision.json   (runtime + plugin hashes/versions)
+ * Fixed file names so electron-builder.yml never churns with revisions:
+ *   src-electron/resources/runtime.tar.gz          (dsh/ + tools/ without tools/node)
+ *   src-electron/resources/runtime.tar.gz.sha      (cache marker: revision sha)
+ *   src-electron/resources/bridge.tar.gz           (package.json + lib/ + patch)
+ *   src-electron/resources/compaction-hierarchical.tar.gz (host plugin package)
+ *   src-electron/resources/web-search-toggle.tar.gz (host + client plugin package)
+ *   src-electron/resources/model-image-input.tar.gz (client-only plugin package)
+ *   src-electron/resources/send-while-running.tar.gz (client-only plugin package)
+ *   src-electron/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
- * `src-tauri/resources/` is gitignored — regenerated per build via
- * `pnpm desktop:prepare` (also wired as tauri beforeBuildCommand).
+ * `src-electron/resources/` is gitignored — regenerated per build via
+ * `pnpm desktop:prepare` (also wired as the first half of desktop:build).
  */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -40,7 +40,7 @@ const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
 const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
 const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
 const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
-const resourcesDir = resolve(repoRoot, 'src-tauri/resources')
+const resourcesDir = resolve(repoRoot, 'src-electron/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
 const runtimeShaMarker = resolve(resourcesDir, 'runtime.tar.gz.sha')
@@ -78,10 +78,14 @@ function tarSupportsForceLocal() {
   }
 }
 
-function tarCreate(archive, changeDir, entries) {
+function tarCreate(archive, changeDir, entries, extraExcludes = []) {
   const args = []
   if (tarSupportsForceLocal()) args.push('--force-local')
-  args.push('--exclude', '.DS_Store', '-czf', archive, '-C', changeDir, ...entries)
+  args.push('--exclude', '.DS_Store')
+  for (const pattern of extraExcludes) {
+    args.push('--exclude', pattern)
+  }
+  args.push('-czf', archive, '-C', changeDir, ...entries)
   run('tar', args, { cwd: repoRoot })
 }
 
@@ -110,12 +114,23 @@ console.log('prepare-desktop-bundle: assembling runtime...')
 run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
 
 const runtimeCli = resolve(runtimeDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
-const runtimeNodeUnix = resolve(runtimeDir, 'tools/node_modules/node/bin/node')
-const runtimeNodeWin = resolve(runtimeDir, 'tools/node_modules/node/bin/node.exe')
-if (!existsSync(runtimeCli) || (!existsSync(runtimeNodeUnix) && !existsSync(runtimeNodeWin))) {
-  console.error(`prepare-desktop-bundle: runtime tree incomplete at ${runtimeDir} (missing CLI entry or node binary)`)
+if (!existsSync(runtimeCli)) {
+  console.error(`prepare-desktop-bundle: runtime tree incomplete at ${runtimeDir} (missing CLI entry)`)
   process.exit(1)
 }
+
+// Rebuild native modules against the Electron ABI so sidecar can run as
+// ELECTRON_RUN_AS_NODE without a second Node binary.
+const electronPkg = resolve(repoRoot, 'node_modules/electron/package.json')
+if (!existsSync(electronPkg)) {
+  console.error('prepare-desktop-bundle: electron is not installed; run pnpm install')
+  process.exit(1)
+}
+const electronVersion = JSON.parse(readFileSync(electronPkg, 'utf8')).version
+console.log(`prepare-desktop-bundle: electron-rebuild ${electronVersion} in ${runtimeDir}/dsh`)
+run(pnpm, ['exec', 'electron-rebuild', '-f', '-m', resolve(runtimeDir, 'dsh'), '-v', String(electronVersion).replace(/^v/, '')], { cwd: repoRoot })
+writeFileSync(resolve(runtimeDir, '.electron-abi'), `${electronVersion}\n`)
+
 
 // 2.5 Sign every Mach-O in the runtime tree. Apple's notary scanner descends
 // into bundled archives: unsigned (or third-party-signed) binaries inside
@@ -170,12 +185,19 @@ mkdirSync(resourcesDir, { recursive: true })
 const scriptRev = existsSync(resolve(runtimeDir, '.script-rev'))
   ? readFileSync(resolve(runtimeDir, '.script-rev'), 'utf8').trim()
   : ''
-const tarCacheKey = `${revision.sha} ${scriptRev} ${existsSync(signMarker) ? 'signed' : 'unsigned'}`
+const tarCacheKey = `${revision.sha} ${scriptRev} ${existsSync(signMarker) ? 'signed' : 'unsigned'} omit-node-shims electron-${electronVersion}`
 if (existsSync(runtimeTar) && existsSync(runtimeShaMarker) && readFileSync(runtimeShaMarker, 'utf8').trim() === tarCacheKey) {
   console.log(`prepare-desktop-bundle: runtime.tar.gz cached for ${revision.sha.slice(0, 12)} (assembly r${scriptRev})`)
 } else {
-  console.log(`prepare-desktop-bundle: packing runtime.tar.gz (~500MB tree, this takes a minute)...`)
-  tarCreate(runtimeTar, runtimeDir, ['dsh', 'tools'])
+  console.log(`prepare-desktop-bundle: packing runtime.tar.gz without tools/node...`)
+  tarCreate(runtimeTar, runtimeDir, ['dsh', 'tools'], [
+    'tools/node_modules/node',
+    // pnpm's .bin/pnpm prefers a sibling .bin/node; without tools/node that
+    // stub is a hard fail. Omit it so `exec node` uses PATH (Electron shim).
+    'tools/node_modules/.bin/node',
+    'tools/node_modules/.bin/node.cmd',
+    'tools/node_modules/.bin/node.ps1',
+  ])
   writeFileSync(runtimeShaMarker, tarCacheKey + '\n')
 }
 console.log(`prepare-desktop-bundle: runtime.tar.gz ${mb(runtimeTar)} MB`)

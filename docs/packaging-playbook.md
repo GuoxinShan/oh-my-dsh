@@ -2,14 +2,14 @@
 
 面向「打出一个能在别的 mac 上跑的安装包」的完整操作指引。改流程先改本文件。
 
+0.3.0-rc.1 起宿主是 **Electron**（`src-electron/` + electron-builder）。`src-tauri/` 已归档，不再发货。已装 0.2.x 不能热更新到 0.3.x。
+
 ## 0. 前置条件（构建机）
 
-- macOS + Apple Silicon（当前只打 aarch64；Intel 需另加 target，见 §7）**或** Windows 10/11 x64（NSIS；ARM64 另加 target）
-- Rust toolchain（rustup stable；Windows 需 MSVC）
-- Node 22+ / pnpm（`packageManager` 钉版本）
-- **runtime 在哪台机器组装就只能给哪台 OS 用**（native 模块 + node 二进制）。不要把 mac 的 `runtime/build` 拷到 Windows，反之亦然。
-- runtime 组装只依赖**公有** fork 仓库（`runtime/revision.json` 的 repo），本仓库与 runtime fork 都无需私有 checkout 凭据
-- Windows 另需 WebView2 Runtime（Win10/11 通常已带；NSIS 安装器在缺失时会下 bootstrapper）
+- macOS + Apple Silicon（当前只打 aarch64）**或** Windows 10/11 x64（NSIS）
+- Node 22+ / pnpm（`packageManager` 钉版本）；Electron 版本钉在仓根 `package.json`
+- **runtime 在哪台机器组装就只能给哪台 OS 用**（native 模块按 Electron ABI rebuild）。不要把 mac 的 `runtime/build` 拷到 Windows，反之亦然。
+- runtime 组装只依赖**公有** fork 仓库（`runtime/revision.json` 的 repo）
 
 ## 1. 一键打包
 
@@ -17,30 +17,27 @@
 pnpm desktop:build
 ```
 
-`tauri.conf.json` 的 `beforeBuildCommand` 会先跑 `pnpm run desktop:prepare`（`scripts/prepare-desktop-bundle.mjs`）：
+先跑 `pnpm run desktop:prepare`（`scripts/prepare-desktop-bundle.mjs`）：
 
-1. 构建桌面自有插件：bridge、hierarchical compaction 与 Web Search toggle 0.1.3 分别跑 typecheck + 单测 + build；
-2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存，同 SHA 秒级）；
-3. 打 `src-tauri/resources/runtime.tar.gz`（`dsh/` + `tools/`，SHA 键控缓存）、`bridge.tar.gz`、`compaction-hierarchical.tar.gz` 与 `web-search-toggle.tar.gz`，把四个内容哈希及 Web Search 插件版本写入 `runtime-revision.json` 副本；
-4. cargo release 编译 → tauri-bundler 出平台包：macOS `.app` + `.dmg`（无签名证书时为 ad-hoc 签名）；Windows NSIS `*-setup.exe`（currentUser）。
+1. 构建桌面自有插件：bridge、hierarchical compaction、Web Search toggle、model-image-input、send-while-running；
+2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存）；
+3. 按当前 Electron 版本 `electron-rebuild` native 模块；
+4. 打 `src-electron/resources/runtime.tar.gz`（**不含** `tools/node`）及各插件 tarball；
+5. `scripts/build-electron.mjs`：esbuild 打 main.cjs → electron-builder 出平台包。
 
 产物：
 
-- macOS：`src-tauri/target/release/bundle/macos/Oh My DSH.app` 与 `.../dmg/Oh My DSH_<ver>_aarch64.dmg`
-- Windows：`src-tauri/target/release/bundle/nsis/Oh My DSH_<ver>_x64-setup.exe`
+- macOS：`release/Oh My DSH-<ver>-arm64.dmg` 与同目录 zip（updater）
+- Windows：`release/Oh My DSH-<ver>-setup.exe`
 
-注意：`src-tauri/resources/` 是 gitignored 的再生产物；**裸 `cargo build` 会因 build.rs 校验资源缺失而失败**，必须经 `pnpm desktop:build`（或先 `pnpm run desktop:prepare`）。单独 `cargo check` 前也要先跑一次 prepare。
+`src-electron/resources/` 与 `dist-electron/`、`release/` 均 gitignored。
 
 ### 安装窗口外观（DMG 背景与布局）
 
-DMG 窗口的观感由两处共同决定，改任何一处必须同步另一处：
+- `src-tauri/dmg/background.png` —— 仍复用既有背景（由 `scripts/generate-dmg-background.py` 生成）。
+- `electron-builder.yml` 的 `dmg.window` / `dmg.contents` 钉 660×400 与图标坐标（180,196）/（480,196）。
 
-- `src-tauri/dmg/background.png` —— 窗口背景（标题文案 + 拖拽箭头 + 柔和底纹）。**由 `scripts/generate-dmg-background.py` 生成**（PIL；`pip install --user pillow`），不要手改 PNG。画布按 point 布局（660×400）以 2x 渲染（1320×800），保存时写 144 DPI 元数据——Finder 按 DPI 把背景映射回 point 尺寸（与 DropDMG「72/144 dpi」约定一致），Retina 下文字不糊；只画 1x 会糊，只画 2x 不写 DPI 会被放大裁切。
-- `tauri.conf.json` 的 `bundle.macOS.dmg` —— `windowSize` / `appPosition` / `applicationFolderPosition`。图标锚点（app 180,196 / Applications 480,196，图标尺寸 128 为 create-dmg 脚本默认值）与背景里的箭头两端严格对齐；改坐标要重新生成背景。
-
-Finder 是否真正采用这些设置取决于卷根的 `.DS_Store`，单有 `.background/background.png` 不够。Tauri 检测到 `CI=true` 时默认给 create-dmg 加 `--skip-jenkins`，会跳过生成 `.DS_Store` 的 Finder AppleScript；GitHub Release 的 macOS build 因此必须设置 `TAURI_BUNDLER_DMG_IGNORE_CI=true`。流水线在公证前安装固定版本的 `ds-store` 解析器并运行 `scripts/verify-dmg-layout.sh <dmg>`：挂载最终只读 DMG，核对 Finder 的背景图模式、窗口尺寸、图标尺寸与 app/Applications 坐标，再校验背景内容和 Applications 链接；任何退化都 fail loud、不发布。
-
-已知现象：挂载窗口里可能看到 `.VolumeIcon.icns`——它是 create-dmg 放的卷图标 dotfile，默认隐藏，只有 Finder 开了「显示隐藏文件」（Cmd+Shift+.）才会现身，属正常现象，所有 create-dmg 系安装包（含 tauri 默认）皆然。
+流水线在公证前运行 `scripts/verify-dmg-layout.sh <dmg>`。
 
 ## 2. 包结构与首启解压（原理）
 
@@ -64,21 +61,24 @@ runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录
 
 sidecar runtime 解析顺序（`find_runtime`）：`$DSH_DESKTOP_RUNTIME` → 仓库 `runtime/build/<sha>`（dev 主路径）→ 包内资源解压树（仅 release）→ DSH 源码 checkout（dev 兜底）。桌面插件分别由 `find_bridge`、`find_compaction_plugin` 与 `find_web_search_toggle_plugin` 解析 env override → release resource → dev tree。
 
-## 3. 体积参考（aarch64，runtime 734f65…/desktop v0.1.1）
+## 3. 体积参考（Electron + Chromium）
 
-| 产物 | 体积 |
-|---|---|
-| runtime 树（未压缩） | ~510 MB（dsh 含 tsx + tools） |
-| runtime.tar.gz（资源） | ~115 MB |
-| Oh My DSH.app | ~121 MB |
-| Oh My DSH_0.1.1_aarch64.dmg | ~113 MB |
+旧 Tauri / WKWebView 公证包约 160MB。Electron 会更大；去掉第二份 `tools/node` 后目标 **公证包 < 250MB**，超标要单独解释。
 
 ## 4. 本机验证
 
 ```sh
 # e2e 冒烟（scratch home，不污染真实 ~/.dsh；探针走 gate→badge DOM→save_file IPC 往返）
 DSH_HOME=$(mktemp -d) DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
-  "src-tauri/target/release/bundle/macos/Oh My DSH.app/Contents/MacOS/dsh-desktop"
+  pnpm desktop:dev
+echo "exit=$?"   # 0 = 通过
+```
+
+打包后再验安装包：
+
+```sh
+DSH_HOME=$(mktemp -d) DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
+  "release/mac-arm64/Oh My DSH.app/Contents/MacOS/Oh My DSH"
 echo "exit=$?"   # 0 = 通过
 ```
 
@@ -88,7 +88,7 @@ echo "exit=$?"   # 0 = 通过
 mv runtime/build runtime/build.off          # 摘掉 dev 解析路径
 rm -rf ~/.dsh-desktop/runtime               # 摘掉已解压缓存，强制重新解压
 DSH_HOME=$(mktemp -d) DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
-  "src-tauri/target/release/bundle/macos/Oh My DSH.app/Contents/MacOS/dsh-desktop"
+  "release/mac-arm64/Oh My DSH.app/Contents/MacOS/Oh My DSH"
 echo "exit=$?"                               # 0 = 资源分支完整可用
 mv runtime/build.off runtime/build
 ```
@@ -97,54 +97,50 @@ mv runtime/build.off runtime/build
 
 ```sh
 # 不设 DSH_HOME，用真实 ~/.dsh（含本地源码插件与用户 patch 层）：
-DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 \
-  "src-tauri/target/release/bundle/macos/Oh My DSH.app/Contents/MacOS/dsh-desktop"
+DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev
 ```
 
-首次启动会解压 ~500MB（约十几秒），日志有 `extracted bundled runtime <sha>` 一行。真实 `~/.dsh` 手工过一遍：开窗、建会话、下载桥、外链、通知。
+首次启动会解压 runtime tar（约十几秒），日志有 `extracted bundled runtime <sha>` 一行。真实 `~/.dsh` 手工过一遍：开窗、建会话、下载桥、外链、通知。
 
 ## 5. 分发与 Gatekeeper
 
-**签名+公证已落地（0.1.1 起）**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv` 应答 `source=Notarized Developer ID`，用户浏览器下载、双击安装零手工步骤。DMG 本身也单独提交公证（用户挂载 DMG 时 Gatekeeper 同样查 DMG）。
+**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv` 应答 `source=Notarized Developer ID`。electron-builder 在 `notarize: true` 时提交 `.app`；CI 再对 DMG `stapler staple`。
 
 一次完整公证构建的环境变量：
 
 ```sh
 export DSH_CODESIGN_IDENTITY="Developer ID Application: <团队名> (TEAMID)"   # runtime 内 Mach-O 签名
-export APPLE_SIGNING_IDENTITY="Developer ID Application: <团队名> (TEAMID)"  # .app/.dmg 签名
+export CSC_NAME="$DSH_CODESIGN_IDENTITY"                                    # electron-builder 签 .app/.dmg
 export APPLE_ID="<Apple ID 邮箱>"
-export APPLE_PASSWORD="<App 专用密码>"      # appleid.apple.com 生成，非账号密码
+export APPLE_APP_SPECIFIC_PASSWORD="<App 专用密码>"
 export APPLE_TEAM_ID="<TEAMID>"
-pnpm desktop:build
-# DMG 单独公证（Tauri 只公证 app）：
-xcrun notarytool submit "src-tauri/target/release/bundle/dmg/Oh My DSH_<ver>_aarch64.dmg" \
-  --apple-id … --password … --team-id … --wait
+pnpm desktop:build -- --mac --config.mac.notarize=true
 ```
 
-凭据清单：Developer ID Application 证书（p12 导入钥匙串 + Apple G2 中间证书 `DeveloperIDG2CA.cer` + `security set-key-partition-list -S apple-tool:,apple: -k '登录密码' ~/Library/Keychains/login.keychain-db` 授权 codesign 用私钥）、Team ID、App 专用密码。**ASC「个人 API 密钥」不能用于 notarytool**（Apple 官方限制，实测 401）；团队 API 密钥可以（`APPLE_API_KEY/APPLE_API_ISSUER/APPLE_API_KEY_PATH`）。
+凭据清单：Developer ID Application 证书（p12 导入钥匙串 + Apple G2 中间证书 `DeveloperIDG2CA.cer` + `security set-key-partition-list` 授权 codesign）、Team ID、App 专用密码。**ASC「个人 API 密钥」不能用于 notarytool**。
 
 公证实测踩过的坑（已固化进构建）：
 
-1. **hardened runtime 强制**：`bundle.macOS.hardenedRuntime: true`；
-2. **公证扫描钻进 tar.gz**：runtime 里 node/esbuild/sharp/ripgrep 等 16 个 Mach-O 全要 Developer ID 签名——prepare-desktop-bundle 打 tar 前自动签（`DSH_CODESIGN_IDENTITY` 门控；node 带 allow-jit entitlements，见 `scripts/entitlements-runtime.plist`）；
-3. **staple 需要完整 Xcode**（本机仅 CLT，`stapler` 不可用）：不装订只是用户离线首启无法在线校验公证；curl 直链分发（无隔离属性）完全无感。
+1. **hardened runtime 强制**：`electron-builder.yml` `mac.hardenedRuntime: true`；
+2. **公证扫描钻进 tar.gz**：runtime 里 esbuild 等 Mach-O 全要 Developer ID 签名——prepare-desktop-bundle 打 tar 前自动签（`DSH_CODESIGN_IDENTITY` 门控；JIT 二进制带 allow-jit entitlements，见 `scripts/entitlements-runtime.plist`）；
+3. **CI 在公证后 staple DMG**（`xcrun stapler staple`）。
 
-无证书降级通道仍有效（ad-hoc/仅签名 + `xattr -dr com.apple.quarantine`）。`productName`/`identifier` 已随签名生效，改名等于换应用。
+无证书降级通道仍有效（ad-hoc + `xattr -dr com.apple.quarantine`）。`productName`/`appId` 已随签名生效，改名等于换应用。
 
 分发通道推荐：curl 直链（最优）> 自建 brew tap > 浏览器直下（已公证，弹窗点「打开」即可）。
 
 ## 6. 升级 runtime / Desktop-owned 插件版本
 
 1. runtime 升级时，fork 侧打标签：`git tag v<基线>+zw.<n> <sha> && git push origin <tag>`，再更新本仓 `runtime/revision.json`（repo/ref/sha）。
-2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 Tauri resources、壳解压/安装链、runtime peer 链接与文档。
+2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 `src-electron/resources`、壳解压/安装链、runtime peer 链接与文档。
 3. 提升 Desktop 版本并执行 `pnpm desktop:build`。prepare 会重新生成相应 tarball 与内容哈希；壳按哈希换解压目录，旧缓存不再被引用。
 
 插件的独立 GitHub Release 不会替换已安装 Desktop 包内的资源，也不会更新用户 Web Profile。只要 Desktop-owned 插件版本变化，就必须发布新的 Desktop；Web Search toggle 0.1.3 首次由 Desktop `0.2.0-rc.14` 携带。
 
 ## 7. 已知边界
 
-- **架构**：macOS 只打 aarch64。Intel 机器需要 `rustup target add x86_64-apple-darwin` 后 `--target x86_64-apple-darwin` 另打一份（或 universal，体积翻倍）。Windows 只打 x86_64（`windows-latest`）；ARM64 需 `--target aarch64-pc-windows-msvc`。分发时确认对方机器架构。
-- **验证机的「干净」标准**：没有 Rust、没有 DSH checkout、没有本仓库 clone 的机器才是目标用户画像——装了 dev 环境的机器会走 source 兜底掩盖打包缺陷。
+- **架构**：macOS 只打 aarch64；Windows 只打 x86_64 NSIS currentUser。分发时确认对方机器架构。
+- **验证机的「干净」标准**：没有 DSH checkout、没有本仓库 clone 的机器才是目标用户画像——装了 dev 环境的机器会走 source 兜底掩盖打包缺陷。
 - **首启解压窗口**：~500MB 解压约 10–20s，窗口出现前有一段无反馈等待（后续可在窗口加启动进度）。
 - **tar**：解压用系统 `tar`（macOS/Windows 10+ 自带 bsdtar；Linux 上一般也有）。GNU tar 对 `C:\...` 需要 `--force-local`；Win11 bsdtar 3.8.4 不认此选项。prepare 与壳按 `tar --help` 探测。
 - **runtime 不可跨 OS**：在 mac 组装的树不能打进 Windows 安装包。
@@ -152,7 +148,7 @@ xcrun notarytool submit "src-tauri/target/release/bundle/dmg/Oh My DSH_<ver>_aar
 
 ## 8. Windows 本机验证
 
-前置：Rust **MSVC** 工具链（`rustc -vV` 的 host 必须是 `x86_64-pc-windows-msvc`；若当前是 `windows-gnu`，先 `rustup toolchain install stable-x86_64-pc-windows-msvc` 再 `rustup default stable-x86_64-pc-windows-msvc`——Tauri 在 GNU 目标下会因缺少 `dlltool` 编不过）、Node 22+、pnpm、WebView2。源码 sidecar 需要 DSH checkout（`DSH_CHECKOUT` 或与本仓平级的 `../deepseek-harness`）。
+前置：Node 22+、pnpm。源码 sidecar 需要 DSH checkout（`DSH_CHECKOUT` 或与本仓平级的 `../deepseek-harness`）。
 
 ```powershell
 # dev
@@ -161,7 +157,7 @@ pnpm desktop:dev
 
 # 打包（本机组装 Windows runtime，约数分钟到十几分钟）
 pnpm desktop:build
-# 产物：src-tauri/target/release/bundle/nsis/Oh My DSH_*_x64-setup.exe
+# 产物：release/Oh My DSH-<ver>-setup.exe
 ```
 
 e2e（PowerShell）：
@@ -170,17 +166,17 @@ e2e（PowerShell）：
 $env:DSH_HOME = Join-Path $env:TEMP ("dsh-e2e-" + [guid]::NewGuid())
 $env:DSH_DESKTOP_E2E_PROBE = "1"
 $env:DSH_DESKTOP_E2E_EXIT = "1"
-& "src-tauri\target\release\dsh-desktop.exe"
+pnpm desktop:dev
 echo "exit=$LASTEXITCODE"   # 0 = 通过
 ```
 
-强制走资源分支：把 `runtime\build` 改名、删 `%USERPROFILE%\.dsh-desktop\runtime` 后再跑上面的 exe。
+强制走资源分支：把 `runtime\build` 改名、删 `%USERPROFILE%\.dsh-desktop\runtime` 后再跑安装包里的 `Oh My DSH.exe`。
 
 无 Authenticode 时 SmartScreen 可能弹「无法验证发布者」——点「仍要运行」即可。NSIS 是 currentUser，不弹 UAC。证书怎么买、怎么接到 CI，见 §9。
 
 ## 9. Windows Authenticode（SmartScreen）
 
-这和已经在用的 **updater 签名**（`TAURI_SIGNING_PRIVATE_KEY`，minisign，壳内自动更新校验）不是同一把钥匙。updater 管「这个包是不是我们发的」；Authenticode 管「Windows 认不认这个发布者」。缺 Authenticode **不挡安装**，只是浏览器下载会警告。
+这和 **electron-updater** 的更新包校验不是同一把钥匙。updater 管「这个包是不是我们发的」；Authenticode 管「Windows 认不认这个发布者」。缺 Authenticode **不挡安装**，只是浏览器下载会警告。
 
 **不能自签。** openssl 造的证书 Windows 不当成发布者，SmartScreen 照样红。SSL 网站证书也不能用来签 exe。必须买 **Code Signing**（代码签名）证书。
 
@@ -211,17 +207,15 @@ CA 不再给可随意导出的 PFX：新证私钥必须在硬件（USB token）�
 | `WINDOWS_CERTIFICATE` | 上一步剪贴板里的 base64 |
 | `WINDOWS_CERTIFICATE_PASSWORD` | 导出 PFX 时设的密码 |
 
-3. 再发 `v*` tag（如 `v0.2.0-rc.2`）：`desktop-windows` job 会导入证书、写出 gitignored 的 `src-tauri/tauri.windows-sign.json`（thumbprint + sha256 + DigiCert 时间戳），`tauri build --config` 签 NSIS。secret 为空则跳过、打未签名包（现状）。
+3. 再发 `v*` tag（如 `v0.3.0-rc.1`）：`desktop-windows` job 把 PFX 写成 `CSC_LINK` / `CSC_KEY_PASSWORD`，electron-builder 签 NSIS。secret 为空则跳过、打未签名包。
 
-本机验证（证书已导入 CurrentUser\My 时）：
+本机验证：
 
 ```powershell
-$env:WINDOWS_PFX_PATH = 'D:\certs\dsh-desktop.pfx'
-$env:WINDOWS_CERTIFICATE_PASSWORD = '…'
-.\scripts\windows-import-cert.ps1
-pnpm desktop:build:signed
-# 日志应有 signing app / Successfully signed
+$env:CSC_LINK = 'D:\certs\dsh-desktop.pfx'
+$env:CSC_KEY_PASSWORD = '…'
+pnpm desktop:build -- --win
 ```
 
-`tauri.conf.json` **故意不写死 thumbprint**：没证书的机器（含 mac CI、本地 gnu/msvc 未导入）必须仍能打未签名包。
+没证书的机器必须仍能打未签名包。
 

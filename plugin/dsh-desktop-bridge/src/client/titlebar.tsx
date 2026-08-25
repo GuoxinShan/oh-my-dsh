@@ -17,7 +17,13 @@ export function DesktopDragStrip(): ReactElement {
     <div
       data-tauri-drag-region=""
       data-desktop-drag-strip=""
-      style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TITLEBAR_ZONE_PX }}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: TITLEBAR_ZONE_PX,
+      }}
     />
   )
 }

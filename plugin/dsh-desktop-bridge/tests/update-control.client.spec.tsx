@@ -27,14 +27,15 @@ test('available updates auto-download; install waits for an explicit click', asy
   const initial = deferred<unknown>()
   const install = deferred<never>()
   let generation = 0
-  let snapshot: DesktopUpdateStatus = { phase: 'available', version: '0.3.0', notes: '' }
+  const notes = '### Fixed\n- titlebar drift'
+  let snapshot: DesktopUpdateStatus = { phase: 'available', version: '0.3.0', notes }
   const update = {
     checkUpdate: vi.fn(() => initial.promise),
     getUpdateStatus: vi.fn(async (): Promise<DesktopUpdateStatus> => snapshot),
     updateGeneration: () => generation,
     downloadUpdate: vi.fn(async () => {
       generation += 1
-      snapshot = { phase: 'ready', version: '0.3.0' }
+      snapshot = { phase: 'ready', version: '0.3.0', notes }
     }),
     installUpdate: vi.fn(() => install.promise),
     t,
@@ -48,12 +49,16 @@ test('available updates auto-download; install waits for an explicit click', asy
   expect(update.installUpdate).not.toHaveBeenCalled()
 
   fireEvent.click(screen.getByRole('button', { name: readyTitle }))
-  const dialog = screen.getByRole('dialog', { name: en['update.confirm.title'] })
+  const confirmTitle = en['update.confirm.title'].replace('{version}', '0.3.0')
+  const dialog = screen.getByRole('dialog', { name: confirmTitle })
+  expect(within(dialog).getByText(en['update.confirm.notes'])).toBeTruthy()
+  expect(within(dialog).getByText('Fixed')).toBeTruthy()
+  expect(within(dialog).getByText('titlebar drift')).toBeTruthy()
   fireEvent.click(within(dialog).getByText(en['update.confirm.later']))
   expect(screen.queryByRole('dialog')).toBeNull()
 
   fireEvent.click(screen.getByRole('button', { name: readyTitle }))
-  const reopened = screen.getByRole('dialog', { name: en['update.confirm.title'] })
+  const reopened = screen.getByRole('dialog', { name: confirmTitle })
   fireEvent.click(within(reopened).getByText(en['update.confirm.install']))
   expect(update.installUpdate).toHaveBeenCalledTimes(1)
   expect(screen.queryByRole('dialog')).toBeNull()
@@ -110,7 +115,7 @@ test('failed auto-download keeps a retry entry that rechecks then downloads', as
         snapshot = { phase: 'failed', version: '0.3.0', message: 'network' }
         throw new Error('network')
       }
-      snapshot = { phase: 'ready', version: '0.3.0' }
+      snapshot = { phase: 'ready', version: '0.3.0', notes: '' }
     }),
     installUpdate: vi.fn(async () => {
       throw new Error('unreachable')
@@ -129,6 +134,35 @@ test('failed auto-download keeps a retry entry that rechecks then downloads', as
   expect(update.downloadUpdate).toHaveBeenCalledTimes(2)
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(update.installUpdate).not.toHaveBeenCalled()
+})
+
+test('placeholder updater notes fall back to the empty copy', async () => {
+  const initial = deferred<unknown>()
+  let generation = 0
+  let snapshot: DesktopUpdateStatus = {
+    phase: 'ready',
+    version: '0.3.0',
+    notes: 'See the release page for notes.',
+  }
+  const update = {
+    checkUpdate: vi.fn(() => initial.promise),
+    getUpdateStatus: vi.fn(async (): Promise<DesktopUpdateStatus> => snapshot),
+    updateGeneration: () => generation,
+    downloadUpdate: vi.fn(async () => undefined),
+    installUpdate: vi.fn(async () => {
+      throw new Error('unreachable')
+    }),
+    t,
+  }
+  render(<UpdateControl {...update} />)
+
+  const readyTitle = en['update.ready'].replace('{version}', '0.3.0')
+  await waitFor(() => { expect(screen.getByRole('button', { name: readyTitle })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: readyTitle }))
+  const confirmTitle = en['update.confirm.title'].replace('{version}', '0.3.0')
+  const dialog = screen.getByRole('dialog', { name: confirmTitle })
+  expect(within(dialog).getByText(en['update.confirm.empty'])).toBeTruthy()
+  expect(within(dialog).queryByText('See the release page for notes.')).toBeNull()
 })
 
 test('download progress keeps the compact spinner without a progress bar', async () => {

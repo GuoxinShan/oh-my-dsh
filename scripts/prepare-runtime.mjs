@@ -24,10 +24,18 @@ import { execNpm, execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 8
-const cacheToken = `${SCRIPT_REV} ${process.platform} ${process.arch}`
-
+const SCRIPT_REV = 9
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+function electronAbiToken() {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'node_modules/electron/package.json'), 'utf8'))
+    return `electron-${pkg.version}`
+  } catch {
+    return 'electron-none'
+  }
+}
+const cacheToken = `${SCRIPT_REV} ${process.platform} ${process.arch} ${electronAbiToken()}`
+
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
 const srcDir = resolve(repoRoot, 'runtime/src')
 const outDir = resolve(repoRoot, 'runtime/build', revision.sha)

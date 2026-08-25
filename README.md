@@ -8,13 +8,16 @@
 >
 > *Oh My DSH is an unofficial hobby project. It is not affiliated with, associated with, or endorsed by DeepSeek or the DeepSeek Harness project.*
 
-为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）提供的原生桌面发行版：一个轻量 Tauri 壳承载完整的 Harness runtime，并用一组独立插件补齐易用性短板。
+为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）提供的原生桌面发行版：一个 Electron 壳承载完整的 Harness runtime，并用一组独立插件补齐易用性短板。
+
+> [!WARNING]
+> **0.2.x（Tauri）不能自动升级到 0.3.x。** 请从 [Releases](https://github.com/aka-danielZhang/oh-my-dsh/releases/latest) 下载新安装包。两条更新通道不兼容。
 
 ## 特性
 
-**底层方式：Tauri + Sidecar。** 不捆绑 Chromium、不做 Electron 套壳——Rust 壳只负责进程与窗口，界面就是 `dsh web` 本身：
+**底层方式：Electron + 独立 Sidecar。** 窗口是 Chromium，业务仍是 `dsh web` 本身；sidecar 用 `ELECTRON_RUN_AS_NODE` 共用同一份 Node，不另带第二份运行时：
 
-- **开箱即用**：runtime 随安装包内置（含固定版本的 CLI 与 Node），无需预装 Node、pnpm 或 DSH；跑在本地随机回环端口，由系统 WebView 加载。
+- **开箱即用**：runtime 随安装包内置（含固定版本的 CLI），无需预装 Node、pnpm 或 DSH；跑在本地随机回环端口，由 Electron 窗口加载。
 - **薄壳无业务**：壳层不含任何业务逻辑，Harness 不感知壳的存在；桌面增强全部由插件组合实现。
 - **与终端同一数据面**：桌面与终端 `dsh` 共享同一份数据目录，会话、设置、凭据同源可见，是同一账号的两个入口。
 - **干净的进程生命周期**：sidecar 全树随壳启动与回收，不留孤儿进程。

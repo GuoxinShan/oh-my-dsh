@@ -102,6 +102,7 @@ enum DesktopUpdateStatus {
     },
     Ready {
         version: String,
+        notes: String,
     },
     Installing {
         version: String,
@@ -134,7 +135,7 @@ impl DesktopUpdateStatus {
         match self {
             Self::Available { version, .. }
             | Self::Downloading { version, .. }
-            | Self::Ready { version }
+            | Self::Ready { version, .. }
             | Self::Installing { version }
             | Self::Restarting { version } => Some(version.clone()),
             Self::Preparing { version } | Self::Failed { version, .. } => version.clone(),
@@ -152,6 +153,39 @@ struct DownloadedUpdate {
 }
 
 static DOWNLOADED_UPDATE: Mutex<Option<DownloadedUpdate>> = Mutex::new(None);
+
+/// Last 0.2.x builds cannot consume Electron artifacts. Confirming install
+/// opens the GitHub Releases download page instead of applying a package.
+static MANUAL_ELECTRON_DOWNLOAD: Mutex<bool> = Mutex::new(false);
+const ELECTRON_DOWNLOAD_URL: &str = "https://github.com/aka-danielZhang/oh-my-dsh/releases/latest";
+const ELECTRON_CUTOVER_NOTES: &str =
+    "<!-- dsh-electron-cutover -->\n新版 Oh My DSH 已换成 Electron 壳，无法从当前版本自动热更新。确认后将打开 GitHub Releases 下载页。";
+
+fn is_electron_cutover_version(version: &str) -> bool {
+    let core = version.split(['-', '+']).next().unwrap_or(version);
+    let mut parts = core.split('.');
+    let major = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    major > 0 || minor >= 3
+}
+
+fn updater_endpoint_looks_gone(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("404") || lower.contains("not found") || lower.contains("latest.json")
+}
+
+fn remember_manual_electron_download() {
+    if let Ok(mut flag) = MANUAL_ELECTRON_DOWNLOAD.lock() {
+        *flag = true;
+    }
+}
+
+fn take_manual_electron_download() -> bool {
+    MANUAL_ELECTRON_DOWNLOAD
+        .lock()
+        .ok()
+        .is_some_and(|mut flag| std::mem::replace(&mut *flag, false))
+}
 
 /// Run the shell.
 pub fn run() {
@@ -2659,7 +2693,7 @@ fn claim_update_install(status: &mut DesktopUpdateStatus) -> Result<String, Stri
         return Err("update operation already in progress".to_string());
     }
     let version = match &*status {
-        DesktopUpdateStatus::Ready { version } => version.clone(),
+        DesktopUpdateStatus::Ready { version, .. } => version.clone(),
         _ => return Err("no downloaded update ready".to_string()),
     };
     *status = DesktopUpdateStatus::Installing {
@@ -2689,8 +2723,9 @@ fn add_update_chunk(status: &mut DesktopUpdateStatus, chunk: usize, content_leng
     }
 }
 
-/// IPC: check the updater endpoint for a newer release. The same result also
-/// advances the process-wide snapshot consumed by both browser surfaces.
+/// IPC: check the updater endpoint for a newer release.
+/// Archived: 0.3.x Electron packages are not valid Tauri updater artifacts.
+/// Do not point `latest.json` at them; 0.2.x users must download 0.3.x.
 #[tauri::command]
 async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     use tauri_plugin_updater::UpdaterExt as _;
@@ -2707,7 +2742,11 @@ async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::V
     match result {
         Ok(Some(update)) => {
             let version = update.version;
-            let notes = update.body.unwrap_or_default();
+            let notes = if is_electron_cutover_version(&version) {
+                ELECTRON_CUTOVER_NOTES.to_string()
+            } else {
+                update.body.unwrap_or_default()
+            };
             set_update_status(DesktopUpdateStatus::Available {
                 version: version.clone(),
                 notes: notes.clone(),
@@ -2717,6 +2756,15 @@ async fn dsh_desktop_check_update(app: tauri::AppHandle) -> Result<serde_json::V
         Ok(None) => {
             set_update_status(DesktopUpdateStatus::Current);
             Ok(serde_json::json!({ "update": null }))
+        }
+        Err(message) if updater_endpoint_looks_gone(&message) => {
+            let version = "0.3.0".to_string();
+            let notes = ELECTRON_CUTOVER_NOTES.to_string();
+            set_update_status(DesktopUpdateStatus::Available {
+                version: version.clone(),
+                notes: notes.clone(),
+            });
+            Ok(serde_json::json!({ "update": { "version": version, "notes": notes } }))
         }
         Err(message) => {
             set_update_status(DesktopUpdateStatus::Failed {
@@ -2742,6 +2790,14 @@ async fn dsh_desktop_download_update(app: tauri::AppHandle) -> Result<(), String
     use tauri_plugin_updater::UpdaterExt as _;
 
     let expected_version = begin_update_download()?;
+    if is_electron_cutover_version(&expected_version) {
+        remember_manual_electron_download();
+        set_update_status(DesktopUpdateStatus::Ready {
+            version: expected_version,
+            notes: ELECTRON_CUTOVER_NOTES.to_string(),
+        });
+        return Ok(());
+    }
     let result = async {
         {
             let mut downloaded = DOWNLOADED_UPDATE
@@ -2758,6 +2814,7 @@ async fn dsh_desktop_download_update(app: tauri::AppHandle) -> Result<(), String
             .map_err(|e| format!("check failed: {e}"))?
             .ok_or_else(|| "no update available".to_string())?;
         let version = update.version.clone();
+        let notes = update.body.clone().unwrap_or_default();
         set_update_status(DesktopUpdateStatus::Downloading {
             version: version.clone(),
             downloaded: 0,
@@ -2780,7 +2837,7 @@ async fn dsh_desktop_download_update(app: tauri::AppHandle) -> Result<(), String
                 .map_err(|_| "downloaded update storage unavailable".to_string())?;
             *downloaded = Some(DownloadedUpdate { update, bytes });
         }
-        set_update_status(DesktopUpdateStatus::Ready { version });
+        set_update_status(DesktopUpdateStatus::Ready { version, notes });
         Ok::<(), String>(())
     }
     .await;
@@ -2804,6 +2861,17 @@ async fn dsh_desktop_download_update(app: tauri::AppHandle) -> Result<(), String
 #[tauri::command]
 async fn dsh_desktop_install_update(app: tauri::AppHandle) -> Result<(), String> {
     let expected_version = begin_update_install()?;
+    if take_manual_electron_download() {
+        if let Err(error) = dsh_desktop_open_external(ELECTRON_DOWNLOAD_URL.to_string()) {
+            set_update_status(DesktopUpdateStatus::Failed {
+                version: Some(expected_version),
+                message: error.clone(),
+            });
+            return Err(error);
+        }
+        set_update_status(DesktopUpdateStatus::Current);
+        return Ok(());
+    }
     let downloaded = DOWNLOADED_UPDATE
         .lock()
         .map_err(|_| "downloaded update storage unavailable".to_string())
@@ -3015,6 +3083,15 @@ mod tests {
             .and_then(|(_, value)| value)
             .expect("command configures PATH");
         std::env::split_paths(value).collect()
+    }
+
+    #[test]
+    fn electron_cutover_versions_are_0_3_and_above() {
+        assert!(!is_electron_cutover_version("0.2.0-rc.23"));
+        assert!(is_electron_cutover_version("0.3.0-rc.1"));
+        assert!(is_electron_cutover_version("1.0.0"));
+        assert!(updater_endpoint_looks_gone("check failed: 404 Not Found"));
+        assert!(!updater_endpoint_looks_gone("network unreachable"));
     }
 
     #[test]
@@ -3314,7 +3391,12 @@ mod tests {
 
         let mut ready = DesktopUpdateStatus::Ready {
             version: "0.3.0".into(),
+            notes: "fixes".into(),
         };
+        let json = serde_json::to_value(&ready).unwrap();
+        assert_eq!(json["phase"], "ready");
+        assert_eq!(json["version"], "0.3.0");
+        assert_eq!(json["notes"], "fixes");
         assert_eq!(
             claim_update_check(&mut ready).unwrap_err(),
             "downloaded update awaiting confirmation"

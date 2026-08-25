@@ -1,16 +1,17 @@
 name: Release
 
 # 增量发布流水线，tag 分流（见 AGENTS.md「发版」，无斜杠命名）：
-#   v<semver>             → 桌面公证版（macOS .app/.dmg + Windows NSIS + updater artifacts + latest.json）
+#   v<semver>             → 桌面公证版（macOS .app/.dmg + Windows NSIS + electron-updater latest-mac.yml / latest.yml）
 #   dsh-<name>-v<semver>  → 插件 Release（git archive 附件；allowlist 双通道插件
 #                           另发 npm——dsh-mcp-settings / dsh-provider-balance，见
 #                           plugin job 的 npm channel gate 与 AGENTS.md「发版」）
 #
-# ⚠️ latest 指针纪律：自动更新端点是 releases/latest/download/latest.json，
-# desktop Release 独占 latest 指针；插件 Release 一律 make_latest: false，
-# 否则插件发布会把 latest 抢走、桌面自动更新即刻断链。
+# ⚠️ latest 指针纪律：Electron 自动更新端点是 releases/latest/download/latest-mac.yml
+# （mac）与 latest.yml（win）；desktop Release 独占 latest 指针；插件 Release
+# 一律 make_latest: false，否则插件发布会把 latest 抢走、桌面自动更新即刻断链。
+# ⚠️ 0.2.x Tauri 客户端不能经旧 latest.json 升到 0.3.x，必须手动下载新安装包。
 # ⚠️ 双平台纪律：macos 与 windows 必须都成功才发 GitHub Release；一侧失败
-# 则不发版，避免 latest.json 缺平台把该平台的自动更新打穿。
+# 则不发版，避免 updater yml 缺平台把该平台的自动更新打穿。
 
 on:
   push:
@@ -45,30 +46,22 @@ jobs:
           HEAD_COMMIT=$(git rev-parse HEAD)
           [ "$HEAD_COMMIT" = "$TAG_COMMIT" ] || { echo "::error::checkout $HEAD_COMMIT != $TAG ($TAG_COMMIT)"; exit 1; }
 
-      # Guard: the tag must carry exactly the version in tauri.conf.json —
+      # Guard: the tag must carry exactly the version in the root package.json —
       # the classic "tag says X, code says Y" release mistake fails here.
       - name: Assert tag matches the desktop version
         run: |
           set -euo pipefail
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          [ "v$V" = "$TAG" ] || { echo "::error::tag $TAG != v$V (src-tauri/tauri.conf.json + Cargo.toml not bumped?)"; exit 1; }
+          V=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          [ "v$V" = "$TAG" ] || { echo "::error::tag $TAG != v$V (package.json not bumped?)"; exit 1; }
 
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Assert Cargo and Tauri versions match
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAURI_V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          CARGO_V=$(cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).packages.find((pkg) => pkg.name === 'dsh-desktop').version")
-          [ "$TAURI_V" = "$CARGO_V" ] || { echo "::error::tauri.conf.json version $TAURI_V != Cargo.toml version $CARGO_V"; exit 1; }
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
         uses: actions/cache@v4
@@ -119,71 +112,45 @@ jobs:
       - name: Build signed + notarized bundle
         env:
           DSH_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # Tauri otherwise passes create-dmg --skip-jenkins whenever CI=true.
-          # That copies the PNG but omits Finder's .DS_Store, yielding a bare
-          # release DMG even though the same build looks correct locally.
-          TAURI_BUNDLER_DMG_IGNORE_CI: 'true'
-        # The updater key was generated with an EMPTY password; a whitespace
-        # secret value gets dropped by GitHub, and an empty-but-set var makes
-        # tauri prompt/fail. Keep the var unset unless the secret carries a
-        # real password.
         run: |
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ] && [ "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" != " " ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> "$GITHUB_ENV"
-          fi
-          pnpm desktop:build
+          set -euo pipefail
+          pnpm desktop:build -- --mac --config.mac.notarize=true
 
       - name: Verify DMG Finder layout
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/dmg-layout-venv"
           "$RUNNER_TEMP/dmg-layout-venv/bin/pip" install --quiet --disable-pip-version-check ds-store==1.3.1
-          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
+          DMG=$(ls release/*.dmg | head -1)
           PATH="$RUNNER_TEMP/dmg-layout-venv/bin:$PATH" bash scripts/verify-dmg-layout.sh "$DMG"
 
-      - name: Notarize the DMG (tauri notarizes the .app only)
+      - name: Staple and assess the DMG
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg)
-          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          DMG=$(ls release/*.dmg | head -1)
+          xcrun stapler staple "$DMG" || true
           spctl -a -vv -t install "$DMG"
 
-      - name: Stage updater fragment
+      - name: Stage updater artifacts
         run: |
           set -euo pipefail
           mkdir -p dist
           shopt -s nullglob
-          DMGS=(src-tauri/target/release/bundle/dmg/*.dmg)
-          [ "${#DMGS[@]}" -eq 1 ] || { echo "::error::expected exactly one macOS DMG, found ${#DMGS[@]}"; exit 1; }
-          DMG_NAME=$(basename "${DMGS[0]}")
-          DMG_ASSET_NAME=${DMG_NAME// /.}
-          cp "${DMGS[0]}" "dist/$DMG_ASSET_NAME"
-          APP_TARS=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
-          [ "${#APP_TARS[@]}" -eq 1 ] || { echo "::error::expected exactly one macOS updater archive, found ${#APP_TARS[@]}"; exit 1; }
-          APP_TAR=${APP_TARS[0]}
-          APP_TAR_SIG="$APP_TAR.sig"
-          [ -f "$APP_TAR_SIG" ] || { echo "::error::missing updater signature: $APP_TAR_SIG"; exit 1; }
-          APP_TAR_NAME=$(basename "$APP_TAR")
-          APP_TAR_ASSET_NAME=${APP_TAR_NAME// /.}
-          cp "$APP_TAR" "dist/$APP_TAR_ASSET_NAME"
-          cp "$APP_TAR_SIG" "dist/$APP_TAR_ASSET_NAME.sig"
-          SIG=$(cat "$APP_TAR_SIG")
-          APP_TAR_URL_NAME=$(node -p "encodeURIComponent(process.argv[1])" "$APP_TAR_ASSET_NAME")
-          REPO="${{ github.repository }}"
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          node -e '
-          const [sig, url] = process.argv.slice(1)
-          require("fs").writeFileSync("dist/latest-darwin.json", JSON.stringify({ "darwin-aarch64": { signature: sig, url } }, null, 2) + "\n")
-          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/$APP_TAR_URL_NAME"
+          # electron-updater yml uses hyphenated names (Oh-My-DSH-…).
+          # Never strip spaces to OhMyDSH — that 404s the updater.
+          for f in release/*.dmg release/*.zip release/*.blockmap release/latest-mac.yml; do
+            [ -e "$f" ] || continue
+            cp "$f" "dist/$(basename "${f// /-}")"
+          done
+          [ -f dist/latest-mac.yml ] || { echo "::error::missing latest-mac.yml"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -215,24 +182,16 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          [ "v$V" = "$TAG" ] || { echo "::error::tag $TAG != v$V (src-tauri/tauri.conf.json + Cargo.toml not bumped?)"; exit 1; }
+          V=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          [ "v$V" = "$TAG" ] || { echo "::error::tag $TAG != v$V (package.json not bumped?)"; exit 1; }
 
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Assert Cargo and Tauri versions match
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAURI_V=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          CARGO_V=$(cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).packages.find((pkg) => pkg.name === 'dsh-desktop').version")
-          [ "$TAURI_V" = "$CARGO_V" ] || { echo "::error::tauri.conf.json version $TAURI_V != Cargo.toml version $CARGO_V"; exit 1; }
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Cache runtime assembly (fork clone + tarball packs + installed tree)
         uses: actions/cache@v4
@@ -258,53 +217,38 @@ jobs:
           pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile
           pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile
 
-      # NOTE: the certificate presence check lives INSIDE the script — the
-      # `secrets` context is not allowed in a step-level `if:` (GitHub rejects
-      # the whole workflow at parse time: "Unrecognized named-value:
-      # 'secrets'", which broke every release trigger since this job landed).
-      - name: Import Authenticode certificate (skipped when unset)
-        shell: pwsh
+      - name: Write Authenticode certificate for electron-builder
+        shell: bash
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          if ($env:WINDOWS_CERTIFICATE) { ./scripts/windows-import-cert.ps1 }
-          else { Write-Output "WINDOWS_CERTIFICATE empty - skipping import, NSIS ships unsigned (SmartScreen warning)" }
+          set -euo pipefail
+          if [ -z "${WINDOWS_CERTIFICATE:-}" ]; then
+            echo "WINDOWS_CERTIFICATE empty — NSIS will be unsigned (SmartScreen warning)"
+            exit 0
+          fi
+          echo "$WINDOWS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/windows-codesign.pfx"
+          echo "CSC_LINK=$RUNNER_TEMP/windows-codesign.pfx" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$WINDOWS_CERTIFICATE_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Build NSIS bundle
         shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ] && [ "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" != " " ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> "$GITHUB_ENV"
-          fi
-          if [ -f src-tauri/tauri.windows-sign.json ]; then
-            pnpm desktop:build -- --config src-tauri/tauri.windows-sign.json
-          else
-            echo "dsh-desktop: WINDOWS_CERTIFICATE secret empty — NSIS will be unsigned (SmartScreen warning)"
-            pnpm desktop:build
-          fi
+          pnpm desktop:build -- --win
 
-      - name: Stage updater fragment
+      - name: Stage updater artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          EXE=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
-          BASENAME=$(basename "$EXE")
-          ASSET_NAME=${BASENAME// /.}
-          cp "$EXE" "dist/$ASSET_NAME"
-          cp "$EXE.sig" "dist/$ASSET_NAME.sig"
-          SIG=$(tr -d '\r' < "$EXE.sig")
-          REPO="${{ github.repository }}"
-          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
-          ASSET_URL_NAME=$(node -p "encodeURIComponent(process.argv[1])" "$ASSET_NAME")
-          node -e '
-          const [sig, url] = process.argv.slice(1)
-          require("fs").writeFileSync("dist/latest-windows.json", JSON.stringify({ "windows-x86_64": { signature: sig, url } }, null, 2) + "\n")
-          ' "$SIG" "https://github.com/$REPO/releases/download/$TAG/$ASSET_URL_NAME"
+          shopt -s nullglob
+          for f in release/*.exe release/*.blockmap release/latest.yml; do
+            [ -e "$f" ] || continue
+            cp "$f" "dist/$(basename "${f// /-}")"
+          done
+          [ -f dist/latest.yml ] || { echo "::error::missing latest.yml"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -342,26 +286,26 @@ jobs:
           name: windows-bundle
           path: dist
 
-      - name: Compose updater manifest (latest.json)
+      - name: Compose release notes
         run: |
           set -euo pipefail
-          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
-          node scripts/compose-latest-json.mjs "$VERSION" dist/latest.json dist/latest-darwin.json dist/latest-windows.json
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
+          node scripts/release-notes.mjs "$VERSION" > dist/release-notes.md
 
       - name: Publish GitHub Release (owns the latest pointer)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          generate_release_notes: true
+          body_path: dist/release-notes.md
           prerelease: false
           make_latest: true
           files: |
             dist/*.dmg
-            dist/*.app.tar.gz
-            dist/*.app.tar.gz.sig
-            dist/*-setup.exe
-            dist/*-setup.exe.sig
-            dist/latest.json
+            dist/*.zip
+            dist/*.blockmap
+            dist/*.exe
+            dist/latest-mac.yml
+            dist/latest.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

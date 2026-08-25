@@ -22,6 +22,9 @@ describe('titlebarCss', () => {
   it('locks the document scrollable root pair', () => {
     assert.ok(titlebarCss(28).includes('html,body{overflow:hidden;}'), 'the fixed-viewport shell must not be scrollable')
   })
+  it('marks the drag strip for Electron window dragging', () => {
+    assert.ok(titlebarCss(28).includes('[data-desktop-drag-strip]{-webkit-app-region:drag;}'))
+  })
   it('embeds the configured band height', () => {
     assert.ok(titlebarCss(TITLEBAR_ZONE_PX).includes(`padding-top:${String(TITLEBAR_ZONE_PX)}px`))
     assert.ok(titlebarCss(40).includes('padding-top:40px'))

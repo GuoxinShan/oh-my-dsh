@@ -1,23 +1,47 @@
 {
   "name": "oh-my-dsh",
+  "version": "0.3.0-rc.1",
   "private": true,
   "type": "module",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "tauri": "tauri",
-    "desktop:dev": "tauri dev",
+    "desktop:dev": "node scripts/launch-electron.mjs",
+    "desktop:electron": "node scripts/launch-electron.mjs",
+    "desktop:tauri": "tauri dev",
     "desktop:prepare": "node scripts/prepare-desktop-bundle.mjs",
-    "desktop:build": "tauri build",
-    "desktop:build:signed": "tauri build --config src-tauri/tauri.windows-sign.json",
+    "desktop:build": "pnpm run desktop:prepare && node scripts/build-electron.mjs",
+    "desktop:build:tauri": "tauri build",
+    "desktop:build:signed": "pnpm run desktop:build",
+    "desktop:test": "node --import tsx --test src-electron/*.test.ts",
+    "desktop:typecheck": "tsc --noEmit -p src-electron/tsconfig.json",
     "plugin:setup": "node scripts/setup-plugins.mjs",
     "plugin:new": "node scripts/new-plugin.mjs",
     "plugin:check": "cd plugin/dsh-desktop-bridge && pnpm run typecheck && pnpm run test && pnpm run build",
     "plugins:check": "for d in plugin/*/; do d=${d%/}; [ -L \"$d\" ] && continue; echo \"== $d\"; (cd \"$d\" && pnpm run --if-present typecheck && pnpm run --if-present test && pnpm run --if-present build) || exit 1; done",
-    "check": "pnpm run plugin:check",
+    "check": "pnpm run plugin:check && pnpm run desktop:typecheck && pnpm run desktop:test",
     "link:source": "node scripts/source-deps.mjs link",
     "unlink:source": "node scripts/source-deps.mjs unlink"
   },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.9.6"
+  "dependencies": {
+    "electron-updater": "^6.6.4"
   },
-  "packageManager": "pnpm@10.28.0"
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.1",
+    "@tauri-apps/cli": "^2.9.6",
+    "@types/node": "^24.3.0",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.8",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "electron-winstaller"
+    ]
+  }
 }

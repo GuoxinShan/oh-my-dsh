@@ -11,10 +11,11 @@ import type { ReactElement } from 'react'
 import { IconNewChatOutline16, IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { UpdateControl } from './update-indicator.tsx'
+import { NotifyCenter, type NotifyCenterInjected } from './notify-center.tsx'
 import type { DesktopUpdaterInjected } from './updates.ts'
 
 /** Injected face bound in apply's closure: band gestures plus the updater. */
-export interface RailControlsInjected extends DesktopUpdaterInjected {
+export interface RailControlsInjected extends DesktopUpdaterInjected, NotifyCenterInjected {
   /** Toggle the sidebar panel both ways (ctx.layout, resolved lazily per click). */
   toggleSidebar: () => void
   /** The shared New Session action (ctx.workspaces.startSession). */
@@ -44,6 +45,7 @@ export function DesktopRailControls(props: DesktopRailControlsProps): ReactEleme
         <IconPanelLeftOutline16 size={16} />
       </button>
       <UpdateControl {...props} />
+      <NotifyCenter {...props} />
       <button
         type="button"
         data-desktop-rail-button=""
