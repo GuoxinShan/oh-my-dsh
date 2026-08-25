@@ -79,7 +79,9 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => installExternalLinks(document, invoke, logger), 'desktop-bridge: external links')
   ctx.effect(() => installDownloads(document, invoke, logger), 'desktop-bridge: downloads')
   const inbox = createNotifyInbox()
-  const openSession = (sessionId: string): void => { ctx.sessions.open(sessionId) }
+  const openSession = (sessionId: string): void => {
+    ctx.sessions.open(sessionId as Parameters<typeof ctx.sessions.open>[0])
+  }
   ctx.effect(() => {
     const t = ctx.locale.bind(NS)
     return installNotifications({

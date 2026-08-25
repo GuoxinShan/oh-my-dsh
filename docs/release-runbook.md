@@ -14,7 +14,7 @@
 
 ⚠️ **latest 指针纪律**：桌面自动更新端点是 `releases/latest/download/latest-mac.yml`（mac）与 `latest.yml`（win）——插件 Release 抢走 latest 会让桌面自动更新即刻 404。流水线已内置 `make_latest: false`；若手动在网页上发插件 Release，务必不勾 "Set as the latest release"。桌面版本号 = 仓根 `package.json`；插件版本号 = 各包 `package.json`。runtime fork 标签用 `v<基线>+zw.<补丁>`。
 
-⚠️ **0.2.x → 0.3.x 断链**：0.2.x 走 Tauri `latest.json` + minisign。0.3.x 走 electron-updater。两条通道不能互喂。已装 0.2.x 的用户必须从 Releases 下载新安装包，不能热更新。
+⚠️ **0.2.x → 0.3.x 断链**：0.2.x 走 Tauri `latest.json` + minisign。0.3.x 走 electron-updater。0.3.x Release 仍附带一份 cutover `latest.json`（版本号 + 换壳说明，平台 URL 是占位），避免 0.2.x 检查 404 后完全静默；不能把 Electron 包当 Tauri 更新安装。已装 0.2.x 须从 Releases 手动下载。
 
 **独立版本不等于独立交付面**：插件 tag 只发布可手动安装的插件 archive，不会更新已安装 desktop。若该插件属于 AGENTS.md 声明的 desktop-owned 资源集合，首次发布或版本升级必须同一轮更新 prepare/resources/壳安装链、提升 desktop 版本并再推 `v<semver>`；只有 desktop Release 才会把它交付给桌面用户。具体到本次交付，`dsh-web-search-toggle` 0.1.3 必须由 Desktop `v0.2.0-rc.14` 携带，不能以插件 `dsh-web-search-toggle-v0.1.3` Release 替代。
 

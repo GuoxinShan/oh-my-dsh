@@ -18,6 +18,7 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 - 桌面壳换成 Electron（Chromium）。macOS 用 `hiddenInset` 标题栏；通知带应用身份，点击回到窗口。
 - 自动更新改为 `electron-updater`。0.2.x Tauri 用户须手动下载。
 - macOS 关窗后壳与 sidecar 留在后台（通知仍会响），Dock 点回来；Cmd+Q 才退出。
+- 0.3.x Release 仍放一份 `latest.json`，让 0.2.x 看到换壳说明而不是端点 404；不能热更新，须手动下载。
 
 ### Added
 

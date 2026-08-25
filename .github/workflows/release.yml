@@ -291,6 +291,9 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
           node scripts/release-notes.mjs "$VERSION" > dist/release-notes.md
+          # 0.2.x still polls releases/latest/download/latest.json. Keep a
+          # cutover document there so they see a newer version instead of 404.
+          node scripts/tauri-cutover-latest-json.mjs "$VERSION" dist/latest.json
 
       - name: Publish GitHub Release (owns the latest pointer)
         uses: softprops/action-gh-release@v2
@@ -306,6 +309,7 @@ jobs:
             dist/*.exe
             dist/latest-mac.yml
             dist/latest.yml
+            dist/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
