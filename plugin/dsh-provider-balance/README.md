@@ -67,6 +67,7 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
 | `GET https://opencode.ai/zen/go/v1/usage` | 5h 滚动 / 周 / 月三窗口用量 |
 
 - 鉴权：`Authorization: Bearer <API Key>`；key 是 OpenCode Go 的 Anthropic 兼容 key（`sk-opencode-...`），env 名 `OPENCODE_GO_API_KEY`。
+- 实现注意：host 插件会把 `quotaBase` 裁成 origin，故适配器 base 只能是 `https://opencode.ai`，路径必须带 `/zen/go/v1/usage`（0.4.2 曾把 `/zen/go` 放在 base 上，裁切后打到 `/v1/usage` → 404）。
 - 响应 `usage.{rolling, weekly, monthly}`，每项 `{status, percent, resetsAt}` —— `percent` 为**已用**百分比（0-100），`resetsAt` 为 ISO 时间；`status != "ok"` 时面板行尾提示。
 - 与 GLM/Kimi 不同：只有百分比，无任何绝对计数；**有月窗口**（紫色进度条）。
 - chat 路由：多数模型走 OpenAI 兼容协议，`baseURL: https://opencode.ai/zen/go/v1`（GLM/Kimi/DeepSeek/MiMo 系），部分走 `/v1/responses`（grok、gpt）或 `/v1/messages`（MiniMax/Qwen 系）。
