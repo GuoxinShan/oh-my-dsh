@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-# Generate the DMG window background: src-tauri/dmg/background.png
+# Generate the DMG window backgrounds:
+#   src-tauri/dmg/background.png      660x400 @72dpi  (electron-builder 1x)
+#   src-tauri/dmg/background@2x.png   1320x800 @144dpi
 #
-# Canvas is laid out in points (660x400, the windowSize in tauri.conf.json) and
-# rendered at 2x (1320x800). The PNG is saved with 144 DPI metadata so Finder
-# maps it 1:1 to points and stays crisp on Retina displays (same convention as
-# DropDMG's "72 or 144 dpi" backgrounds).
+# Canvas is laid out in points (660x400, electron-builder.yml dmg.window).
+# electron-builder 26 sizes the Finder window from the 1x PNG's pixel size,
+# then combines the pair into a hidpi TIFF when `@2x` sits next to it.
+# A single 1320x800 file named background.png makes the window 2x too big.
 #
-# Icon anchors must stay in sync with bundle.macOS.dmg in tauri.conf.json:
-#   appPosition (180, 196)  applicationFolderPosition (480, 196)  icon size 128
+# Icon anchors must stay in sync with electron-builder.yml dmg.contents:
+#   app (180, 196)  Applications (480, 196)  icon size 128
 #
 # Requires: pip install --user pillow  (macOS system python3 works)
 
@@ -24,7 +26,9 @@ APP_POS = (180, 196)
 APPS_POS = (480, 196)
 ARROW_Y = 196
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "src-tauri", "dmg", "background.png")
+OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "src-tauri", "dmg")
+OUT_1X = os.path.join(OUT_DIR, "background.png")
+OUT_2X = os.path.join(OUT_DIR, "background@2x.png")
 
 FONT_CJK = "/System/Library/Fonts/Hiragino Sans GB.ttc"  # W3 idx 0, W6 idx 2
 
@@ -107,9 +111,12 @@ def main():
     draw_arrow(img)
     draw_text(img)
 
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    img.convert("RGB").save(OUT, "PNG", dpi=(144, 144))
-    print(f"wrote {OUT} ({PW}x{PH} @144dpi)")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    rgb = img.convert("RGB")
+    rgb.save(OUT_2X, "PNG", dpi=(144, 144))
+    rgb.resize((W, H), Image.LANCZOS).save(OUT_1X, "PNG", dpi=(72, 72))
+    print(f"wrote {OUT_1X} ({W}x{H} @72dpi)")
+    print(f"wrote {OUT_2X} ({PW}x{PH} @144dpi)")
 
 
 if __name__ == "__main__":

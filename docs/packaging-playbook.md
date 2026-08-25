@@ -34,7 +34,7 @@ pnpm desktop:build
 
 ### 安装窗口外观（DMG 背景与布局）
 
-- `src-tauri/dmg/background.png` —— 仍复用既有背景（由 `scripts/generate-dmg-background.py` 生成）。
+- `src-tauri/dmg/background.png`（660×400）+ `background@2x.png`（1320×800）—— 由 `scripts/generate-dmg-background.py` 生成。electron-builder 26 用 1x 像素定窗口，再和 `@2x` 合成 hidpi TIFF；只放一张 1320×800 的 `background.png` 会把 Finder 窗撑成 2 倍。
 - `electron-builder.yml` 的 `dmg.window` / `dmg.contents` 钉 660×400 与图标坐标（180,196）/（480,196）。
 
 流水线在公证前运行 `scripts/verify-dmg-layout.sh <dmg>`。
