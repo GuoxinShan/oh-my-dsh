@@ -1,0 +1,295 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
+import { extractBundleTar, readRevisionManifest } from './extract.ts'
+import { repoRoot, resourceDir, shellRoot, userHome } from './paths.ts'
+
+export interface Runtime {
+  node: string
+  argsPrefix: string[]
+  cli: string
+  cwd: string
+  pathPrepend: string[]
+  oneNode: boolean
+}
+
+export function composeProcessPath(preferred: string[], inherited: string | undefined): string {
+  const parts: string[] = []
+  const seen = new Set<string>()
+  const incoming = inherited === undefined ? [] : inherited.split(path.delimiter)
+  for (const item of [...preferred, ...incoming]) {
+    if (!item || seen.has(item)) continue
+    seen.add(item)
+    parts.push(item)
+  }
+  return parts.join(path.delimiter)
+}
+
+export function hostCliPathDirs(): string[] {
+  const candidates: string[] = []
+  try {
+    const home = userHome()
+    candidates.push(path.join(home, '.local/bin'))
+    candidates.push(path.join(home, '.bun/bin'))
+    candidates.push(path.join(home, '.cargo/bin'))
+    if (process.platform === 'darwin') {
+      candidates.push(path.join(home, 'Library/pnpm'))
+      candidates.push(path.join(home, '.npm-global/bin'))
+    } else if (process.platform !== 'win32') {
+      candidates.push(path.join(home, '.linuxbrew/bin'))
+    } else {
+      candidates.push(path.join(home, 'scoop', 'shims'))
+    }
+  } catch {
+    // no home — skip user dirs
+  }
+  if (process.platform === 'darwin') {
+    candidates.push('/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin')
+  } else if (process.platform !== 'win32') {
+    candidates.push('/usr/local/bin', '/home/linuxbrew/.linuxbrew/bin')
+  } else {
+    if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm'))
+    if (process.env.LOCALAPPDATA) {
+      candidates.push(path.join(process.env.LOCALAPPDATA, 'pnpm'))
+      candidates.push(path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'bin'))
+    }
+    if (process.env.ProgramFiles) candidates.push(path.join(process.env.ProgramFiles, 'nodejs'))
+  }
+  return candidates.filter((dir) => {
+    try {
+      return fs.statSync(dir).isDirectory()
+    } catch {
+      return false
+    }
+  })
+}
+
+export function ensureNodeShim(electronPath: string, root: string): string {
+  const dir = path.join(root, 'node-shim')
+  fs.mkdirSync(dir, { recursive: true })
+  if (process.platform === 'win32') {
+    const dest = path.join(dir, 'node.cmd')
+    fs.writeFileSync(dest, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${electronPath}" %*\r\n`)
+  } else {
+    const dest = path.join(dir, 'node')
+    fs.writeFileSync(dest, `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec ${JSON.stringify(electronPath)} "$@"\n`)
+    fs.chmodSync(dest, 0o755)
+  }
+  return dir
+}
+
+/**
+ * Runtime tarballs omit `tools/node`, but pnpm's `.bin/pnpm` still prefers a
+ * sibling `.bin/node` (relative to the missing binary). Remove those stubs so
+ * `exec node` falls through to PATH — where our Electron one-node shim lives.
+ */
+export function neutralizeToolsNodeShims(runtimeDir: string): void {
+  const bin = path.join(runtimeDir, 'tools/node_modules/.bin')
+  for (const name of ['node', 'node.cmd', 'node.ps1']) {
+    const file = path.join(bin, name)
+    try {
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+    } catch (error) {
+      console.warn(`dsh-desktop: could not remove stale tools node shim ${file}: ${String(error)}`)
+    }
+  }
+}
+
+export function bundledNode(dir: string): string | undefined {
+  const tools = path.join(dir, 'tools/node_modules/node')
+  for (const rel of ['bin/node.exe', 'bin/node', 'node.exe']) {
+    const candidate = path.join(tools, rel)
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
+export function bundledRuntime(dir: string, oneNode: boolean, electronPath: string, packaged = false): Runtime {
+  const cli = path.join(dir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
+  if (!fs.existsSync(cli)) {
+    throw new Error(`bundled runtime missing CLI entry: ${cli}`)
+  }
+  const nodeBinary = bundledNode(dir)
+  if (oneNode) {
+    if (packaged && nodeBinary !== undefined) {
+      throw new Error(`sidecar still resolved a second node at ${nodeBinary}`)
+    }
+    const shim = ensureNodeShim(electronPath, shellRoot())
+    neutralizeToolsNodeShims(dir)
+    return {
+      node: electronPath,
+      argsPrefix: ['--import', 'tsx/esm'],
+      cli,
+      cwd: path.join(dir, 'dsh'),
+      // Shim first on PATH; also delete tools/.bin/node* so pnpm's wrapper
+      // does not hard-exec the omitted tools/node binary.
+      pathPrepend: [shim, path.join(dir, 'tools/node_modules/.bin')],
+      oneNode: true,
+    }
+  }
+  if (nodeBinary === undefined) {
+    throw new Error(`bundled runtime missing node binary under ${dir}/tools/node_modules/node`)
+  }
+  return {
+    node: nodeBinary,
+    argsPrefix: ['--import', 'tsx/esm'],
+    cli,
+    cwd: path.join(dir, 'dsh'),
+    pathPrepend: [
+      path.join(dir, 'tools/node_modules/.bin'),
+      path.join(dir, 'tools/node_modules/node/bin'),
+    ],
+    oneNode: false,
+  }
+}
+
+function findCheckout(): string {
+  const candidates: string[] = []
+  if (process.env.DSH_CHECKOUT) candidates.push(process.env.DSH_CHECKOUT)
+  candidates.push(path.join(repoRoot(), '../deepseek-harness'))
+  try {
+    candidates.push(path.join(userHome(), 'workspace/deepseek-harness'))
+  } catch {
+    // ignore
+  }
+  for (const candidate of candidates) {
+    if (
+      fs.existsSync(path.join(candidate, 'docs/architecture.md'))
+      && fs.existsSync(path.join(candidate, 'apps/cli/src/bin.ts'))
+    ) {
+      return candidate
+    }
+  }
+  throw new Error(
+    `no DeepSeek Harness checkout found (need docs/architecture.md and apps/cli/src/bin.ts); tried: ${candidates.join(', ')}`,
+  )
+}
+
+function hasBundledCli(dir: string): boolean {
+  return fs.existsSync(path.join(dir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js'))
+}
+
+/** Prefer the revision.json SHA; if that tree is missing, use the only assembled runtime. */
+export function selectAssembledRuntimeDir(buildRoot: string, pinnedSha: string): string | undefined {
+  const pinned = path.join(buildRoot, pinnedSha)
+  if (hasBundledCli(pinned)) return pinned
+  if (!fs.existsSync(buildRoot)) return undefined
+  const found: string[] = []
+  for (const name of fs.readdirSync(buildRoot)) {
+    const dir = path.join(buildRoot, name)
+    try {
+      if (!fs.statSync(dir).isDirectory()) continue
+    } catch {
+      continue
+    }
+    if (hasBundledCli(dir)) found.push(dir)
+  }
+  if (found.length === 1) return found[0]
+  return undefined
+}
+
+function sourceRuntime(electronPath: string): Runtime {
+  const checkout = findCheckout()
+  const inElectron = typeof process.versions.electron === 'string' && process.versions.electron.length > 0
+  if (inElectron) {
+    const shim = ensureNodeShim(electronPath, shellRoot())
+    return {
+      node: electronPath,
+      argsPrefix: ['--import', 'tsx/esm'],
+      cli: path.join(checkout, 'apps/cli/src/bin.ts'),
+      cwd: checkout,
+      pathPrepend: [shim],
+      oneNode: true,
+    }
+  }
+  return {
+    node: process.env.DSH_NODE ?? 'node',
+    argsPrefix: ['--import', 'tsx/esm'],
+    cli: path.join(checkout, 'apps/cli/src/bin.ts'),
+    cwd: checkout,
+    pathPrepend: [],
+    oneNode: false,
+  }
+}
+
+function releaseRuntimeDir(packaged: boolean): string | undefined {
+  if (!packaged) return undefined
+  const resources = resourceDir(true)
+  if (resources === undefined) return undefined
+  const value = readRevisionManifest(resources)
+  if (value === undefined) return undefined
+  const sha = typeof value.sha === 'string' ? value.sha : ''
+  if (!sha) throw new Error(`bundled runtime-revision.json has no sha: ${path.join(resources, 'runtime-revision.json')}`)
+  const tarball = typeof value.runtimeTarball === 'string' ? value.runtimeTarball : ''
+  const root = path.join(shellRoot(), 'runtime', sha)
+  if (
+    tarball
+    && fs.existsSync(path.join(root, '.ok'))
+    && fs.readFileSync(path.join(root, '.ok'), 'utf8').trim() === tarball
+  ) {
+    return root
+  }
+  extractBundleTar(path.join(resources, 'runtime.tar.gz'), root, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', tarball)
+  console.log(`dsh-desktop: extracted bundled runtime ${sha} to ${root}`)
+  return root
+}
+
+export function electronAbiMarker(runtimeDir: string): string {
+  return path.join(runtimeDir, '.electron-abi')
+}
+
+/** Packaged always shares Electron's Node. Unpackaged needs a rebuild marker on *this* tree. */
+export function oneNodeForRuntimeDir(packaged: boolean, runtimeDir: string | undefined): boolean {
+  if (process.env.DSH_ELECTRON_ONE_NODE === '1') return true
+  if (process.env.DSH_ELECTRON_ONE_NODE === '0') return false
+  if (packaged) return true
+  if (runtimeDir === undefined) return false
+  return fs.existsSync(electronAbiMarker(runtimeDir))
+}
+
+export function findRuntime(packaged: boolean, electronPath: string): Runtime {
+  if (process.env.DSH_DESKTOP_RUNTIME) {
+    const dir = process.env.DSH_DESKTOP_RUNTIME
+    return bundledRuntime(dir, oneNodeForRuntimeDir(packaged, dir), electronPath, packaged)
+  }
+  const revisionPath = path.join(repoRoot(), 'runtime/revision.json')
+  if (fs.existsSync(revisionPath) && !packaged) {
+    const value = JSON.parse(fs.readFileSync(revisionPath, 'utf8')) as { sha?: string }
+    const sha = value.sha ?? ''
+    const dir = selectAssembledRuntimeDir(path.join(repoRoot(), 'runtime/build'), sha)
+    if (dir !== undefined) {
+      if (path.basename(dir) !== sha) {
+        console.warn(
+          `dsh-desktop: runtime/revision.json sha ${sha.slice(0, 12)} is not assembled; using ${path.basename(dir)}`,
+        )
+      }
+      return bundledRuntime(dir, oneNodeForRuntimeDir(packaged, dir), electronPath, packaged)
+    }
+  }
+  const extracted = releaseRuntimeDir(packaged)
+  if (extracted !== undefined) {
+    return bundledRuntime(extracted, oneNodeForRuntimeDir(packaged, extracted), electronPath, packaged)
+  }
+  return sourceRuntime(electronPath)
+}
+
+export function applyOneNodeEnv(env: NodeJS.ProcessEnv, oneNode: boolean): NodeJS.ProcessEnv {
+  if (oneNode) env.ELECTRON_RUN_AS_NODE = '1'
+  else delete env.ELECTRON_RUN_AS_NODE
+  return env
+}
+
+export function runtimeEnv(runtime: Runtime, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  applyOneNodeEnv(env, runtime.oneNode)
+  env.PATH = composeProcessPath(runtime.pathPrepend, process.env.PATH)
+  return env
+}
+
+export function sidecarEnv(runtime: Runtime, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const preferred = [...runtime.pathPrepend, ...hostCliPathDirs()]
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  applyOneNodeEnv(env, runtime.oneNode)
+  env.PATH = composeProcessPath(preferred, process.env.PATH)
+  return env
+}

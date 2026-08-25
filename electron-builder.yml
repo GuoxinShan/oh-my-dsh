@@ -1,0 +1,54 @@
+appId: dev.dsh.desktop
+productName: Oh My DSH
+copyright: MIT
+asar: true
+directories:
+  output: release
+  buildResources: src-electron/build
+files:
+  - dist-electron/**/*
+  - package.json
+extraResources:
+  - from: src-electron/resources
+    to: resources
+mac:
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  notarize: false
+  icon: src-tauri/icons/icon.icns
+  target:
+    - dmg
+    - zip
+  artifactName: Oh-My-DSH-${version}-${arch}.${ext}
+dmg:
+  background: src-tauri/dmg/background.png
+  iconSize: 128
+  window:
+    width: 660
+    height: 400
+  contents:
+    - x: 180
+      y: 196
+      type: file
+    - x: 480
+      y: 196
+      type: link
+      path: /Applications
+  artifactName: Oh-My-DSH-${version}-${arch}.${ext}
+win:
+  icon: src-tauri/icons/icon.ico
+  target:
+    - nsis
+  artifactName: Oh-My-DSH-${version}-setup.${ext}
+nsis:
+  oneClick: true
+  perMachine: false
+  shortcutName: Oh My DSH
+  installerIcon: src-tauri/icons/icon.ico
+  uninstallerIcon: src-tauri/icons/icon.ico
+publish:
+  provider: github
+  owner: aka-danielZhang
+  repo: oh-my-dsh
+

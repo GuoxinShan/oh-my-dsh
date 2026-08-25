@@ -14,7 +14,7 @@ export type DesktopUpdateStatus =
   | { phase: 'available'; version: string; notes: string }
   | { phase: 'preparing'; version?: string }
   | { phase: 'downloading'; version: string; downloaded: number; total?: number }
-  | { phase: 'ready'; version: string }
+  | { phase: 'ready'; version: string; notes: string }
   | { phase: 'installing'; version: string }
   | { phase: 'restarting'; version: string }
   | { phase: 'failed'; version?: string; message: string }
@@ -71,6 +71,7 @@ export function decodeUpdateStatus(value: unknown): DesktopUpdateStatus {
       }
     }
     case 'ready':
+      return { phase, version: text(raw.version, '?'), notes: text(raw.notes) }
     case 'installing':
     case 'restarting':
       return { phase, version: text(raw.version, '?') }
@@ -101,6 +102,20 @@ export function isUpdateBusy(status: DesktopUpdateStatus): boolean {
     || status.phase === 'downloading'
     || status.phase === 'installing'
     || status.phase === 'restarting'
+}
+
+/** Drop empty or historical placeholder copy so the dialog can stay quiet. */
+export function visibleUpdateNotes(notes: string): string {
+  const trimmed = notes.trim()
+  if (trimmed.length === 0) return ''
+  if (/^see the release page for notes\.?$/i.test(trimmed)) return ''
+  return trimmed
+}
+
+/** Notes carried by available/ready snapshots; other phases have none. */
+export function notesFromStatus(status: DesktopUpdateStatus): string {
+  if (status.phase === 'available' || status.phase === 'ready') return status.notes
+  return ''
 }
 
 /** Quiet title-band visibility: background failures remain silent. */

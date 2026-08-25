@@ -318,9 +318,12 @@ function opencodeWindow(window: { status?: string; percent?: number; resetsAt?: 
 
 const opencodeAdapter: ProviderAdapter = {
   credential: 'OPENCODE_GO_API_KEY',
-  base: 'https://opencode.ai/zen/go',
+  // Origin only: resolveConfig collapses quotaBase to scheme://host, so the
+  // /zen/go prefix must live on the request path (not the adapter base).
+  // Otherwise getJson('/v1/usage') hits https://opencode.ai/v1/usage → 404.
+  base: 'https://opencode.ai',
   async read(getJson) {
-    const body = await getJson('/v1/usage') as {
+    const body = await getJson('/zen/go/v1/usage') as {
       usage?: { rolling?: { status?: string; percent?: number; resetsAt?: string }; weekly?: { status?: string; percent?: number; resetsAt?: string }; monthly?: { status?: string; percent?: number; resetsAt?: string } }
     }
     const usage = body?.usage
@@ -540,8 +543,8 @@ function originOf(baseURL: string): string | undefined {
 const CHAT_PATH_SUFFIXES: Record<string, readonly string[]> = {
   'zai-coding': ['/api/coding/paas/v4', '/api/paas/v4'],
   'kimi-coding': ['/coding/v1', '/v1'],
-  /* OpenCode's quota path lives UNDER the base (/zen/go/v1/usage), so a
-   * copied chat baseURL keeps its path — nothing to strip. */
+  /* OpenCode usage is absolute from the host (/zen/go/v1/usage); chat bases
+   * like …/zen/go/v1 are collapsed to origin, so no suffix strip is needed. */
   'opencode-go': [],
   'deepseek-official': [],
 }

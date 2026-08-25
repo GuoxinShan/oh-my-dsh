@@ -20,23 +20,14 @@ if [[ ! -f "$dmg" ]]; then
 fi
 dmg=$(cd "$(dirname "$dmg")" && pwd)/$(basename "$dmg")
 
-config="$repo_root/src-tauri/tauri.conf.json"
-product_name=$(node -p \
-  "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).productName" \
-  "$config")
-layout=$(node -e '
-const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))
-const dmg = config.bundle.macOS.dmg
-process.stdout.write([
-  dmg.windowSize.width,
-  dmg.windowSize.height,
-  dmg.appPosition.x,
-  dmg.appPosition.y,
-  dmg.applicationFolderPosition.x,
-  dmg.applicationFolderPosition.y,
-].join(" "))
-' "$config")
-read -r window_width window_height app_x app_y applications_x applications_y <<< "$layout"
+product_name="Oh My DSH"
+# Keep these in lockstep with electron-builder.yml dmg.window / dmg.contents.
+window_width=660
+window_height=400
+app_x=180
+app_y=196
+applications_x=480
+applications_y=196
 
 expected_background="$repo_root/src-tauri/dmg/background.png"
 mount_dir=$(mktemp -d "${TMPDIR:-/tmp}/dsh-dmg-verify.XXXXXX")

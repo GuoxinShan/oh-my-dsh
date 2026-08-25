@@ -2,7 +2,7 @@
 
 在 DeepSeek Harness（DSH）Web 界面中显示模型供应商的剩余配额，两个入口：
 
-- **输入框旁的胶囊**：紧挨上下文用量圈圈，跟随当前会话选中的模型 —— 切到哪家供应商就显示哪家的余量（余额型显示金额，窗口型显示百分比）；无适配器的供应商不显示。
+- **输入框旁的胶囊**：紧挨上下文用量圈圈，跟随当前会话选中的模型 —— 切到哪家供应商就显示哪家的余量（余额型显示金额，窗口型固定显示 5 小时剩余百分比）；无适配器的供应商不显示。点开看周/月/工具明细。
 - **模型设置页的行内徽标**：设置 → 模型 里每个已配置供应商的行上（名称与「编辑」按钮之间）一颗紧凑胶囊，点击向下展开详情面板；无适配器的供应商不渲染，卸载本插件后行恢复原样。**纯插件 DOM 注入实现，宿主零改动**：MutationObserver 监听页面，在每行「编辑」按钮所属操作区前插入一个外源容器，把 `ProviderBalanceRowBadge` 组件经独立 `react-dom/client` root 挂载进去——供应商路由 id 从编辑按钮的无障碍名（`编辑 {displayName} ({provider})`）解析，宿主 React 树不被触碰，上游原版 harness 即可运行。误判防护：解析不出的行不注入；注入了但无适配器的供应商徽标渲染为空，视觉零影响。
 
 已接入六家供应商 + 一类自动判别网关：
@@ -67,6 +67,7 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
 | `GET https://opencode.ai/zen/go/v1/usage` | 5h 滚动 / 周 / 月三窗口用量 |
 
 - 鉴权：`Authorization: Bearer <API Key>`；key 是 OpenCode Go 的 Anthropic 兼容 key（`sk-opencode-...`），env 名 `OPENCODE_GO_API_KEY`。
+- 实现注意：host 插件会把 `quotaBase` 裁成 origin，故适配器 base 只能是 `https://opencode.ai`，路径必须带 `/zen/go/v1/usage`（0.4.2 曾把 `/zen/go` 放在 base 上，裁切后打到 `/v1/usage` → 404）。
 - 响应 `usage.{rolling, weekly, monthly}`，每项 `{status, percent, resetsAt}` —— `percent` 为**已用**百分比（0-100），`resetsAt` 为 ISO 时间；`status != "ok"` 时面板行尾提示。
 - 与 GLM/Kimi 不同：只有百分比，无任何绝对计数；**有月窗口**（紫色进度条）。
 - chat 路由：多数模型走 OpenAI 兼容协议，`baseURL: https://opencode.ai/zen/go/v1`（GLM/Kimi/DeepSeek/MiMo 系），部分走 `/v1/responses`（grok、gpt）或 `/v1/messages`（MiniMax/Qwen 系）。
@@ -129,9 +130,9 @@ OpenCode Go 订阅（$10/月）有官方但未写入公开文档的用量接口�
    ```
 
 3. 刷新 `http://127.0.0.1:3080`，输入框工具行右侧（模型选择器左边）会出现余量胶囊。
-   **胶囊跟随当前会话选中的模型**：切到 GLM 显示 `94% · 73% · 4000`（GLM 5h / 周 / 工具），
-   切到 Kimi 显示 `100% · 100%`（Kimi 5h / 周）；切到没有适配器的供应商（如 openai）时胶囊消失。
-   点击展开该供应商的详情面板：进度条（蓝 5h / 绿周 / 紫工具）、重置倒计时、套餐档位、手动刷新。
+   **胶囊跟随当前会话选中的模型**：窗口型固定显示 5 小时剩余百分比，余额型显示金额；
+   切到没有适配器的供应商（如 openai）时胶囊消失。
+   点击展开详情：各窗口进度条（蓝 5h / 绿周 / 紫月或工具）、重置倒计时、套餐档位、手动刷新。
    同时，设置 → 模型 页每个已配置供应商的行上会出现同数据的紧凑徽标（纯插件 DOM 注入，
    无需 harness 侧任何槽位或源码改动）。
 

@@ -30,6 +30,9 @@ src-tauri/gen/
 
 # 打包资源（prepare-desktop-bundle 再生：runtime/bridge tarball + revision 副本）
 src-tauri/resources/
+src-electron/resources/
+dist-electron/
+release/
 
 # 签名与公证凭据（绝不入库）
 *.p8

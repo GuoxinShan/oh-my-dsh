@@ -52,6 +52,8 @@ export function shouldFuseTitlebar(platform: string): boolean {
 export function titlebarCss(zonePx: number): string {
   return [
     'html,body{overflow:hidden;}',
+    // Electron drag surface (CSS keeps CSProperties clean; rail buttons use no-drag).
+    '[data-desktop-drag-strip]{-webkit-app-region:drag;}',
     `div:has(> [data-shell-overlay])>div:nth-child(-n+3){box-sizing:border-box;padding-top:${String(zonePx)}px;}`,
   ].join('')
 }
