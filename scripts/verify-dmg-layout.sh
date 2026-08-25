@@ -51,9 +51,43 @@ fail() {
 }
 
 ds_store="$mount_dir/.DS_Store"
-background="$mount_dir/.background/background.png"
 app="$mount_dir/$product_name.app"
 applications="$mount_dir/Applications"
+
+# electron-builder 26 / dmgbuild copies the (possibly hidpi TIFF) background
+# to one of several volume-root names. Tauri create-dmg used a folder.
+find_background() {
+  local candidate
+  for candidate in \
+    "$mount_dir/.background/background.png" \
+    "$mount_dir/.background/background.tiff" \
+    "$mount_dir/.background/background.tif" \
+    "$mount_dir/.background.png" \
+    "$mount_dir/.background.tiff" \
+    "$mount_dir/.background.tif" \
+    "$mount_dir/.background"
+  do
+    if [[ -f "$candidate" && -s "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  if [[ -d "$mount_dir/.background" ]]; then
+    candidate=$(find "$mount_dir/.background" -type f \( -name '*.png' -o -name '*.tiff' -o -name '*.tif' \) | head -1)
+    if [[ -n "${candidate:-}" && -s "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+background=""
+if ! background=$(find_background); then
+  fail "bundled background is missing"
+  echo "verify-dmg-layout: volume root:" >&2
+  ls -la "$mount_dir" >&2 || true
+fi
 
 if [[ ! -s "$ds_store" ]]; then
   fail ".DS_Store is missing or empty; Finder will show the default bare layout"
@@ -103,8 +137,14 @@ if actual_size != expected_size:
 if icvp.get("backgroundType") != 2:
     errors.append(f"Finder backgroundType {icvp.get('backgroundType')!r} != 2 (image)")
 alias = icvp.get("backgroundImageAlias", b"")
-if not isinstance(alias, (bytes, bytearray)) or b"background.png" not in alias:
-    errors.append("Finder background image alias does not reference background.png")
+alias_ok = isinstance(alias, (bytes, bytearray)) and (
+    b"background.png" in alias
+    or b"background.tiff" in alias
+    or b"background.tif" in alias
+    or b".background" in alias
+)
+if not alias_ok:
+    errors.append("Finder background image alias does not reference the bundled background")
 if icvp.get("arrangeBy") != "none":
     errors.append(f"Finder arrangeBy {icvp.get('arrangeBy')!r} != 'none'")
 if icvp.get("iconSize") != 128.0:
@@ -124,10 +164,22 @@ PY
   fi
 fi
 
-if [[ ! -f "$background" ]]; then
-  fail "bundled background is missing"
-elif ! cmp -s "$expected_background" "$background"; then
-  fail "bundled background differs from src-tauri/dmg/background.png"
+if [[ -n "$background" ]]; then
+  case "$background" in
+    *.png)
+      if [[ -f "$expected_background" ]] && ! cmp -s "$expected_background" "$background"; then
+        fail "bundled PNG background differs from src-tauri/dmg/background.png"
+      fi
+      ;;
+    *)
+      # hidpi TIFF from tiffutil is a derived file; size is the contract.
+      bg_w=$(sips -g pixelWidth "$background" | awk '/pixelWidth/{print $2}')
+      bg_h=$(sips -g pixelHeight "$background" | awk '/pixelHeight/{print $2}')
+      if [[ "$bg_w" != "$window_width" || "$bg_h" != "$window_height" ]]; then
+        fail "bundled background pixel size ${bg_w}x${bg_h} != ${window_width}x${window_height}"
+      fi
+      ;;
+  esac
 fi
 
 [[ -d "$app" ]] || fail "$product_name.app is missing"
@@ -141,4 +193,5 @@ if [[ "$failed" == true ]]; then
   exit 1
 fi
 
-echo "verify-dmg-layout: ok ($(basename "$dmg"), .DS_Store ${ds_store_size} bytes, background $(shasum -a 256 "$background" | awk '{print $1}'))"
+bg_label=$(basename "$background")
+echo "verify-dmg-layout: ok ($(basename "$dmg"), .DS_Store ${ds_store_size} bytes, background ${bg_label} $(shasum -a 256 "$background" | awk '{print $1}'))"
