@@ -462,26 +462,18 @@ window.__ModuleLoader__.load({
       var tools = data.tools
       var balances = Array.isArray(data.balances) ? data.balances : []
 
-      /* Chip segments: balance-type providers show the amount; window-type
-       * providers show the remaining percents. */
+      /* Chip is a single number: prepaid amount, or the 5h window. Week /
+       * month / tools stay in the click panel so the compact figure does
+       * not change meaning from one refresh to the next. */
       var chipBody = []
       if (balances.length > 0) {
         var b = balances[0]
         var bsym = b.currency === 'USD' ? '$' : '¥'
         chipBody.push(createElement('span', { key: 'bal', className: 'dpb-num' },
           bsym + (isFinite(b.total) ? b.total.toFixed(2) : '—')))
-      }
-      if (sessionLeft !== undefined) {
+      } else if (sessionLeft !== undefined) {
         chipBody.push(createElement('span', { key: 's', className: levelOf(sessionLeft) },
           createElement('span', { className: 'dpb-num' }, sessionLeft + '%')))
-      }
-      if (weeklyLeft !== undefined) {
-        if (chipBody.length > 0) chipBody.push(createElement('span', { key: 'sd', className: 'dpb-sep' }, '·'))
-        chipBody.push(createElement('span', { key: 'w', className: 'dpb-num' }, weeklyLeft + '%'))
-      }
-      if (tools !== undefined) {
-        if (chipBody.length > 0) chipBody.push(createElement('span', { key: 'td', className: 'dpb-sep' }, '·'))
-        chipBody.push(createElement('span', { key: 't', className: 'dpb-tools' }, String(tools.remaining)))
       }
       if (chipBody.length === 0) chipBody.push(createElement('span', { key: 'x', className: 'dpb-num' }, '!'))
 
