@@ -104,7 +104,7 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev
 
 ## 5. 分发与 Gatekeeper
 
-**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv` 应答 `source=Notarized Developer ID`。electron-builder 在 `notarize: true` 时提交 `.app`；CI 再对 DMG `stapler staple`。
+**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 在 `notarize: true` 时只提交 `.app`（包 zip/dmg 之前）；CI 再对 DMG 跑 `scripts/notarize-dmg.sh`（签名 → `notarytool submit --wait` → staple → `spctl`）。只 staple 会因「Record not found」失败：DMG 是新文件，Apple 没有它的 ticket。
 
 一次完整公证构建的环境变量：
 
@@ -123,7 +123,7 @@ pnpm desktop:build -- --mac --config.mac.notarize=true
 
 1. **hardened runtime 强制**：`electron-builder.yml` `mac.hardenedRuntime: true`；
 2. **公证扫描钻进 tar.gz**：runtime 里 esbuild 等 Mach-O 全要 Developer ID 签名——prepare-desktop-bundle 打 tar 前自动签（`DSH_CODESIGN_IDENTITY` 门控；JIT 二进制带 allow-jit entitlements，见 `scripts/entitlements-runtime.plist`）；
-3. **CI 在公证后 staple DMG**（`xcrun stapler staple`）。
+3. **CI 对 DMG 再公证一次再 staple**（`scripts/notarize-dmg.sh`）。electron-builder 的 ticket 只覆盖 `.app`。
 
 无证书降级通道仍有效（ad-hoc + `xattr -dr com.apple.quarantine`）。`productName`/`appId` 已随签名生效，改名等于换应用。
 

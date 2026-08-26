@@ -42,7 +42,7 @@
 git tag v0.3.0-rc.1 && git push origin v0.3.0-rc.1
 ```
 
-推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → electron-rebuild → electron-builder dmg/zip → 公证）与 `desktop-windows`（同套 prepare，出 NSIS）并行，`desktop-publish` 从 `CHANGELOG.md` 抽取该版本说明后上传 Release（dmg、zip、setup.exe、latest-mac.yml、latest.yml；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版。
+推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → electron-rebuild → electron-builder 公证 `.app` 再打 dmg/zip → `scripts/notarize-dmg.sh` 再公证 DMG）与 `desktop-windows`（同套 prepare，出 NSIS）并行，`desktop-publish` 从 `CHANGELOG.md` 抽取该版本说明后上传 Release（dmg、zip、setup.exe、latest-mac.yml、latest.yml；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版。
 
 验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。需要复核安装页时用临时 venv 安装 `ds-store==1.3.1`，再把该 venv 的 `bin` 放到 `PATH` 后执行 `bash scripts/verify-dmg-layout.sh <下载的.dmg>`；脚本会解析发布件的 Finder 记录，而不是只看构建目录。
 
