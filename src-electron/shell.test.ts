@@ -7,7 +7,15 @@ import { describe, it } from 'node:test'
 import { planProfileAdoption } from './adoption-plan.ts'
 import { shouldRetainBackground } from './keep-alive.ts'
 import { sanitizeDownloadName, uniquePath } from './files.ts'
-import { composeProcessPath, bundledRuntime, oneNodeForRuntimeDir, selectAssembledRuntimeDir, sidecarEnv } from './runtime.ts'
+import {
+  bundledRuntime,
+  composeProcessPath,
+  ensureNodeShim,
+  nodeShimKey,
+  oneNodeForRuntimeDir,
+  selectAssembledRuntimeDir,
+  sidecarEnv,
+} from './runtime.ts'
 import { sweepDecision } from './sidecar.ts'
 import {
   claimUpdateCheck,
@@ -41,6 +49,7 @@ describe('sidecarEnv', () => {
 describe('bundledRuntime one-node PATH', () => {
   it('puts the Electron node shim ahead of tools/.bin and drops dead node stubs', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-onenode-'))
+    const shimRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-shim-'))
     try {
       const cli = path.join(root, 'dsh/node_modules/@deepseek-ai/dsh/lib')
       fs.mkdirSync(cli, { recursive: true })
@@ -49,12 +58,42 @@ describe('bundledRuntime one-node PATH', () => {
       fs.mkdirSync(toolsBin, { recursive: true })
       fs.writeFileSync(path.join(toolsBin, 'node'), '#!/bin/sh\nexit 1\n')
       fs.chmodSync(path.join(toolsBin, 'node'), 0o755)
-      const runtime = bundledRuntime(root, true, '/Applications/Electron.app/Contents/MacOS/Electron', false)
+      const runtime = bundledRuntime(root, true, process.execPath, false, shimRoot)
       assert.equal(runtime.oneNode, true)
       assert.equal(runtime.pathPrepend.length, 2)
-      assert.ok(runtime.pathPrepend[0]!.endsWith(`${path.sep}node-shim`))
+      assert.equal(runtime.pathPrepend[0], path.join(shimRoot, 'node-shim', nodeShimKey(process.execPath)))
       assert.equal(runtime.pathPrepend[1], toolsBin)
       assert.equal(fs.existsSync(path.join(toolsBin, 'node')), false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(shimRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('ensureNodeShim', () => {
+  it('refuses a missing target and does not write a poisoned shim', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-shim-missing-'))
+    try {
+      const missing = path.join(root, 'no-such-electron')
+      assert.throws(() => ensureNodeShim(missing, root), /missing binary/)
+      assert.equal(fs.existsSync(path.join(root, 'node-shim')), false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('scopes the script by binary path and removes a stale flat shim', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-shim-scope-'))
+    try {
+      const flat = path.join(root, 'node-shim', 'node')
+      fs.mkdirSync(path.dirname(flat), { recursive: true })
+      fs.writeFileSync(flat, '#!/bin/sh\nexec /Applications/Electron.app/Contents/MacOS/Electron "$@"\n')
+      const dir = ensureNodeShim(process.execPath, root)
+      assert.equal(dir, path.join(root, 'node-shim', nodeShimKey(process.execPath)))
+      assert.equal(fs.existsSync(flat), false)
+      const script = fs.readFileSync(path.join(dir, process.platform === 'win32' ? 'node.cmd' : 'node'), 'utf8')
+      assert.match(script, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

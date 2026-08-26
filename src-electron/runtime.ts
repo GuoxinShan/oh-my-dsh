@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -64,9 +65,30 @@ export function hostCliPathDirs(): string[] {
   })
 }
 
+/** Directory name under `node-shim/` so two Electron binaries do not clobber one script. */
+export function nodeShimKey(electronPath: string): string {
+  return createHash('sha256').update(electronPath).digest('hex').slice(0, 12)
+}
+
+/**
+ * Write a PATH `node` that execs this process's Electron as Node.
+ * The script lives under `root/node-shim/<key>/` so desktop:dev, a packaged
+ * app, and tests cannot overwrite each other's target. A missing binary is
+ * refused — a previous test used `/Applications/Electron.app` and poisoned
+ * the shared shim, so host CLIs (`yzj-cli`) died with ENOENT.
+ */
 export function ensureNodeShim(electronPath: string, root: string): string {
-  const dir = path.join(root, 'node-shim')
+  if (!fs.existsSync(electronPath)) {
+    throw new Error(`dsh-desktop: refusing to write node shim for missing binary: ${electronPath}`)
+  }
+  const dir = path.join(root, 'node-shim', nodeShimKey(electronPath))
   fs.mkdirSync(dir, { recursive: true })
+  const legacy = path.join(root, 'node-shim', process.platform === 'win32' ? 'node.cmd' : 'node')
+  try {
+    if (fs.existsSync(legacy) && fs.statSync(legacy).isFile()) fs.unlinkSync(legacy)
+  } catch (error) {
+    console.warn(`dsh-desktop: could not remove stale shared node shim ${legacy}: ${String(error)}`)
+  }
   if (process.platform === 'win32') {
     const dest = path.join(dir, 'node.cmd')
     fs.writeFileSync(dest, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${electronPath}" %*\r\n`)
@@ -104,7 +126,13 @@ export function bundledNode(dir: string): string | undefined {
   return undefined
 }
 
-export function bundledRuntime(dir: string, oneNode: boolean, electronPath: string, packaged = false): Runtime {
+export function bundledRuntime(
+  dir: string,
+  oneNode: boolean,
+  electronPath: string,
+  packaged = false,
+  shimRoot = shellRoot(),
+): Runtime {
   const cli = path.join(dir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
   if (!fs.existsSync(cli)) {
     throw new Error(`bundled runtime missing CLI entry: ${cli}`)
@@ -114,7 +142,7 @@ export function bundledRuntime(dir: string, oneNode: boolean, electronPath: stri
     if (packaged && nodeBinary !== undefined) {
       throw new Error(`sidecar still resolved a second node at ${nodeBinary}`)
     }
-    const shim = ensureNodeShim(electronPath, shellRoot())
+    const shim = ensureNodeShim(electronPath, shimRoot)
     neutralizeToolsNodeShims(dir)
     return {
       node: electronPath,
