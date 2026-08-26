@@ -92,4 +92,33 @@ describe('installNotifications', () => {
     assert.deepEqual(opened, ['a'])
     stop()
   })
+
+  it('does not record historical idle sessions when the list hydrates', () => {
+    const recorded: string[] = []
+    let ids: string[] = []
+    const byId: Record<string, { id: string; displayTitle: string; running: boolean }> = {}
+    let flush = (): void => {}
+    const stop = installNotifications({
+      list: {
+        getSnapshot: () => ({ ids, byId }),
+        subscribe: (fn: () => void) => {
+          flush = fn
+          return () => {}
+        },
+      },
+      invoke: { invoke: async () => undefined },
+      logger: { warn: () => {} },
+      copy,
+      openSession: () => {},
+      record: (edge) => { recorded.push(edge.sessionId) },
+      surface: () => ({ hidden: true, focused: false }),
+    })
+    ids = ['a', 'b', 'c']
+    byId.a = { id: 'a', displayTitle: '830 项目', running: false }
+    byId.b = { id: 'b', displayTitle: 'yzj_advance_create', running: false }
+    byId.c = { id: 'c', displayTitle: 'yzj_advance_scan', running: false }
+    flush()
+    assert.deepEqual(recorded, [])
+    stop()
+  })
 })

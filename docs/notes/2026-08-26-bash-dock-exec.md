@@ -12,7 +12,7 @@
 2. 同一进程 `dlopen` 一个 constructor dylib，对 **当前进程** 调 `TransformProcessType(..., kProcessTransformToBackgroundApplication)`，让 one-node 的 Electron 自己也不去抢 Dock。
 3. `node-shim` 同样 `--import` hide-dock，挡 `#!/usr/bin/env node` 那条。
 
-clang / 加载失败则 warn、行为与改前相同。Windows / two-node 不走这条。
+实现在 `src/darwin-dock-guard.ts`，sidecar `--import` 与 `node-shim` 由 `src/runtime.ts` 接线。clang / 加载失败则 warn、行为与改前相同。Windows / two-node 不走这条。
 
 ## 非目标
 

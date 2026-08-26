@@ -28,15 +28,14 @@ export interface AttentionEdge {
 /**
  * Diff two list snapshots into attention edges.
  *
- * A session appearing on the after-side with `running: false` and no pending
- * interaction counts as turn-done (a session that finished between two list
- * arrivals — including brand-new rows the host reports completed). A session
- * present on both sides crossing running true→false also counts. Pending
- * edges likewise fire for both survivors and newcomers. When one transition
- * produces both edges, only the await-input edge is reported — the more
- * actionable fact wins.
+ * Only survivors count. Turn-done is running true→false; await-input is
+ * pendingInteraction none→present. A row that first appears on the after-side
+ * is list hydration (boot, workspace switch, pagination), not an attention
+ * edge — treating idle newcomers as turn-done flooded the in-app inbox with
+ * historical sessions on every launch. When one survivor raises both edges,
+ * only await-input is reported — the more actionable fact wins.
  *
- * @param before - ids/rows of the earlier snapshot (absent = first sample; first arrival reports nothing to avoid a notification storm at boot).
+ * @param before - ids/rows of the earlier snapshot (absent or empty = first sample; reports nothing).
  * @param after - ids/rows of the later snapshot.
  * @returns edges to evaluate against the visibility gate; order follows the after-side id order.
  */
@@ -44,18 +43,19 @@ export function diffAttention(
   before: ReadonlyMap<string, AttentionRow> | undefined,
   after: ReadonlyMap<string, AttentionRow>,
 ): AttentionEdge[] {
-  if (before === undefined) return []
+  if (before === undefined || before.size === 0) return []
   const edges: AttentionEdge[] = []
   for (const row of after.values()) {
     const prior = before.get(row.id)
-    const startedPending = prior === undefined || prior.pendingInteraction === undefined
+    if (prior === undefined) continue
     const nowPending = row.pendingInteraction !== undefined
-    if (nowPending && startedPending) {
+    if (nowPending && prior.pendingInteraction === undefined) {
       edges.push({ sessionId: row.id, kind: 'await-input', title: row.displayTitle })
       continue
     }
-    const finished = prior === undefined ? !row.running && !nowPending : prior.running && !row.running
-    if (finished) edges.push({ sessionId: row.id, kind: 'turn-done', title: row.displayTitle })
+    if (prior.running && !row.running) {
+      edges.push({ sessionId: row.id, kind: 'turn-done', title: row.displayTitle })
+    }
   }
   return edges
 }

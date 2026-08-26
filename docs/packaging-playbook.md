@@ -2,7 +2,7 @@
 
 面向「打出一个能在别的 mac 上跑的安装包」的完整操作指引。改流程先改本文件。
 
-0.3.0-rc.1 起宿主是 **Electron**（`src-electron/` + electron-builder）。`src-tauri/` 已归档，不再发货。已装 0.2.x 不能热更新到 0.3.x。
+0.3.0-rc.1 起宿主是 **Electron**（`src/` + electron-builder）。0.2.x Tauri 壳已从仓内删除；已装 0.2.x 不能热更新到 0.3.x。
 
 ## 0. 前置条件（构建机）
 
@@ -22,7 +22,7 @@ pnpm desktop:build
 1. 构建桌面自有插件：bridge、hierarchical compaction、Web Search toggle、model-image-input、send-while-running；
 2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存）；
 3. 按当前 Electron 版本 `electron-rebuild` native 模块；
-4. 打 `src-electron/resources/runtime.tar.gz`（**不含** `tools/node`）及各插件 tarball；
+4. 打 `src/resources/runtime.tar.gz`（**不含** `tools/node`）及各插件 tarball；
 5. `scripts/build-electron.mjs`：esbuild 打 main.cjs → electron-builder 出平台包。
 
 产物：
@@ -30,18 +30,18 @@ pnpm desktop:build
 - macOS：`release/Oh My DSH-<ver>-arm64.dmg` 与同目录 zip（updater）
 - Windows：`release/Oh My DSH-<ver>-setup.exe`
 
-`src-electron/resources/` 与 `dist-electron/`、`release/` 均 gitignored。
+`src/resources/` 与 `dist-electron/`、`release/` 均 gitignored。
 
 ### 安装窗口外观（DMG 背景与布局）
 
-- `src-tauri/dmg/background.png`（660×400）+ `background@2x.png`（1320×800）—— 由 `scripts/generate-dmg-background.py` 生成。electron-builder 26 用 1x 像素定窗口，再和 `@2x` 合成 hidpi TIFF；只放一张 1320×800 的 `background.png` 会把 Finder 窗撑成 2 倍。
+- `src/dmg/background.png`（660×400）+ `background@2x.png`（1320×800）—— 由 `scripts/generate-dmg-background.py` 生成。electron-builder 26 用 1x 像素定窗口，再和 `@2x` 合成 hidpi TIFF；只放一张 1320×800 的 `background.png` 会把 Finder 窗撑成 2 倍。
 - `electron-builder.yml` 的 `dmg.window` / `dmg.contents` 钉 660×400 与图标坐标（180,196）/（480,196）。
 
 流水线在公证前运行 `scripts/verify-dmg-layout.sh <dmg>`。
 
 ## 2. 包结构与首启解压（原理）
 
-runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
+runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），electron-builder 对目录 extraResources 不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
 
 首次启动时壳把资源原子解压到 home：
 
@@ -132,7 +132,7 @@ pnpm desktop:build -- --mac --config.mac.notarize=true
 ## 6. 升级 runtime / Desktop-owned 插件版本
 
 1. runtime 升级时，fork 侧打标签：`git tag v<基线>+zw.<n> <sha> && git push origin <tag>`，再更新本仓 `runtime/revision.json`（repo/ref/sha）。
-2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 `src-electron/resources`、壳解压/安装链、runtime peer 链接与文档。
+2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 `src/resources`、壳解压/安装链、runtime peer 链接与文档。
 3. 提升 Desktop 版本并执行 `pnpm desktop:build`。prepare 会重新生成相应 tarball 与内容哈希；壳按哈希换解压目录，旧缓存不再被引用。
 
 插件的独立 GitHub Release 不会替换已安装 Desktop 包内的资源，也不会更新用户 Web Profile。只要 Desktop-owned 插件版本变化，就必须发布新的 Desktop；Web Search toggle 0.1.3 首次由 Desktop `0.2.0-rc.14` 携带。
