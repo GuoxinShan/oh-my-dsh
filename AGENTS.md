@@ -119,7 +119,7 @@ npm 版本依赖是**唯一常态**；源码依赖仅限本地调试，且只能
 M1（已实现）：
 
 1. **外链路由** —— document 捕获阶段 click 监听：`target=_blank` 的锚点、跨源 http(s) 锚点、`mailto:`/`tel:` → `preventDefault` + `dsh_desktop_open_external`。同源无 target 的锚点、`#`、`javascript:`、`blob:`/`data:` 一律放行（SPA 内部导航）。判定是纯函数 `classifyAnchor`（`src/client/links.ts`），单测覆盖。
-2. **消息通知** —— 桥内 `src/client/notifications.ts`：订阅 `ctx.sessions.list`，`diffAttention` 出边（`running: true→false` 或 `pendingInteraction: 无→有`；两种边同时只发「等待输入」）。窗口隐藏、失焦、或边属于非当前会话时发 `dsh_desktop_notify`（带 `sessionId`）；当前会话且窗口聚焦不发。每条边都进进程内通知中心（`notify-inbox.ts`，最多 30 条，不落盘）：macOS 标题带铃铛、其他平台右上角；点开列表，点一条 `sessions.open(id)`。标题用 `displayTitle`，正文走 `desktop-bridge` 文案。点击系统横幅同样回跳。
+2. **消息通知** —— 桥内 `src/client/notifications.ts`：订阅 `ctx.sessions.list`，`diffAttention` 出边（只认**两侧都在的**会话：`running: true→false` 或 `pendingInteraction: 无→有`；两种边同时只发「等待输入」）。首样、空 before、以及列表灌入的新 idle 行一律不出边——否则每次启动/切工作区会把历史会话刷进通知中心。窗口隐藏、失焦、或边属于非当前会话时发 `dsh_desktop_notify`（带 `sessionId`）；当前会话且窗口聚焦不发。每条边都进进程内通知中心（`notify-inbox.ts`，最多 30 条，不落盘）：macOS 标题带铃铛、其他平台右上角；点开列表，点一条 `sessions.open(id)`。标题用 `displayTitle`，正文走 `desktop-bridge` 文案。点击系统横幅同样回跳。
 3. **web 端指示** —— `shell.overlay`（加性 list 槽，全帧浮层）注册 `desktop-badge` 条目：右下角小 pill「web端」，点击以 `dsh_desktop_open_external` 打开当前 origin（复制会话到系统浏览器）。样式只用 `--dsw-*` 语义 token，绝不写字面色。
 4. **标题带更新入口** —— 仅经 `shell.overlay` 插件实现：挂载 3s 后首查，之后每 2h 强制刷新；离线、无端点或已是最新版时完全静默。macOS 发现新版后在左上角标题带的侧栏开关旁出现更新控件（收起态的 `+` 新会话气泡仍在其右侧）；其他平台保留右上角 fallback。**发现新版即后台自动下载**（同版本每会话只自动一次；失败保留可点重试），按钮保持 22px，下载与校验期间只在原位旋转、不显示进度条；`dsh_desktop_update_status` 仍提供实时字节进度供状态同步与诊断；签名校验完成进入 `ready`（控件变为已下载图标，点击才弹确认框；框内展示本版更新说明，`electron-updater` 的 release notes 为事实源），只有确认“安装并重启”才消费暂存包、安装和重启。检查、下载、安装各自单飞，自动下载不等于授权安装。0.2.x Tauri 用户不能经旧 `latest.json` 升到 0.3.x，须从 GitHub Releases 下载。
 
