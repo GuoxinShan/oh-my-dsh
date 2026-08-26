@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Generate the DMG window backgrounds:
-#   src-tauri/dmg/background.png      660x400 @72dpi  (electron-builder 1x)
-#   src-tauri/dmg/background@2x.png   1320x800 @144dpi
+#   src/dmg/background.png      660x400 @72dpi  (electron-builder 1x)
+#   src/dmg/background@2x.png   1320x800 @144dpi
 #
 # Canvas is laid out in points (660x400, electron-builder.yml dmg.window).
 # electron-builder 26 sizes the Finder window from the 1x PNG's pixel size,
@@ -26,7 +26,7 @@ APP_POS = (180, 196)
 APPS_POS = (480, 196)
 ARROW_Y = 196
 
-OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "src-tauri", "dmg")
+OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "dmg")
 OUT_1X = os.path.join(OUT_DIR, "background.png")
 OUT_2X = os.path.join(OUT_DIR, "background@2x.png")
 

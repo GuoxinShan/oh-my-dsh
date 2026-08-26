@@ -4,19 +4,19 @@ copyright: MIT
 asar: true
 directories:
   output: release
-  buildResources: src-electron/build
+  buildResources: src/build
 files:
   - dist-electron/**/*
   - package.json
 extraResources:
-  - from: src-electron/resources
+  - from: src/resources
     to: resources
 mac:
   category: public.app-category.developer-tools
   hardenedRuntime: true
   gatekeeperAssess: false
   notarize: false
-  icon: src-tauri/icons/icon.icns
+  icon: src/icons/icon.icns
   target:
     - dmg
     - zip
@@ -24,7 +24,7 @@ mac:
 dmg:
   # 1x PNG; electron-builder 26 pairs it with background@2x.png in the same
   # directory and sizes the Finder window from the 1x pixel dimensions.
-  background: src-tauri/dmg/background.png
+  background: src/dmg/background.png
   iconSize: 128
   window:
     width: 660
@@ -39,7 +39,7 @@ dmg:
       path: /Applications
   artifactName: Oh-My-DSH-${version}-${arch}.${ext}
 win:
-  icon: src-tauri/icons/icon.ico
+  icon: src/icons/icon.ico
   target:
     - nsis
   artifactName: Oh-My-DSH-${version}-setup.${ext}
@@ -47,8 +47,8 @@ nsis:
   oneClick: true
   perMachine: false
   shortcutName: Oh My DSH
-  installerIcon: src-tauri/icons/icon.ico
-  uninstallerIcon: src-tauri/icons/icon.ico
+  installerIcon: src/icons/icon.ico
+  uninstallerIcon: src/icons/icon.ico
 publish:
   provider: github
   owner: aka-danielZhang

@@ -29,7 +29,7 @@ app_y=196
 applications_x=480
 applications_y=196
 
-expected_background="$repo_root/src-tauri/dmg/background.png"
+expected_background="$repo_root/src/dmg/background.png"
 mount_dir=$(mktemp -d "${TMPDIR:-/tmp}/dsh-dmg-verify.XXXXXX")
 attached=false
 
@@ -168,7 +168,7 @@ if [[ -n "$background" ]]; then
   case "$background" in
     *.png)
       if [[ -f "$expected_background" ]] && ! cmp -s "$expected_background" "$background"; then
-        fail "bundled PNG background differs from src-tauri/dmg/background.png"
+        fail "bundled PNG background differs from src/dmg/background.png"
       fi
       ;;
     *)

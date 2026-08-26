@@ -34,7 +34,7 @@ export function resourceDir(packaged: boolean): string | undefined {
   if (packaged) {
     return path.join(process.resourcesPath, 'resources')
   }
-  const bundled = path.join(repoRoot(), 'src-electron/resources')
+  const bundled = path.join(repoRoot(), 'src/resources')
   if (fs.existsSync(path.join(bundled, 'runtime-revision.json'))) return bundled
   return undefined
 }

@@ -43,7 +43,7 @@ export function extractChangelogSection(markdown, version) {
 /**
  * Resolve notes for a release: exact version, then Unreleased, else throw.
  * @param markdown - the full changelog document.
- * @param version - tauri.conf / tag semver without the leading `v`.
+ * @param version - package.json / tag semver without the leading `v`.
  */
 export function releaseNotesForVersion(markdown, version) {
   const exact = extractChangelogSection(markdown, version)
