@@ -1,28 +1,28 @@
 /**
  * Assemble the shell's bundled assets (release packaging): the self-contained
  * runtime tarball, the desktop-owned plugin tarballs, and the revision
- * manifest, all placed under src-electron/resources/ for electron-builder
+ * manifest, all placed under src/resources/ for electron-builder
  * extraResources.
  *
  * Why tarballs instead of loose resource directories: the runtime tree is a
- * pnpm install (3k+ symlinks, two layers) and tauri-bundler gives no
- * guarantee that directory resources keep symlinks executable-bit-identical
- * (deref-copy would explode the .pnpm store to GBs). A tar round-trip is
+ * pnpm install (3k+ symlinks, two layers) and electron-builder's extraResources
+ * copy does not keep that tree symlink-identical (deref-copy would explode
+ * the .pnpm store to GBs). A tar round-trip is
  * link-aware, and the shell extracts it once into ~/.dsh-desktop (writable
  * and immune to App Translocation read-only volumes). Apple's notary scanner
  * still descends into archives, so every nested Mach-O is signed before pack.
  *
  * Fixed file names so electron-builder.yml never churns with revisions:
- *   src-electron/resources/runtime.tar.gz          (dsh/ + tools/ without tools/node)
- *   src-electron/resources/runtime.tar.gz.sha      (cache marker: revision sha)
- *   src-electron/resources/bridge.tar.gz           (package.json + lib/ + patch)
- *   src-electron/resources/compaction-hierarchical.tar.gz (host plugin package)
- *   src-electron/resources/web-search-toggle.tar.gz (host + client plugin package)
- *   src-electron/resources/model-image-input.tar.gz (client-only plugin package)
- *   src-electron/resources/send-while-running.tar.gz (client-only plugin package)
- *   src-electron/resources/runtime-revision.json   (runtime + plugin hashes/versions)
+ *   src/resources/runtime.tar.gz          (dsh/ + tools/ without tools/node)
+ *   src/resources/runtime.tar.gz.sha      (cache marker: revision sha)
+ *   src/resources/bridge.tar.gz           (package.json + lib/ + patch)
+ *   src/resources/compaction-hierarchical.tar.gz (host plugin package)
+ *   src/resources/web-search-toggle.tar.gz (host + client plugin package)
+ *   src/resources/model-image-input.tar.gz (client-only plugin package)
+ *   src/resources/send-while-running.tar.gz (client-only plugin package)
+ *   src/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
- * `src-electron/resources/` is gitignored — regenerated per build via
+ * `src/resources/` is gitignored — regenerated per build via
  * `pnpm desktop:prepare` (also wired as the first half of desktop:build).
  */
 import { execFileSync } from 'node:child_process'
@@ -40,7 +40,7 @@ const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
 const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
 const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
 const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
-const resourcesDir = resolve(repoRoot, 'src-electron/resources')
+const resourcesDir = resolve(repoRoot, 'src/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
 const runtimeShaMarker = resolve(resourcesDir, 'runtime.tar.gz.sha')

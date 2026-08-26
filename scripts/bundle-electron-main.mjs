@@ -13,7 +13,7 @@ export async function bundleElectronMain() {
   mkdirSync(outDir, { recursive: true })
   await esbuild({
     absWorkingDir: repoRoot,
-    entryPoints: [resolve(repoRoot, 'src-electron/main.ts')],
+    entryPoints: [resolve(repoRoot, 'src/main.ts')],
     bundle: true,
     platform: 'node',
     format: 'cjs',
@@ -21,7 +21,7 @@ export async function bundleElectronMain() {
     external: ['electron', 'electron-updater'],
     logOverride: { 'empty-import-meta': 'silent' },
   })
-  copyFileSync(resolve(repoRoot, 'src-electron/preload.cjs'), resolve(outDir, 'preload.cjs'))
+  copyFileSync(resolve(repoRoot, 'src/preload.cjs'), resolve(outDir, 'preload.cjs'))
   return resolve(outDir, 'main.cjs')
 }
 
