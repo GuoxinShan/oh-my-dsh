@@ -128,16 +128,16 @@ jobs:
           DMG=$(ls release/*.dmg | head -1)
           PATH="$RUNNER_TEMP/dmg-layout-venv/bin:$PATH" bash scripts/verify-dmg-layout.sh "$DMG"
 
-      - name: Staple and assess the DMG
+      - name: Notarize, staple, and assess the DMG
         env:
+          DSH_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           DMG=$(ls release/*.dmg | head -1)
-          xcrun stapler staple "$DMG" || true
-          spctl -a -vv -t install "$DMG"
+          bash scripts/notarize-dmg.sh "$DMG"
 
       - name: Stage updater artifacts
         run: |
