@@ -71,6 +71,7 @@ describe('installNotifications', () => {
       },
     }
     const recorded: string[] = []
+    let now = 0
     const stop = installNotifications({
       list,
       invoke,
@@ -79,7 +80,9 @@ describe('installNotifications', () => {
       openSession: (id) => { opened.push(id) },
       record: (edge) => { recorded.push(edge.sessionId) },
       surface: () => ({ hidden: true, focused: false }),
+      now: () => now,
     })
+    now = 2_000
     rows.a = { id: 'a', displayTitle: 'Alpha', running: false }
     flush()
     await Promise.resolve()
@@ -90,6 +93,48 @@ describe('installNotifications', () => {
     assert.deepEqual(recorded, ['a'])
     listeners.get('dsh-desktop-notify-click')?.({ sessionId: 'a' })
     assert.deepEqual(opened, ['a'])
+    stop()
+  })
+
+  it('does not record a new-session running pulse inside the birth grace', () => {
+    const recorded: string[] = []
+    let now = 1_000
+    const rows: Record<string, { id: string; displayTitle: string; running: boolean }> = {}
+    let ids: string[] = []
+    let flush = (): void => {}
+    const stop = installNotifications({
+      list: {
+        getSnapshot: () => ({ ids, byId: rows, current: 'a' }),
+        subscribe: (fn: () => void) => {
+          flush = fn
+          return () => {}
+        },
+      },
+      invoke: { invoke: async () => undefined },
+      logger: { warn: () => {} },
+      copy,
+      openSession: () => {},
+      record: (edge) => { recorded.push(`${edge.kind}:${edge.sessionId}`) },
+      surface: () => ({ hidden: true, focused: false }),
+      now: () => now,
+    })
+    ids = ['a']
+    rows.a = { id: 'a', displayTitle: 'dsh-desktop', running: false }
+    flush()
+    rows.a = { id: 'a', displayTitle: 'dsh-desktop', running: true }
+    now = 1_050
+    flush()
+    rows.a = { id: 'a', displayTitle: 'dsh-desktop', running: false }
+    now = 1_100
+    flush()
+    assert.deepEqual(recorded, [])
+    rows.a = { id: 'a', displayTitle: 'dsh-desktop', running: true }
+    now = 3_000
+    flush()
+    rows.a = { id: 'a', displayTitle: 'dsh-desktop', running: false }
+    now = 3_050
+    flush()
+    assert.deepEqual(recorded, ['turn-done:a'])
     stop()
   })
 

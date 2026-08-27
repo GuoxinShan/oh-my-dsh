@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { attentionIndex, diffAttention } from '../src/client/attention.ts'
+import {
+  attentionIndex,
+  diffAttention,
+  filterBirthTurnDone,
+  rememberFirstSeen,
+  TURN_DONE_BIRTH_GRACE_MS,
+} from '../src/client/attention.ts'
 import type { AttentionRow } from '../src/client/attention.ts'
 
 function row(over: Partial<AttentionRow> & { id: string }): AttentionRow {
@@ -44,5 +50,37 @@ describe('diffAttention', () => {
     const before = attentionIndex([row({ id: 'a', pendingInteraction: 'question' })])
     const after = attentionIndex([row({ id: 'a', pendingInteraction: 'question' })])
     assert.deepEqual(diffAttention(before, after), [])
+  })
+})
+
+describe('rememberFirstSeen / filterBirthTurnDone', () => {
+  const turnDone = { sessionId: 'a', kind: 'turn-done' as const, title: 't-a' }
+  const awaitInput = { sessionId: 'a', kind: 'await-input' as const, title: 't-a' }
+
+  it('stamps new ids with now and keeps earlier stamps', () => {
+    const first = rememberFirstSeen(new Map(), ['a'], 1000)
+    assert.equal(first.get('a'), 1000)
+    const next = rememberFirstSeen(first, ['a', 'b'], 1100)
+    assert.equal(next.get('a'), 1000)
+    assert.equal(next.get('b'), 1100)
+  })
+  it('drops ids that left the list so a recreate starts a new window', () => {
+    const prev = rememberFirstSeen(new Map(), ['a'], 1000)
+    const gone = rememberFirstSeen(prev, [], 2000)
+    assert.equal(gone.size, 0)
+    const reborn = rememberFirstSeen(gone, ['a'], 3000)
+    assert.equal(reborn.get('a'), 3000)
+  })
+  it('suppresses turn-done inside the birth grace and keeps it after', () => {
+    const seen = new Map([['a', 1000]])
+    assert.deepEqual(filterBirthTurnDone([turnDone], seen, 1000 + TURN_DONE_BIRTH_GRACE_MS - 1), [])
+    assert.deepEqual(filterBirthTurnDone([turnDone], seen, 1000 + TURN_DONE_BIRTH_GRACE_MS), [turnDone])
+  })
+  it('never suppresses await-input, even inside the grace', () => {
+    const seen = new Map([['a', 1000]])
+    assert.deepEqual(filterBirthTurnDone([awaitInput], seen, 1001), [awaitInput])
+  })
+  it('passes turn-done when first-seen is unknown', () => {
+    assert.deepEqual(filterBirthTurnDone([turnDone], new Map(), 1000), [turnDone])
   })
 })

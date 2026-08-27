@@ -32,7 +32,9 @@ export interface AttentionEdge {
  * pendingInteraction none→present. A row that first appears on the after-side
  * is list hydration (boot, workspace switch, pagination), not an attention
  * edge — treating idle newcomers as turn-done flooded the in-app inbox with
- * historical sessions on every launch. When one survivor raises both edges,
+ * historical sessions on every launch. Birth pulses (agent attach on
+ * create/open) are a second false turn-done: filter them with
+ * `filterBirthTurnDone` after this diff. When one survivor raises both edges,
  * only await-input is reported — the more actionable fact wins.
  *
  * @param before - ids/rows of the earlier snapshot (absent or empty = first sample; reports nothing).
@@ -67,4 +69,46 @@ export function diffAttention(
  */
 export function attentionIndex(rows: readonly AttentionRow[]): Map<string, AttentionRow> {
   return new Map(rows.map((row) => [row.id, row]))
+}
+
+/**
+ * New-session / open attaches the agent and pulses `running` true→false
+ * within a couple of frames. That is not a completed turn. Skip turn-done
+ * until the row has lived in the list this long; a real first LLM turn is
+ * almost always longer, and later turns sit well past the window.
+ */
+export const TURN_DONE_BIRTH_GRACE_MS = 1500
+
+/**
+ * Record when each list id first appeared. Drop ids that left so a later
+ * recreate starts a new grace window.
+ */
+export function rememberFirstSeen(
+  prev: ReadonlyMap<string, number>,
+  ids: Iterable<string>,
+  now: number,
+): Map<string, number> {
+  const next = new Map<string, number>()
+  for (const id of ids) {
+    next.set(id, prev.get(id) ?? now)
+  }
+  return next
+}
+
+/**
+ * Drop turn-done edges whose session is still inside the birth-pulse window.
+ * await-input always passes — a blocking prompt is real even on a new row.
+ */
+export function filterBirthTurnDone(
+  edges: readonly AttentionEdge[],
+  firstSeenAt: ReadonlyMap<string, number>,
+  now: number,
+  graceMs: number = TURN_DONE_BIRTH_GRACE_MS,
+): AttentionEdge[] {
+  return edges.filter((edge) => {
+    if (edge.kind !== 'turn-done') return true
+    const seen = firstSeenAt.get(edge.sessionId)
+    if (seen === undefined) return true
+    return now - seen >= graceMs
+  })
 }

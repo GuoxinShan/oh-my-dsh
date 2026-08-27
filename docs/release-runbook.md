@@ -37,9 +37,9 @@
 **桌面**：
 
 ```sh
-# 1. 版本号：仓根 package.json 的 version（当前 0.3.0-rc.1）
+# 1. 版本号：仓根 package.json 的 version（当前 0.3.0-rc.2）
 # 2. （可选）runtime 升级：fork 打 v<基线>+zw.<补丁> 标签 + 更新 runtime/revision.json
-git tag v0.3.0-rc.1 && git push origin v0.3.0-rc.1
+git tag v0.3.0-rc.2 && git push origin v0.3.0-rc.2
 ```
 
 推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → electron-rebuild → electron-builder 公证 `.app` 再打 dmg/zip → `scripts/notarize-dmg.sh` 再公证 DMG）与 `desktop-windows`（同套 prepare，出 NSIS）并行，`desktop-publish` 从 `CHANGELOG.md` 抽取该版本说明后上传 Release（dmg、zip、setup.exe、latest-mac.yml、latest.yml；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版。
