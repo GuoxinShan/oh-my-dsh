@@ -4,7 +4,7 @@
  * matching session when the user clicks the banner.
  */
 import type { AttentionEdge, AttentionRow } from './attention.ts'
-import { attentionIndex, diffAttention } from './attention.ts'
+import { attentionIndex, diffAttention, filterBirthTurnDone, rememberFirstSeen } from './attention.ts'
 import type { DesktopInvoke } from './env.ts'
 
 /** Shell → webview event name for a notification click. */
@@ -80,9 +80,13 @@ export function installNotifications(opts: {
   openSession: (sessionId: string) => void
   record?: (edge: AttentionEdge) => void
   surface?: () => NotifySurface
+  /** Injected clock for birth-grace tests; defaults to `Date.now`. */
+  now?: () => number
 }): () => void {
   const surfaceOf = opts.surface ?? browserSurface
+  const clock = opts.now ?? Date.now
   let previous: ReadonlyMap<string, AttentionRow> | undefined
+  let firstSeen = new Map<string, number>()
 
   const snapshot = (): { rows: AttentionRow[]; current?: string } => {
     const state = opts.list.getSnapshot()
@@ -105,7 +109,9 @@ export function installNotifications(opts: {
   const onFlush = (): void => {
     const { rows, current } = snapshot()
     const next = attentionIndex(rows)
-    const edges = diffAttention(previous, next)
+    const now = clock()
+    firstSeen = rememberFirstSeen(firstSeen, next.keys(), now)
+    const edges = filterBirthTurnDone(diffAttention(previous, next), firstSeen, now)
     previous = next
     const surface: NotifySurface = { ...surfaceOf(), ...(current !== undefined ? { currentSessionId: current } : {}) }
     for (const edge of edges) {
@@ -124,7 +130,9 @@ export function installNotifications(opts: {
     }
   }
 
-  previous = attentionIndex(snapshot().rows)
+  const initial = snapshot()
+  previous = attentionIndex(initial.rows)
+  firstSeen = rememberFirstSeen(new Map(), previous.keys(), clock())
   const stopList = opts.list.subscribe(onFlush)
   const stopClick = opts.invoke.on?.(NOTIFY_CLICK_EVENT, onClick)
   return () => {

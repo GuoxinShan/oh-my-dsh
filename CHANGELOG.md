@@ -4,13 +4,17 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.2] - 2026-08-27
+
+### Fixed
+
+- 新建会话时 agent 附着的短暂 running 脉冲不再发「回合已完成」。
+- 启动或切工作区灌入会话列表时，不再把历史会话刷进通知中心。
+- macOS 上 Bash 等工具不再在 Dock 冒出通用 exec 图标。
+
 ### Changed
 
 - Tauri 壳从仓库删除；Electron 升为正职 `src/`。图标与 DMG 背景随壳走。
-- 桌面壳换成 Electron。独立 sidecar 仍跑 `dsh web`；安装包内共用 Electron 的 Node（`ELECTRON_RUN_AS_NODE`），不再附带第二份 `tools/node`。
-- 已安装的 0.2.x（Tauri）不能自动热更新到 0.3.x，请从 GitHub Releases 下载新安装包。
-- 安装确认框展示本版更新说明，并按 Keep a Changelog 的标题/列表排版，不再只有一句「已下载、是否安装」。
-- 桌面发版从本文件抽取对应版本，写入 GitHub Release 正文和自动更新清单，不再使用占位句 “See the release page for notes.”。
 
 ## [0.3.0-rc.1] - 2026-08-25
 
