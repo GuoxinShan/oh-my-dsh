@@ -20,6 +20,11 @@ function notesOf(info: UpdateInfo): string {
 function configureUpdater(): typeof autoUpdater {
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
+  // Semver `-rc` is not a GitHub prerelease channel. Default allowPrerelease
+  // would scrape releases.atom and treat the first `rc` tag as the feed, so a
+  // failed `v*` tag with no latest-mac.yml poisons every installed -rc build.
+  // Pin false so checks follow /releases/latest (make_latest desktop only).
+  autoUpdater.allowPrerelease = false
   return autoUpdater
 }
 
