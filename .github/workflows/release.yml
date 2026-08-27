@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Verify release checkout
         shell: bash
@@ -94,31 +94,36 @@ jobs:
           rm -f /tmp/devg2ca.cer
           security find-identity -v -p codesigning build.keychain
 
-      - name: Prepare desktop plugin deps and bridge type anchor
+      - name: Prepare desktop plugin deps
         run: |
           set -euo pipefail
           pnpm install
-          # Prime the fork clone (prepare-runtime is idempotent; cache hits
-          # make this seconds), then point the bridge's dsh symlink at it and
-          # install every desktop-owned plugin's devDeps before bundle checks.
-          node scripts/prepare-runtime.mjs
-          DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
-          pnpm --dir plugin/dsh-desktop-bridge install
-          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
-          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
-          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile
-          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile
+          pids=()
+          pnpm --dir plugin/dsh-desktop-bridge install &
+          pids+=($!)
+          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-model-efforts-editor install --frozen-lockfile &
+          pids+=($!)
+          ec=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || ec=1
+          done
+          [ "$ec" -eq 0 ]
 
-      - name: Build signed + notarized bundle
+      - name: Build signed bundle
         env:
           DSH_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          pnpm desktop:build -- --mac --config.mac.notarize=true
+          DSH_DESKTOP_PREPARE_MODE=build pnpm desktop:build -- --mac
 
       - name: Verify DMG Finder layout
         run: |
@@ -128,7 +133,7 @@ jobs:
           DMG=$(ls release/*.dmg | head -1)
           PATH="$RUNNER_TEMP/dmg-layout-venv/bin:$PATH" bash scripts/verify-dmg-layout.sh "$DMG"
 
-      - name: Notarize, staple, and assess the DMG
+      - name: Notarize zip and DMG in parallel
         env:
           DSH_CODESIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -137,7 +142,8 @@ jobs:
         run: |
           set -euo pipefail
           DMG=$(ls release/*.dmg | head -1)
-          bash scripts/notarize-dmg.sh "$DMG"
+          ZIP=$(ls release/*.zip | head -1)
+          bash scripts/notarize-mac-artifacts.sh "$DMG" "$ZIP"
 
       - name: Stage updater artifacts
         run: |
@@ -166,7 +172,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Verify release checkout
         shell: bash
@@ -204,18 +210,29 @@ jobs:
           restore-keys: |
             runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-
 
-      - name: Prepare desktop plugin deps and bridge type anchor
+      - name: Prepare desktop plugin deps
         shell: bash
         run: |
           set -euo pipefail
           pnpm install
-          node scripts/prepare-runtime.mjs
-          DSH_CHECKOUT="$PWD/runtime/src" pnpm --dir plugin/dsh-desktop-bridge run setup
-          pnpm --dir plugin/dsh-desktop-bridge install
-          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile
-          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile
-          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile
-          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile
+          pids=()
+          pnpm --dir plugin/dsh-desktop-bridge install &
+          pids+=($!)
+          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-model-efforts-editor install --frozen-lockfile &
+          pids+=($!)
+          ec=0
+          for pid in "${pids[@]}"; do
+            wait "$pid" || ec=1
+          done
+          [ "$ec" -eq 0 ]
 
       - name: Write Authenticode certificate for electron-builder
         shell: bash
@@ -236,7 +253,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm desktop:build -- --win
+          DSH_DESKTOP_PREPARE_MODE=build pnpm desktop:build -- --win
 
       - name: Stage updater artifacts
         shell: bash
@@ -265,7 +282,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Verify release checkout
         shell: bash

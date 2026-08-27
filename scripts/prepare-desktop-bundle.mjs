@@ -107,18 +107,40 @@ function sha256(path) {
   })
 }
 
-// 1. Desktop-owned plugins: verify and build the exact packages bundled below.
-console.log('prepare-desktop-bundle: building desktop plugins...')
-run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir]) {
-  for (const script of ['typecheck', 'test', 'build']) {
-    run(pnpm, ['run', script], { cwd: pluginDir })
+const desktopPluginDirs = [bridgeDir, compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir]
+const runtimeSrc = resolve(repoRoot, 'runtime/src')
+/** `build` = release path (CI already typechecked/tested). Default `verify` stays local-complete. */
+const prepareMode = process.env.DSH_DESKTOP_PREPARE_MODE === 'build' ? 'build' : 'verify'
+
+function assembleRuntime() {
+  console.log('prepare-desktop-bundle: assembling runtime...')
+  run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
+}
+
+function buildDesktopPlugins() {
+  for (const pluginDir of desktopPluginDirs) {
+    run(pnpm, ['run', 'build'], { cwd: pluginDir })
   }
 }
 
-// 2. Runtime tree (SHA-keyed cache; seconds when warm).
-console.log('prepare-desktop-bundle: assembling runtime...')
-run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
+if (prepareMode === 'build') {
+  // Runtime first so the fork clone can anchor bridge `setup` without a
+  // second prepare-runtime in the workflow.
+  assembleRuntime()
+  const checkout = process.env.DSH_CHECKOUT || runtimeSrc
+  run(pnpm, ['run', 'setup'], { cwd: bridgeDir, env: { ...process.env, DSH_CHECKOUT: checkout } })
+  console.log('prepare-desktop-bundle: building desktop plugins (skip typecheck/test)...')
+  buildDesktopPlugins()
+} else {
+  console.log('prepare-desktop-bundle: verifying desktop plugins...')
+  run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
+  for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir]) {
+    for (const script of ['typecheck', 'test', 'build']) {
+      run(pnpm, ['run', script], { cwd: pluginDir })
+    }
+  }
+  assembleRuntime()
+}
 
 const runtimeCli = resolve(runtimeDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
 if (!existsSync(runtimeCli)) {
