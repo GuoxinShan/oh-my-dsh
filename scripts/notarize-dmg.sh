@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Sign (if an identity is present), notarize, staple, and Gatekeeper-assess a DMG.
 #
-# electron-builder's mac.notarize submits the .app before it wraps zip/dmg.
-# The DMG is a new hash — stapler cannot find a ticket until this script
-# submits it. Same extra notarytool pass the archived Tauri pipeline used.
+# CI ships zip + DMG and waits once via scripts/notarize-mac-artifacts.sh.
+# This helper remains for a local DMG-only pass. The DMG is a new hash after
+# wrap — stapler cannot find a ticket until this file is submitted.
 #
 # Usage: scripts/notarize-dmg.sh <path-to.dmg>
 # Env:   APPLE_ID, APPLE_TEAM_ID, APPLE_PASSWORD or APPLE_APP_SPECIFIC_PASSWORD
