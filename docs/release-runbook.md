@@ -81,7 +81,7 @@ bash scripts/notarize-mac-artifacts.sh release/*.dmg release/*.zip
 | 公证失败 | `xcrun notarytool log <submission-id> --apple-id … --password … --team-id …`（submission-id 在 build 日志或 `notarytool history` 里）；`path` 字段直接点名是哪个文件 |
 | 401 Unauthenticated | 凭据错：App 专用密码 ≠ 账号密码 ≠ ASC API 密钥（个人密钥不可用） |
 | `errSecInternalComponent` | keychain 授权丢了：重跑 `security set-key-partition-list -S apple-tool:,apple:` |
-| 后台没有出现更新入口 | 未打包构建会跳过检查；离线 / Release 还没发过 latest-mac.yml 都走静默软失败 |
+| 后台没有出现更新入口 | 未打包构建会跳过检查；离线 / Release 还没发过 latest-mac.yml 都走静默软失败。桌面 `v*` tag 推了但 publish 失败时，必须删掉该 tag（否则旧版 `-rc` 客户端刮 atom 会命中空 tag、图标不出现）；新版壳已钉 `allowPrerelease=false`，只认 `/releases/latest` |
 | 更新下载后校验失败 | 标题带入口保留目标版本并进入可重试失败态；核对 electron-builder 签名与 GitHub 附件是否同一次构建 |
 | DMG 安装页退化成默认布局 | `bash scripts/verify-dmg-layout.sh <dmg>` |
 
