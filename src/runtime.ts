@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -71,9 +72,30 @@ export function hostCliPathDirs(): string[] {
   })
 }
 
+/** Directory name under `node-shim/` so two Electron binaries do not clobber one script. */
+export function nodeShimKey(electronPath: string): string {
+  return createHash('sha256').update(electronPath).digest('hex').slice(0, 12)
+}
+
+/**
+ * Write a PATH `node` that execs this process's Electron as Node.
+ * The script lives under `root/node-shim/<key>/` so desktop:dev, a packaged
+ * app, and tests cannot overwrite each other's target. A missing binary is
+ * refused — a previous test used `/Applications/Electron.app` and poisoned
+ * the shared shim, so host CLIs (`yzj-cli`) died with ENOENT.
+ */
 export function ensureNodeShim(electronPath: string, root: string, guard?: DarwinDockGuard): string {
-  const dir = path.join(root, 'node-shim')
+  if (!fs.existsSync(electronPath)) {
+    throw new Error(`dsh-desktop: refusing to write node shim for missing binary: ${electronPath}`)
+  }
+  const dir = path.join(root, 'node-shim', nodeShimKey(electronPath))
   fs.mkdirSync(dir, { recursive: true })
+  const legacy = path.join(root, 'node-shim', process.platform === 'win32' ? 'node.cmd' : 'node')
+  try {
+    if (fs.existsSync(legacy) && fs.statSync(legacy).isFile()) fs.unlinkSync(legacy)
+  } catch (error) {
+    console.warn(`dsh-desktop: could not remove stale shared node shim ${legacy}: ${String(error)}`)
+  }
   const hideImport = guard === undefined ? '' : ` --import ${JSON.stringify(guard.hideDockJs)}`
   if (process.platform === 'win32') {
     const dest = path.join(dir, 'node.cmd')
