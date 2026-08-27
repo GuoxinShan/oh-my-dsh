@@ -62,3 +62,6 @@ plugin/dsh-model-image-input/lib/
 
 # dsh-send-while-running：构建产物（scripts/new-plugin.mjs 生成）
 plugin/dsh-send-while-running/lib/
+
+# dsh-model-efforts-editor：构建产物（scripts/new-plugin.mjs 生成）
+plugin/dsh-model-efforts-editor/lib/

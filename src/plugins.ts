@@ -6,6 +6,7 @@ import {
   BRIDGE_PACKAGE,
   COMPACTION_PACKAGE,
   COMPACTION_RUNTIME_PEERS,
+  MODEL_EFFORTS_EDITOR_PACKAGE,
   MODEL_IMAGE_INPUT_PACKAGE,
   SEND_WHILE_RUNNING_PACKAGE,
   WEB_SEARCH_TOGGLE_PACKAGE,
@@ -83,6 +84,10 @@ export function findDesktopPlugins(packaged: boolean): PluginRef[] {
     {
       package: SEND_WHILE_RUNNING_PACKAGE,
       dir: findPlugin(packaged, 'DSH_DESKTOP_SEND_WHILE_RUNNING_PLUGIN', 'send-while-running.tar.gz', 'sendWhileRunningTarball', `plugins/${SEND_WHILE_RUNNING_PACKAGE}`, 'plugin/dsh-send-while-running', SEND_WHILE_RUNNING_PACKAGE),
+    },
+    {
+      package: MODEL_EFFORTS_EDITOR_PACKAGE,
+      dir: findPlugin(packaged, 'DSH_DESKTOP_MODEL_EFFORTS_EDITOR_PLUGIN', 'model-efforts-editor.tar.gz', 'modelEffortsEditorTarball', `plugins/${MODEL_EFFORTS_EDITOR_PACKAGE}`, 'plugin/dsh-model-efforts-editor', MODEL_EFFORTS_EDITOR_PACKAGE),
     },
   ]
 }

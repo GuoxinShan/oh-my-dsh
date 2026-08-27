@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   BRIDGE_PACKAGE,
   COMPACTION_PACKAGE,
+  MODEL_EFFORTS_EDITOR_PACKAGE,
   MODEL_IMAGE_INPUT_PACKAGE,
   SEND_WHILE_RUNNING_PACKAGE,
   WEB_SEARCH_TOGGLE_PACKAGE,
@@ -164,7 +165,7 @@ function prepareProfileAdoption(root: string, summary: ExistingHomeSummary): Ado
       ? '继续前会保存一份可恢复的当前 Web Profile 配置快照。'
       : '当前没有 Web Profile，因此没有需要备份的 Profile；Desktop 会新建它。'
     const primary = summary.hasWebProfile ? '备份并继续' : '继续'
-    const message = `检测到现有 DSH 数据目录：${summary.canonicalHome}\n\n其中有 ${String(summary.plugins.length)} 个 Web Profile 插件、${String(summary.agentPresetCount)} 个 Agent 预设。Desktop 与终端 DSH 将共享该目录。\n\n继续后只会更新 Web Profile，添加或刷新 ${BRIDGE_PACKAGE}、${COMPACTION_PACKAGE}、${WEB_SEARCH_TOGGLE_PACKAGE}、${MODEL_IMAGE_INPUT_PACKAGE} 和 ${SEND_WHILE_RUNNING_PACKAGE}。现有会话、凭据、设置、Agent 预设、其他 Profile 与其他插件都会保留。${backupNote}`
+    const message = `检测到现有 DSH 数据目录：${summary.canonicalHome}\n\n其中有 ${String(summary.plugins.length)} 个 Web Profile 插件、${String(summary.agentPresetCount)} 个 Agent 预设。Desktop 与终端 DSH 将共享该目录。\n\n继续后只会更新 Web Profile，添加或刷新 ${BRIDGE_PACKAGE}、${COMPACTION_PACKAGE}、${WEB_SEARCH_TOGGLE_PACKAGE}、${MODEL_IMAGE_INPUT_PACKAGE}、${SEND_WHILE_RUNNING_PACKAGE} 和 ${MODEL_EFFORTS_EDITOR_PACKAGE}。现有会话、凭据、设置、Agent 预设、其他 Profile 与其他插件都会保留。${backupNote}`
     const action = choose({
       title: '使用现有的 DSH 数据？',
       message,

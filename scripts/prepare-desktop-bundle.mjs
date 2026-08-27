@@ -20,6 +20,7 @@
  *   src/resources/web-search-toggle.tar.gz (host + client plugin package)
  *   src/resources/model-image-input.tar.gz (client-only plugin package)
  *   src/resources/send-while-running.tar.gz (client-only plugin package)
+ *   src/resources/model-efforts-editor.tar.gz (client-only plugin package)
  *   src/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
  * `src/resources/` is gitignored — regenerated per build via
@@ -40,6 +41,7 @@ const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
 const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
 const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
 const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
+const modelEffortsEditorDir = resolve(repoRoot, 'plugin/dsh-model-efforts-editor')
 const resourcesDir = resolve(repoRoot, 'src/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
@@ -49,6 +51,7 @@ const compactionTar = resolve(resourcesDir, 'compaction-hierarchical.tar.gz')
 const webSearchToggleTar = resolve(resourcesDir, 'web-search-toggle.tar.gz')
 const modelImageInputTar = resolve(resourcesDir, 'model-image-input.tar.gz')
 const sendWhileRunningTar = resolve(resourcesDir, 'send-while-running.tar.gz')
+const modelEffortsEditorTar = resolve(resourcesDir, 'model-efforts-editor.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
 if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.3') {
@@ -61,6 +64,10 @@ if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPa
 const sendWhileRunningPackage = JSON.parse(readFileSync(resolve(sendWhileRunningDir, 'package.json'), 'utf8'))
 if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.1') {
   throw new Error(`desktop requires dsh-send-while-running 0.1.1, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
+}
+const modelEffortsEditorPackage = JSON.parse(readFileSync(resolve(modelEffortsEditorDir, 'package.json'), 'utf8'))
+if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffortsEditorPackage.version !== '0.1.0') {
+  throw new Error(`desktop requires dsh-model-efforts-editor 0.1.0, found ${modelEffortsEditorPackage.name}@${modelEffortsEditorPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {
@@ -103,7 +110,7 @@ function sha256(path) {
 // 1. Desktop-owned plugins: verify and build the exact packages bundled below.
 console.log('prepare-desktop-bundle: building desktop plugins...')
 run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir]) {
+for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir]) {
   for (const script of ['typecheck', 'test', 'build']) {
     run(pnpm, ['run', script], { cwd: pluginDir })
   }
@@ -234,6 +241,13 @@ tarCreate(sendWhileRunningTar, sendWhileRunningDir, [
   'lib',
 ])
 console.log(`prepare-desktop-bundle: send-while-running.tar.gz ${mb(sendWhileRunningTar)} MB`)
+tarCreate(modelEffortsEditorTar, modelEffortsEditorDir, [
+  'package.json',
+  'cordis.patch.yml',
+  'README.md',
+  'lib',
+])
+console.log(`prepare-desktop-bundle: model-efforts-editor.tar.gz ${mb(modelEffortsEditorTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
 // plus content hashes of every tarball. Each extraction .ok marker stores its
@@ -249,6 +263,8 @@ const manifest = {
   modelImageInputTarball: await sha256(modelImageInputTar),
   sendWhileRunningVersion: sendWhileRunningPackage.version,
   sendWhileRunningTarball: await sha256(sendWhileRunningTar),
+  modelEffortsEditorVersion: modelEffortsEditorPackage.version,
+  modelEffortsEditorTarball: await sha256(modelEffortsEditorTar),
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)
