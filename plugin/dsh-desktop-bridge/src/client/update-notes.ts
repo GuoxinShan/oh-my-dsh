@@ -21,12 +21,48 @@ function listItem(line: string): string | undefined {
   return match === null ? undefined : match[1].trim()
 }
 
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&')
+}
+
+/** GitHub atom / electron-updater often hands us HTML, not Keep a Changelog markdown. */
+function looksLikeHtml(text: string): boolean {
+  return /<(?:h[1-6]|ul|ol|li|p|br|div|code)\b/i.test(text)
+}
+
+/**
+ * Turn the GitHub-release HTML subset into the markdown this parser already
+ * understands. Strip tags only — never feed the result to innerHTML.
+ */
+export function htmlToChangelogMarkdown(html: string): string {
+  let text = html
+  text = text.replace(/<br\s*\/?>/gi, '\n')
+  text = text.replace(/<\/(?:h[1-6]|p|div)>/gi, '\n')
+  text = text.replace(/<h([1-6])[^>]*>/gi, (_, level: string) => {
+    const depth = Number(level)
+    return `${'#'.repeat(depth <= 2 ? 2 : 3)} `
+  })
+  text = text.replace(/\s*<li[^>]*>\s*/gi, '\n- ')
+  text = text.replace(/<\/li>/gi, '')
+  text = text.replace(/\s*<\/?(?:ul|ol)[^>]*>\s*/gi, '\n')
+  text = text.replace(/<\/?[^>]+>/g, '')
+  return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
 /**
  * Split Keep a Changelog markdown into headings, lists, and paragraphs.
  * The renderer stays inside this plugin so the dialog does not pull the
  * chat Markdown stack (KaTeX / streaming parser) into a confirmation box.
  */
 export function parseUpdateNotes(text: string): UpdateNoteBlock[] {
+  const decoded = decodeEntities(text)
+  const source = looksLikeHtml(decoded) ? htmlToChangelogMarkdown(decoded) : decoded
   const blocks: UpdateNoteBlock[] = []
   let paragraph: string[] = []
   let items: string[] = []
@@ -42,7 +78,7 @@ export function parseUpdateNotes(text: string): UpdateNoteBlock[] {
     items = []
   }
 
-  for (const raw of text.split(/\r?\n/)) {
+  for (const raw of source.split(/\r?\n/)) {
     const line = raw.trim()
     if (line.length === 0) {
       flushParagraph()

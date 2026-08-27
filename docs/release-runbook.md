@@ -37,12 +37,12 @@
 **桌面**：
 
 ```sh
-# 1. 版本号：仓根 package.json 的 version（当前 0.3.0-rc.1）
+# 1. 版本号：仓根 package.json 的 version（当前 0.3.0-rc.2）
 # 2. （可选）runtime 升级：fork 打 v<基线>+zw.<补丁> 标签 + 更新 runtime/revision.json
-git tag v0.3.0-rc.1 && git push origin v0.3.0-rc.1
+git tag v0.3.0-rc.2 && git push origin v0.3.0-rc.2
 ```
 
-推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → electron-rebuild → electron-builder 公证 `.app` 再打 dmg/zip → `scripts/notarize-dmg.sh` 再公证 DMG）与 `desktop-windows`（同套 prepare，出 NSIS）并行，`desktop-publish` 从 `CHANGELOG.md` 抽取该版本说明后上传 Release（dmg、zip、setup.exe、latest-mac.yml、latest.yml；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版。
+推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → electron-rebuild → electron-builder 只签名打 dmg/zip → `scripts/notarize-mac-artifacts.sh` 并行公证 zip 与 DMG，再 staple DMG）与 `desktop-windows`（同套 prepare，出 NSIS）并行，`desktop-publish` 从 `CHANGELOG.md` 抽取该版本说明后上传 Release（dmg、zip、setup.exe、latest-mac.yml、latest.yml；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版。发版 prepare 走 `DSH_DESKTOP_PREPARE_MODE=build`（跳过已在 CI 跑过的 typecheck/test）。
 
 验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。需要复核安装页时用临时 venv 安装 `ds-store==1.3.1`，再把该 venv 的 `bin` 放到 `PATH` 后执行 `bash scripts/verify-dmg-layout.sh <下载的.dmg>`；脚本会解析发布件的 Finder 记录，而不是只看构建目录。
 
@@ -69,7 +69,8 @@ git tag dsh-provider-balance-v0.4.2 && git push origin dsh-provider-balance-v0.4
 export DSH_CODESIGN_IDENTITY="Developer ID Application: … (TEAMID)"
 export CSC_NAME="$DSH_CODESIGN_IDENTITY"
 export APPLE_ID="…" APPLE_APP_SPECIFIC_PASSWORD="…" APPLE_TEAM_ID="…"
-pnpm desktop:build -- --mac --config.mac.notarize=true
+pnpm desktop:build -- --mac
+bash scripts/notarize-mac-artifacts.sh release/*.dmg release/*.zip
 # 上传：Releases 页手动拖 dmg + zip + latest-mac.yml
 ```
 
@@ -80,7 +81,7 @@ pnpm desktop:build -- --mac --config.mac.notarize=true
 | 公证失败 | `xcrun notarytool log <submission-id> --apple-id … --password … --team-id …`（submission-id 在 build 日志或 `notarytool history` 里）；`path` 字段直接点名是哪个文件 |
 | 401 Unauthenticated | 凭据错：App 专用密码 ≠ 账号密码 ≠ ASC API 密钥（个人密钥不可用） |
 | `errSecInternalComponent` | keychain 授权丢了：重跑 `security set-key-partition-list -S apple-tool:,apple:` |
-| 后台没有出现更新入口 | 未打包构建会跳过检查；离线 / Release 还没发过 latest-mac.yml 都走静默软失败 |
+| 后台没有出现更新入口 | 未打包构建会跳过检查；离线 / Release 还没发过 latest-mac.yml 都走静默软失败。桌面 `v*` tag 推了但 publish 失败时，必须删掉该 tag（否则旧版 `-rc` 客户端刮 atom 会命中空 tag、图标不出现）；新版壳已钉 `allowPrerelease=false`，只认 `/releases/latest` |
 | 更新下载后校验失败 | 标题带入口保留目标版本并进入可重试失败态；核对 electron-builder 签名与 GitHub 附件是否同一次构建 |
 | DMG 安装页退化成默认布局 | `bash scripts/verify-dmg-layout.sh <dmg>` |
 

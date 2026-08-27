@@ -1,8 +1,3 @@
-# Rust
-/target/
-src-tauri/target/
-Cargo.lock
-
 # Node
 node_modules/
 dist/
@@ -25,12 +20,8 @@ plugin/dsh-fs-observation-log/lib/
 # dsh-mcp-settings 的同级 harness 锚（scripts/setup-plugins.mjs 再生）
 plugin/deepseek-harness
 
-# Tauri
-src-tauri/gen/
-
 # 打包资源（prepare-desktop-bundle 再生：runtime/bridge tarball + revision 副本）
-src-tauri/resources/
-src-electron/resources/
+src/resources/
 dist-electron/
 release/
 
@@ -44,9 +35,6 @@ release/
 *.key
 *.pfx
 AuthKey_*
-tauri-keys/
-src-tauri/tauri.windows-sign.json
-src-tauri/tauri.local-unsigned.json
 
 # Logs & local
 *.log
@@ -74,3 +62,6 @@ plugin/dsh-model-image-input/lib/
 
 # dsh-send-while-running：构建产物（scripts/new-plugin.mjs 生成）
 plugin/dsh-send-while-running/lib/
+
+# dsh-model-efforts-editor：构建产物（scripts/new-plugin.mjs 生成）
+plugin/dsh-model-efforts-editor/lib/

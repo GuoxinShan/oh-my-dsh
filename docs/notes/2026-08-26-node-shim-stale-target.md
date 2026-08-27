@@ -12,7 +12,7 @@
 
 ## 原因
 
-`ensureNodeShim` 把所有实例写到同一文件 `~/.dsh-desktop/node-shim/node`。`src-electron/shell.test.ts` 用虚构路径 `/Applications/Electron.app/Contents/MacOS/Electron` 调 `bundledRuntime`，而 `bundledRuntime` 无视测试临时根、落盘 `shellRoot()`。跑 `pnpm desktop:test` 就会把真实 shim 毒成死路径。已启动的 Oh My DSH sidecar 不会重写脚本，下一次 `yzj-cli` 即 ENOENT。desktop:dev 与打包壳互踩是同一机制。
+`ensureNodeShim` 把所有实例写到同一文件 `~/.dsh-desktop/node-shim/node`。`src/shell.test.ts` 曾用虚构路径 `/Applications/Electron.app/Contents/MacOS/Electron` 调 `bundledRuntime`。Tauri 退役后测试虽已传入临时 `shimRoot`，仍会把死路径写进那份脚本；若漏传 `shimRoot` 就落盘 `shellRoot()`。跑 `pnpm desktop:test` 仍可能把真实 shim 毒成死路径。已启动的 Oh My DSH sidecar 不会重写脚本，下一次 `yzj-cli` 即 ENOENT。desktop:dev 与打包壳互踩是同一机制。
 
 ## 修法
 

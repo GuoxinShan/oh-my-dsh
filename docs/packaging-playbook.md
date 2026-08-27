@@ -2,7 +2,7 @@
 
 面向「打出一个能在别的 mac 上跑的安装包」的完整操作指引。改流程先改本文件。
 
-0.3.0-rc.1 起宿主是 **Electron**（`src-electron/` + electron-builder）。`src-tauri/` 已归档，不再发货。已装 0.2.x 不能热更新到 0.3.x。
+0.3.0-rc.1 起宿主是 **Electron**（`src/` + electron-builder）。0.2.x Tauri 壳已从仓内删除；已装 0.2.x 不能热更新到 0.3.x。
 
 ## 0. 前置条件（构建机）
 
@@ -19,10 +19,10 @@ pnpm desktop:build
 
 先跑 `pnpm run desktop:prepare`（`scripts/prepare-desktop-bundle.mjs`）：
 
-1. 构建桌面自有插件：bridge、hierarchical compaction、Web Search toggle、model-image-input、send-while-running；
+1. 构建桌面自有插件：bridge、hierarchical compaction、Web Search toggle、model-image-input、send-while-running（默认 typecheck+test+build；`DSH_DESKTOP_PREPARE_MODE=build` 时只 build，发版用）；
 2. 组装 runtime（`scripts/prepare-runtime.mjs`，SHA 键控缓存）；
 3. 按当前 Electron 版本 `electron-rebuild` native 模块；
-4. 打 `src-electron/resources/runtime.tar.gz`（**不含** `tools/node`）及各插件 tarball；
+4. 打 `src/resources/runtime.tar.gz`（**不含** `tools/node`）及各插件 tarball；
 5. `scripts/build-electron.mjs`：esbuild 打 main.cjs → electron-builder 出平台包。
 
 产物：
@@ -30,18 +30,18 @@ pnpm desktop:build
 - macOS：`release/Oh My DSH-<ver>-arm64.dmg` 与同目录 zip（updater）
 - Windows：`release/Oh My DSH-<ver>-setup.exe`
 
-`src-electron/resources/` 与 `dist-electron/`、`release/` 均 gitignored。
+`src/resources/` 与 `dist-electron/`、`release/` 均 gitignored。
 
 ### 安装窗口外观（DMG 背景与布局）
 
-- `src-tauri/dmg/background.png`（660×400）+ `background@2x.png`（1320×800）—— 由 `scripts/generate-dmg-background.py` 生成。electron-builder 26 用 1x 像素定窗口，再和 `@2x` 合成 hidpi TIFF；只放一张 1320×800 的 `background.png` 会把 Finder 窗撑成 2 倍。
+- `src/dmg/background.png`（660×400）+ `background@2x.png`（1320×800）—— 由 `scripts/generate-dmg-background.py` 生成。electron-builder 26 用 1x 像素定窗口，再和 `@2x` 合成 hidpi TIFF；只放一张 1320×800 的 `background.png` 会把 Finder 窗撑成 2 倍。
 - `electron-builder.yml` 的 `dmg.window` / `dmg.contents` 钉 660×400 与图标坐标（180,196）/（480,196）。
 
 流水线在公证前运行 `scripts/verify-dmg-layout.sh <dmg>`。
 
 ## 2. 包结构与首启解压（原理）
 
-runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），tauri-bundler 对目录资源不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
+runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），electron-builder 对目录 extraResources 不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
 
 首次启动时壳把资源原子解压到 home：
 
@@ -104,7 +104,7 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev
 
 ## 5. 分发与 Gatekeeper
 
-**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 在 `notarize: true` 时只提交 `.app`（包 zip/dmg 之前）；CI 再对 DMG 跑 `scripts/notarize-dmg.sh`（签名 → `notarytool submit --wait` → staple → `spctl`）。只 staple 会因「Record not found」失败：DMG 是新文件，Apple 没有它的 ticket。
+**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 保持 `mac.notarize: false`（只签 `.app` 再打 zip/dmg）。CI 随后跑 `scripts/notarize-mac-artifacts.sh`：zip（OTA）和 DMG（安装盘）**并行** `notarytool submit --wait`，再 staple + `spctl` DMG。两份文件 hash 不同，必须两张 ticket；并行只把墙钟从相加变成 `max`。只 staple 会因「Record not found」失败。
 
 一次完整公证构建的环境变量：
 
@@ -114,8 +114,11 @@ export CSC_NAME="$DSH_CODESIGN_IDENTITY"                                    # el
 export APPLE_ID="<Apple ID 邮箱>"
 export APPLE_APP_SPECIFIC_PASSWORD="<App 专用密码>"
 export APPLE_TEAM_ID="<TEAMID>"
-pnpm desktop:build -- --mac --config.mac.notarize=true
+pnpm desktop:build -- --mac
+bash scripts/notarize-mac-artifacts.sh release/*.dmg release/*.zip
 ```
+
+发版流水线设 `DSH_DESKTOP_PREPARE_MODE=build`，只 build 桌面自有插件（typecheck/test 已在 CI 跑过）。本地默认仍全量验证。
 
 凭据清单：Developer ID Application 证书（p12 导入钥匙串 + Apple G2 中间证书 `DeveloperIDG2CA.cer` + `security set-key-partition-list` 授权 codesign）、Team ID、App 专用密码。**ASC「个人 API 密钥」不能用于 notarytool**。
 
@@ -123,7 +126,7 @@ pnpm desktop:build -- --mac --config.mac.notarize=true
 
 1. **hardened runtime 强制**：`electron-builder.yml` `mac.hardenedRuntime: true`；
 2. **公证扫描钻进 tar.gz**：runtime 里 esbuild 等 Mach-O 全要 Developer ID 签名——prepare-desktop-bundle 打 tar 前自动签（`DSH_CODESIGN_IDENTITY` 门控；JIT 二进制带 allow-jit entitlements，见 `scripts/entitlements-runtime.plist`）；
-3. **CI 对 DMG 再公证一次再 staple**（`scripts/notarize-dmg.sh`）。electron-builder 的 ticket 只覆盖 `.app`。
+3. **zip 与 DMG 各交一次、并行等**：`scripts/notarize-mac-artifacts.sh`。electron-builder 不再阻塞公证 `.app`。DMG-only 本地仍可用 `scripts/notarize-dmg.sh`。
 
 无证书降级通道仍有效（ad-hoc + `xattr -dr com.apple.quarantine`）。`productName`/`appId` 已随签名生效，改名等于换应用。
 
@@ -132,7 +135,7 @@ pnpm desktop:build -- --mac --config.mac.notarize=true
 ## 6. 升级 runtime / Desktop-owned 插件版本
 
 1. runtime 升级时，fork 侧打标签：`git tag v<基线>+zw.<n> <sha> && git push origin <tag>`，再更新本仓 `runtime/revision.json`（repo/ref/sha）。
-2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 `src-electron/resources`、壳解压/安装链、runtime peer 链接与文档。
+2. Desktop-owned 插件升级时，更新插件源码版本及 prepare 的精确版本断言，并同步 `src/resources`、壳解压/安装链、runtime peer 链接与文档。
 3. 提升 Desktop 版本并执行 `pnpm desktop:build`。prepare 会重新生成相应 tarball 与内容哈希；壳按哈希换解压目录，旧缓存不再被引用。
 
 插件的独立 GitHub Release 不会替换已安装 Desktop 包内的资源，也不会更新用户 Web Profile。只要 Desktop-owned 插件版本变化，就必须发布新的 Desktop；Web Search toggle 0.1.3 首次由 Desktop `0.2.0-rc.14` 携带。

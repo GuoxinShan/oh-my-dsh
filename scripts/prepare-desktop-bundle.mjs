@@ -1,28 +1,29 @@
 /**
  * Assemble the shell's bundled assets (release packaging): the self-contained
  * runtime tarball, the desktop-owned plugin tarballs, and the revision
- * manifest, all placed under src-electron/resources/ for electron-builder
+ * manifest, all placed under src/resources/ for electron-builder
  * extraResources.
  *
  * Why tarballs instead of loose resource directories: the runtime tree is a
- * pnpm install (3k+ symlinks, two layers) and tauri-bundler gives no
- * guarantee that directory resources keep symlinks executable-bit-identical
- * (deref-copy would explode the .pnpm store to GBs). A tar round-trip is
+ * pnpm install (3k+ symlinks, two layers) and electron-builder's extraResources
+ * copy does not keep that tree symlink-identical (deref-copy would explode
+ * the .pnpm store to GBs). A tar round-trip is
  * link-aware, and the shell extracts it once into ~/.dsh-desktop (writable
  * and immune to App Translocation read-only volumes). Apple's notary scanner
  * still descends into archives, so every nested Mach-O is signed before pack.
  *
  * Fixed file names so electron-builder.yml never churns with revisions:
- *   src-electron/resources/runtime.tar.gz          (dsh/ + tools/ without tools/node)
- *   src-electron/resources/runtime.tar.gz.sha      (cache marker: revision sha)
- *   src-electron/resources/bridge.tar.gz           (package.json + lib/ + patch)
- *   src-electron/resources/compaction-hierarchical.tar.gz (host plugin package)
- *   src-electron/resources/web-search-toggle.tar.gz (host + client plugin package)
- *   src-electron/resources/model-image-input.tar.gz (client-only plugin package)
- *   src-electron/resources/send-while-running.tar.gz (client-only plugin package)
- *   src-electron/resources/runtime-revision.json   (runtime + plugin hashes/versions)
+ *   src/resources/runtime.tar.gz          (dsh/ + tools/ without tools/node)
+ *   src/resources/runtime.tar.gz.sha      (cache marker: revision sha)
+ *   src/resources/bridge.tar.gz           (package.json + lib/ + patch)
+ *   src/resources/compaction-hierarchical.tar.gz (host plugin package)
+ *   src/resources/web-search-toggle.tar.gz (host + client plugin package)
+ *   src/resources/model-image-input.tar.gz (client-only plugin package)
+ *   src/resources/send-while-running.tar.gz (client-only plugin package)
+ *   src/resources/model-efforts-editor.tar.gz (client-only plugin package)
+ *   src/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
- * `src-electron/resources/` is gitignored — regenerated per build via
+ * `src/resources/` is gitignored — regenerated per build via
  * `pnpm desktop:prepare` (also wired as the first half of desktop:build).
  */
 import { execFileSync } from 'node:child_process'
@@ -40,7 +41,8 @@ const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
 const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
 const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
 const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
-const resourcesDir = resolve(repoRoot, 'src-electron/resources')
+const modelEffortsEditorDir = resolve(repoRoot, 'plugin/dsh-model-efforts-editor')
+const resourcesDir = resolve(repoRoot, 'src/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
 const runtimeShaMarker = resolve(resourcesDir, 'runtime.tar.gz.sha')
@@ -49,6 +51,7 @@ const compactionTar = resolve(resourcesDir, 'compaction-hierarchical.tar.gz')
 const webSearchToggleTar = resolve(resourcesDir, 'web-search-toggle.tar.gz')
 const modelImageInputTar = resolve(resourcesDir, 'model-image-input.tar.gz')
 const sendWhileRunningTar = resolve(resourcesDir, 'send-while-running.tar.gz')
+const modelEffortsEditorTar = resolve(resourcesDir, 'model-efforts-editor.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
 if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.3') {
@@ -61,6 +64,10 @@ if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPa
 const sendWhileRunningPackage = JSON.parse(readFileSync(resolve(sendWhileRunningDir, 'package.json'), 'utf8'))
 if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.1') {
   throw new Error(`desktop requires dsh-send-while-running 0.1.1, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
+}
+const modelEffortsEditorPackage = JSON.parse(readFileSync(resolve(modelEffortsEditorDir, 'package.json'), 'utf8'))
+if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffortsEditorPackage.version !== '0.1.0') {
+  throw new Error(`desktop requires dsh-model-efforts-editor 0.1.0, found ${modelEffortsEditorPackage.name}@${modelEffortsEditorPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {
@@ -100,18 +107,40 @@ function sha256(path) {
   })
 }
 
-// 1. Desktop-owned plugins: verify and build the exact packages bundled below.
-console.log('prepare-desktop-bundle: building desktop plugins...')
-run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir]) {
-  for (const script of ['typecheck', 'test', 'build']) {
-    run(pnpm, ['run', script], { cwd: pluginDir })
+const desktopPluginDirs = [bridgeDir, compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir]
+const runtimeSrc = resolve(repoRoot, 'runtime/src')
+/** `build` = release path (CI already typechecked/tested). Default `verify` stays local-complete. */
+const prepareMode = process.env.DSH_DESKTOP_PREPARE_MODE === 'build' ? 'build' : 'verify'
+
+function assembleRuntime() {
+  console.log('prepare-desktop-bundle: assembling runtime...')
+  run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
+}
+
+function buildDesktopPlugins() {
+  for (const pluginDir of desktopPluginDirs) {
+    run(pnpm, ['run', 'build'], { cwd: pluginDir })
   }
 }
 
-// 2. Runtime tree (SHA-keyed cache; seconds when warm).
-console.log('prepare-desktop-bundle: assembling runtime...')
-run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
+if (prepareMode === 'build') {
+  // Runtime first so the fork clone can anchor bridge `setup` without a
+  // second prepare-runtime in the workflow.
+  assembleRuntime()
+  const checkout = process.env.DSH_CHECKOUT || runtimeSrc
+  run(pnpm, ['run', 'setup'], { cwd: bridgeDir, env: { ...process.env, DSH_CHECKOUT: checkout } })
+  console.log('prepare-desktop-bundle: building desktop plugins (skip typecheck/test)...')
+  buildDesktopPlugins()
+} else {
+  console.log('prepare-desktop-bundle: verifying desktop plugins...')
+  run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
+  for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir]) {
+    for (const script of ['typecheck', 'test', 'build']) {
+      run(pnpm, ['run', script], { cwd: pluginDir })
+    }
+  }
+  assembleRuntime()
+}
 
 const runtimeCli = resolve(runtimeDir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
 if (!existsSync(runtimeCli)) {
@@ -234,6 +263,13 @@ tarCreate(sendWhileRunningTar, sendWhileRunningDir, [
   'lib',
 ])
 console.log(`prepare-desktop-bundle: send-while-running.tar.gz ${mb(sendWhileRunningTar)} MB`)
+tarCreate(modelEffortsEditorTar, modelEffortsEditorDir, [
+  'package.json',
+  'cordis.patch.yml',
+  'README.md',
+  'lib',
+])
+console.log(`prepare-desktop-bundle: model-efforts-editor.tar.gz ${mb(modelEffortsEditorTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
 // plus content hashes of every tarball. Each extraction .ok marker stores its
@@ -249,6 +285,8 @@ const manifest = {
   modelImageInputTarball: await sha256(modelImageInputTar),
   sendWhileRunningVersion: sendWhileRunningPackage.version,
   sendWhileRunningTarball: await sha256(sendWhileRunningTar),
+  modelEffortsEditorVersion: modelEffortsEditorPackage.version,
+  modelEffortsEditorTarball: await sha256(modelEffortsEditorTar),
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)

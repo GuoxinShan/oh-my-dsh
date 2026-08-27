@@ -21,3 +21,18 @@
               low: low
               medium: medium
               high: high
+          # Zhipu GLM-5.3 line through a hand-declared Z.ai coding route:
+          # three always-on thinking levels (low/high/max, thinking.type
+          # "disabled" is refused since 5.3) plus the compat switches the zai
+          # dispatch auto-detects to false on custom routes. Earlier GLM lines
+          # keep their own protocol and match nothing here.
+          - routes: [zai-coding-cn]
+            include: '^glm-5\.3($|-)'
+            exclude: turbo
+            efforts:
+              low: low
+              high: high
+              max: max
+            compat:
+              supportsReasoningEffort: true
+              thinkingFormat: zai
