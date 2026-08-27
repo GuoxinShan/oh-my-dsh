@@ -1,6 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+import {
+  applyDockGuardEnv,
+  dockGuardImports,
+  ensureDarwinDockGuard,
+  type DarwinDockGuard,
+} from './darwin-dock-guard.ts'
 import { extractBundleTar, readRevisionManifest } from './extract.ts'
 import { repoRoot, resourceDir, shellRoot, userHome } from './paths.ts'
 
@@ -11,6 +17,7 @@ export interface Runtime {
   cwd: string
   pathPrepend: string[]
   oneNode: boolean
+  dockGuard?: DarwinDockGuard
 }
 
 export function composeProcessPath(preferred: string[], inherited: string | undefined): string {
@@ -64,15 +71,20 @@ export function hostCliPathDirs(): string[] {
   })
 }
 
-export function ensureNodeShim(electronPath: string, root: string): string {
+export function ensureNodeShim(electronPath: string, root: string, guard?: DarwinDockGuard): string {
   const dir = path.join(root, 'node-shim')
   fs.mkdirSync(dir, { recursive: true })
+  const hideImport = guard === undefined ? '' : ` --import ${JSON.stringify(guard.hideDockJs)}`
   if (process.platform === 'win32') {
     const dest = path.join(dir, 'node.cmd')
-    fs.writeFileSync(dest, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${electronPath}" %*\r\n`)
+    fs.writeFileSync(dest, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${electronPath}"${hideImport} %*\r\n`)
   } else {
     const dest = path.join(dir, 'node')
-    fs.writeFileSync(dest, `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexec ${JSON.stringify(electronPath)} "$@"\n`)
+    const hideEnv = guard === undefined ? '' : `export DSH_DARWIN_HIDE_DOCK=${JSON.stringify(guard.hideDockLib)}\n`
+    fs.writeFileSync(
+      dest,
+      `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\n${hideEnv}exec ${JSON.stringify(electronPath)}${hideImport} "$@"\n`,
+    )
     fs.chmodSync(dest, 0o755)
   }
   return dir
@@ -104,7 +116,13 @@ export function bundledNode(dir: string): string | undefined {
   return undefined
 }
 
-export function bundledRuntime(dir: string, oneNode: boolean, electronPath: string, packaged = false): Runtime {
+export function bundledRuntime(
+  dir: string,
+  oneNode: boolean,
+  electronPath: string,
+  packaged = false,
+  shimRoot = shellRoot(),
+): Runtime {
   const cli = path.join(dir, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
   if (!fs.existsSync(cli)) {
     throw new Error(`bundled runtime missing CLI entry: ${cli}`)
@@ -114,17 +132,19 @@ export function bundledRuntime(dir: string, oneNode: boolean, electronPath: stri
     if (packaged && nodeBinary !== undefined) {
       throw new Error(`sidecar still resolved a second node at ${nodeBinary}`)
     }
-    const shim = ensureNodeShim(electronPath, shellRoot())
+    const dockGuard = ensureDarwinDockGuard(shimRoot)
+    const shim = ensureNodeShim(electronPath, shimRoot, dockGuard)
     neutralizeToolsNodeShims(dir)
     return {
       node: electronPath,
-      argsPrefix: ['--import', 'tsx/esm'],
+      argsPrefix: [...dockGuardImports(dockGuard), '--import', 'tsx/esm'],
       cli,
       cwd: path.join(dir, 'dsh'),
       // Shim first on PATH; also delete tools/.bin/node* so pnpm's wrapper
       // does not hard-exec the omitted tools/node binary.
       pathPrepend: [shim, path.join(dir, 'tools/node_modules/.bin')],
       oneNode: true,
+      ...(dockGuard === undefined ? {} : { dockGuard }),
     }
   }
   if (nodeBinary === undefined) {
@@ -192,14 +212,16 @@ function sourceRuntime(electronPath: string): Runtime {
   const checkout = findCheckout()
   const inElectron = typeof process.versions.electron === 'string' && process.versions.electron.length > 0
   if (inElectron) {
-    const shim = ensureNodeShim(electronPath, shellRoot())
+    const dockGuard = ensureDarwinDockGuard(shellRoot())
+    const shim = ensureNodeShim(electronPath, shellRoot(), dockGuard)
     return {
       node: electronPath,
-      argsPrefix: ['--import', 'tsx/esm'],
+      argsPrefix: [...dockGuardImports(dockGuard), '--import', 'tsx/esm'],
       cli: path.join(checkout, 'apps/cli/src/bin.ts'),
       cwd: checkout,
       pathPrepend: [shim],
       oneNode: true,
+      ...(dockGuard === undefined ? {} : { dockGuard }),
     }
   }
   return {
@@ -282,6 +304,7 @@ export function applyOneNodeEnv(env: NodeJS.ProcessEnv, oneNode: boolean): NodeJ
 export function runtimeEnv(runtime: Runtime, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
   applyOneNodeEnv(env, runtime.oneNode)
+  applyDockGuardEnv(env, runtime.dockGuard)
   env.PATH = composeProcessPath(runtime.pathPrepend, process.env.PATH)
   return env
 }
@@ -290,6 +313,7 @@ export function sidecarEnv(runtime: Runtime, extra: NodeJS.ProcessEnv = {}): Nod
   const preferred = [...runtime.pathPrepend, ...hostCliPathDirs()]
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
   applyOneNodeEnv(env, runtime.oneNode)
+  applyDockGuardEnv(env, runtime.dockGuard)
   env.PATH = composeProcessPath(preferred, process.env.PATH)
   return env
 }

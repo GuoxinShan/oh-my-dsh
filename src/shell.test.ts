@@ -49,12 +49,21 @@ describe('bundledRuntime one-node PATH', () => {
       fs.mkdirSync(toolsBin, { recursive: true })
       fs.writeFileSync(path.join(toolsBin, 'node'), '#!/bin/sh\nexit 1\n')
       fs.chmodSync(path.join(toolsBin, 'node'), 0o755)
-      const runtime = bundledRuntime(root, true, '/Applications/Electron.app/Contents/MacOS/Electron', false)
+      const runtime = bundledRuntime(root, true, '/Applications/Electron.app/Contents/MacOS/Electron', false, root)
       assert.equal(runtime.oneNode, true)
       assert.equal(runtime.pathPrepend.length, 2)
       assert.ok(runtime.pathPrepend[0]!.endsWith(`${path.sep}node-shim`))
       assert.equal(runtime.pathPrepend[1], toolsBin)
       assert.equal(fs.existsSync(path.join(toolsBin, 'node')), false)
+      assert.ok(runtime.argsPrefix.includes('tsx/esm'))
+      if (process.platform === 'darwin' && runtime.dockGuard !== undefined) {
+        assert.equal(runtime.argsPrefix[0], '--import')
+        assert.equal(runtime.argsPrefix[1], runtime.dockGuard.hideDockJs)
+        const shim = fs.readFileSync(path.join(root, 'node-shim/node'), 'utf8')
+        assert.ok(shim.includes('hide-dock.mjs'))
+        const env = sidecarEnv(runtime)
+        assert.equal(env.DSH_DARWIN_PGRP_HELPER, runtime.dockGuard.pgrpHelper)
+      }
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
