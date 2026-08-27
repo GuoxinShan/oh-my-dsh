@@ -1,21 +1,24 @@
 /**
- * dsh-reasoning-efforts, host half: declare reasoning efforts for
- * hand-declared llm-pi-ai models.
+ * dsh-reasoning-efforts, host half: declare reasoning efforts (and their
+ * dispatch compat) for hand-declared llm-pi-ai models.
  *
  * A custom OpenAI-compatible route (a sub2api gateway fronting Grok, say)
  * hand-declares its models in `settings.yaml` without `reasoningEfforts`,
  * because no GUI edits that field and no model listing reports reasoning
  * metadata. llm-pi-ai then resolves those models as non-reasoning and the
- * composer hides the effort picker entirely (upstream discussion #843).
+ * composer hides the effort picker entirely (upstream discussion #843). Some
+ * vendors also need compat switches (`supportsReasoningEffort`,
+ * `thinkingFormat`) stated explicitly — auto-detection turns them off — or
+ * the declared efforts never reach the wire.
  *
  * On mount — and after every `llm-pi-ai` settings commit — this plugin fills
- * the gap: for each model entry whose raw user layer declares no
- * `reasoningEfforts`, whose route/model matches an ordered rule from the
- * composition row's `config`, and whose live adapter does not already offer
- * efforts (catalog inheritance), it writes the rule's declaration into the
- * user layer through path-addressed `settings.mutate` ops. Never anything
- * else: explicit declarations win over rules, the plugin never removes a
- * key, and removal stays a hand edit.
+ * the gap: for each model entry whose route/model matches an ordered rule
+ * from the composition row's `config`, it writes what the entry lacks. The
+ * efforts piece fills only when the raw user layer declares no
+ * `reasoningEfforts` AND the live adapter does not already offer efforts
+ * (catalog inheritance); the compat piece fills field by field, skipping any
+ * switch the entry declares. Never anything else: explicit declarations win
+ * over rules, the plugin never removes a key, and removal stays a hand edit.
  *
  * Writes carry the read revision, so a concurrent edit rejects
  * (`SETTINGS_CONFLICT`) instead of being clobbered; the losing fill simply
@@ -91,7 +94,14 @@ export function apply(ctx: Context, rawConfig: unknown): void {
     if (candidates.length === 0) return false
     const kept: FillCandidate[] = []
     for (const candidate of candidates) {
-      if (await offersEfforts(candidate)) continue
+      if (candidate.efforts === undefined || (await offersEfforts(candidate))) {
+        // The efforts piece is either absent by need or inherited from the
+        // catalog (gate 3); it stays untouched either way, while a compat
+        // piece — wire format, not capability listing — is still fillable.
+        if (candidate.compatFill !== undefined && candidate.efforts === undefined) kept.push(candidate)
+        else if (candidate.compatFill !== undefined) kept.push({ ...candidate, efforts: undefined })
+        continue
+      }
       kept.push(candidate)
     }
     if (kept.length === 0) return false

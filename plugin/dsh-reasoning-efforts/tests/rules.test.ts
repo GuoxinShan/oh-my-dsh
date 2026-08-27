@@ -135,3 +135,117 @@ test('buildFillOps groups multiple models of one route into a single array op', 
   const models = ops[0]?.value as Record<string, unknown>[]
   assert.deepEqual(models.map(entry => entry.reasoningEfforts), [false, undefined, { high: 'high' }])
 })
+
+// ---------------------------------------------------------------------------
+// compat fill
+// ---------------------------------------------------------------------------
+
+const zaiRules = validateConfig({
+  rules: [{
+    routes: ['zai-coding-cn'],
+    include: '^glm-5\\.3',
+    efforts: { low: 'low', high: 'high', max: 'max' },
+    compat: { supportsReasoningEffort: true, thinkingFormat: 'zai' },
+  }],
+}).rules
+
+test('validateConfig validates compat declarations naming the field', () => {
+  const base = { routes: ['r'], include: '.', efforts: { high: 'high' } }
+  validateConfig({ rules: [{ ...base, compat: { supportsReasoningEffort: true, thinkingFormat: 'zai' } }] })
+  assert.throws(() => validateConfig({ rules: [{ ...base, compat: {} }] }), /compat.*empty/)
+  assert.throws(() => validateConfig({ rules: [{ ...base, compat: { supportsReasoningEffort: 'yes' } }] }),
+    /supportsReasoningEffort must be true or false/)
+  assert.throws(() => validateConfig({ rules: [{ ...base, compat: { thinkingFormat: 'anthropic' } }] }),
+    /not a pi-ai thinking format/)
+  assert.throws(() => validateConfig({ rules: [{ ...base, compat: { supportsStore: true } }] }),
+    /not a fillable compat switch/)
+})
+
+test('collectCandidates fills efforts and compat independently per model entry', () => {
+  const providers = {
+    'zai-coding-cn': {
+      models: [
+        // Missing everything: both pieces ride one candidate.
+        { id: 'glm-5.3-flash', name: 'Flash' },
+        // Efforts explicitly declared: only the compat piece is a candidate;
+        // gate 1 protects the declaration even when it differs from the rule.
+        { id: 'glm-5.3', name: 'GLM-5.3', reasoningEfforts: { off: null, high: 'high' } },
+        // Partial compat: field-level gate keeps the declared spelling,
+        // fills only what is absent.
+        { id: 'glm-5.3-pro', name: 'Pro', compat: { thinkingFormat: 'openai' } },
+        // Everything declared already: invisible.
+        { id: 'glm-5.3-max', name: 'Max',
+          reasoningEfforts: { low: 'low' }, compat: { supportsReasoningEffort: true, thinkingFormat: 'openai' } },
+        // No rule match: invisible regardless of state.
+        { id: 'glm-4.7', name: 'Old' },
+      ],
+    },
+  }
+  const candidates = collectCandidates(providers, zaiRules)
+  assert.deepEqual(candidates.map(candidate => candidate.modelId), ['glm-5.3-flash', 'glm-5.3', 'glm-5.3-pro'])
+  assert.equal(candidates[0]?.efforts, zaiRules[0]?.efforts)
+  assert.deepEqual(candidates[0]?.compatFill, { supportsReasoningEffort: true, thinkingFormat: 'zai' })
+  assert.equal(candidates[1]?.efforts, undefined)
+  assert.deepEqual(candidates[1]?.compatFill, { supportsReasoningEffort: true, thinkingFormat: 'zai' })
+  assert.deepEqual(candidates[2]?.compatFill, { supportsReasoningEffort: true })
+})
+
+test('buildFillOps folds the merged compat dict into the models-array op', () => {
+  const providers = {
+    'zai-coding-cn': {
+      models: [
+        { id: 'glm-5.3-flash', name: 'Flash', contextWindow: 1000000 },
+        { id: 'glm-5.3', name: 'GLM-5.3', reasoningEfforts: { off: null, high: 'high' } },
+      ],
+    },
+  }
+  const candidates = collectCandidates(providers, zaiRules)
+  const ops = buildFillOps(candidates, providers)
+  assert.equal(ops.length, 1)
+  const models = ops[0]?.value as Record<string, unknown>[]
+  assert.equal(models.length, 2)
+  assert.deepEqual(models[0]?.reasoningEfforts, { low: 'low', high: 'high', max: 'max' })
+  assert.deepEqual(models[0]?.compat, { supportsReasoningEffort: true, thinkingFormat: 'zai' })
+  // Gate 1 preserved verbatim; only compat joined the entry.
+  assert.deepEqual(models[1]?.reasoningEfforts, { off: null, high: 'high' })
+  assert.deepEqual(models[1]?.compat, { supportsReasoningEffort: true, thinkingFormat: 'zai' })
+})
+
+test('buildFillOps writes partial compat without touching declared spellings', () => {
+  const providers = {
+    'zai-coding-cn': {
+      models: [{ id: 'glm-5.3-pro', name: 'Pro', reasoningEfforts: { high: 'high' }, compat: { thinkingFormat: 'openai' } }],
+    },
+  }
+  const ops = buildFillOps(collectCandidates(providers, zaiRules), providers)
+  const models = ops[0]?.value as Record<string, unknown>[]
+  // Gate 1 keeps both explicit declarations verbatim...
+  assert.deepEqual(models[0]?.reasoningEfforts, { high: 'high' })
+  assert.deepEqual(models[0]?.compat, { thinkingFormat: 'openai', supportsReasoningEffort: true })
+})
+
+test('buildFillOps emits surgical override ops including a whole-compat set', () => {
+  const providers = {
+    'zai-coding-cn': {
+      modelOverrides: {
+        'glm-5.3-air': { compat: { thinkingFormat: 'zai' } },
+      },
+    },
+  }
+  const rules = validateConfig({
+    rules: [{
+      routes: ['zai-coding-cn'],
+      include: '.',
+      efforts: { low: 'low', max: 'max' },
+      compat: { supportsReasoningEffort: true, thinkingFormat: 'zai' },
+    }],
+  }).rules
+  const ops = buildFillOps(collectCandidates(providers, rules), providers)
+  assert.deepEqual(ops.map(op => op.path), [
+    ['providers', 'zai-coding-cn', 'modelOverrides', 'glm-5.3-air', 'reasoningEfforts'],
+    ['providers', 'zai-coding-cn', 'modelOverrides', 'glm-5.3-air', 'compat'],
+  ])
+  assert.deepEqual(ops[0]?.value, { low: 'low', max: 'max' })
+  // The declared spelling survives; the missing switch joins it.
+  assert.deepEqual(ops[1]?.value, { thinkingFormat: 'zai', supportsReasoningEffort: true })
+})

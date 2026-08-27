@@ -1,7 +1,7 @@
 {
   "name": "dsh-reasoning-efforts",
-  "version": "0.1.0",
-  "description": "Declare reasoning efforts for hand-declared llm-pi-ai models (custom OpenAI-compatible gateways), filling the settings field the GUI cannot edit — explicit declarations and catalog-inherited capabilities are never touched",
+  "version": "0.2.0",
+  "description": "Declare reasoning efforts (and their dispatch compat) for hand-declared llm-pi-ai models (custom OpenAI-compatible gateways), filling the settings fields the GUI cannot edit — explicit declarations and catalog-inherited capabilities are never touched",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
