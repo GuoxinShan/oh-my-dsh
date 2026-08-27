@@ -28,7 +28,15 @@ const UPDATE_CONTROL_CSS = [
   '@keyframes desktop-update-spin{to{transform:rotate(360deg)}}',
   '[data-desktop-update-spinner]{display:inline-flex;animation:desktop-update-spin .8s linear infinite}',
   '@media (prefers-reduced-motion:reduce){[data-desktop-update-spinner]{animation:none}}',
-  '[data-desktop-update-notes]{margin:0;max-height:min(280px,46vh);overflow:auto;padding:12px 14px;border:1px solid var(--dsw-alias-border-l);border-radius:10px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);}',
+  // Inline `all:unset` on this button wipes the rail sheet's no-drag; the
+  // 28px drag strip then steals clicks except the bottom ~2px of the icon.
+  '[data-desktop-update-button]{-webkit-app-region:no-drag!important}',
+  // Modal card is a flex column; without a cap the notes flex item's
+  // min-height:auto (content size) wins over max-height and shoves the
+  // footer off-screen. Pin the card, let only the notes pane scroll.
+  '.dsh-desktop-update-dialog{max-height:calc(100dvh - 48px)}',
+  '.dsh-desktop-update-dialog-content{flex:1 1 auto;min-height:0;overflow:hidden}',
+  '[data-desktop-update-notes]{margin:0;min-height:0;max-height:min(240px,36vh);overflow:auto;overscroll-behavior:contain;padding:12px 14px;border:1px solid var(--dsw-alias-border-l);border-radius:10px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);}',
   '[data-desktop-update-notes] h3{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary));}',
   '[data-desktop-update-notes][data-empty] p{margin:0;font-size:13px;line-height:1.5;opacity:.72}',
   '[data-desktop-update-changelog]{display:flex;flex-direction:column;gap:10px;font-size:13px;line-height:1.55}',
@@ -251,6 +259,8 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
       <Modal
         open={confirmOpen && status.phase === 'ready'}
         onClose={() => { setConfirmOpen(false) }}
+        className="dsh-desktop-update-dialog"
+        contentClassName="dsh-desktop-update-dialog-content"
         title={status.phase === 'ready'
           ? t(cutover ? 'update.confirm.downloadTitle' : 'update.confirm.title', { version: status.version })
           : t('update.confirm.title', { version: '' })}

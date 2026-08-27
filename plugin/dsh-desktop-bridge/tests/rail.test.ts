@@ -44,6 +44,7 @@ describe('railCss', () => {
     const toggleRule = css.match(/\[data-desktop-rail-controls\] \[data-desktop-rail-button\]\{[^}]*\}/)
     assert.ok(toggleRule !== null)
     assert.ok(toggleRule[0].includes('pointer-events:auto'))
+    assert.ok(toggleRule[0].includes('-webkit-app-region:no-drag!important'))
     assert.ok(!toggleRule[0].includes('opacity:0'))
   })
   it('shows the New Session bubble only while collapsed, sliding in delayed', () => {
