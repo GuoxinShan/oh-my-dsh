@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -33,6 +34,10 @@ function bundleKey(electronPath: string): string {
   return createHash('sha256').update(electronPath).digest('hex').slice(0, 12)
 }
 
+function stubStamp(electronPath: string): string {
+  return createHash('sha256').update(fs.readFileSync(electronPath)).digest('hex').slice(0, 16)
+}
+
 function copyStub(src: string, dest: string): void {
   try {
     fs.copyFileSync(src, dest, fs.constants.COPYFILE_FICLONE)
@@ -40,6 +45,37 @@ function copyStub(src: string, dest: string): void {
     fs.copyFileSync(src, dest)
   }
   fs.chmodSync(dest, 0o755)
+}
+
+/** `codesign -d` writes identity to stderr. */
+export function isAdhocCodesignText(text: string): boolean {
+  return /\bSignature=adhoc\b/.test(text) || /\(adhoc\)/.test(text)
+}
+
+/** Copied Developer ID stub + rewritten Info.plist is killed (SIGKILL, empty log). */
+export function sidecarHelperUnsafeToExec(text: string): boolean {
+  if (isAdhocCodesignText(text)) return false
+  return /\bAuthority=Developer ID\b/.test(text) || /flags=0x[0-9a-f]*\(runtime\)/.test(text)
+}
+
+function codesignVerbose(target: string): string {
+  const result = spawnSync('codesign', ['-d', '--verbose=2', target], {
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  return `${result.stdout ?? ''}${result.stderr ?? ''}`
+}
+
+function adhocSignApp(app: string): boolean {
+  try {
+    execFileSync('codesign', ['--force', '--sign', '-', '--timestamp=none', app], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    return !sidecarHelperUnsafeToExec(codesignVerbose(app))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -50,7 +86,9 @@ function copyStub(src: string, dest: string): void {
  *
  * Copy the 69KB Electron stub into an LSUIElement helper and symlink
  * `Contents/Frameworks` at the real framework so @rpath still resolves.
- * No compiler required. Missing Frameworks → return the original path.
+ * Re-sign ad-hoc after rewriting Info.plist — the copied Developer ID
+ * stub keeps Hardened Runtime, and macOS SIGKILLs the modified bundle.
+ * Sign failure on a hardened stub falls back to the main binary.
  */
 export function ensureSidecarNodeApp(electronPath: string, root: string): string {
   if (process.platform !== 'darwin') return electronPath
@@ -60,22 +98,29 @@ export function ensureSidecarNodeApp(electronPath: string, root: string): string
   const frameworks = electronFrameworksDir(electronPath)
   if (!fs.existsSync(frameworks)) return electronPath
 
-  const contents = path.join(root, 'sidecar-node', bundleKey(electronPath), 'DSH Node.app', 'Contents')
+  const helperRoot = path.join(root, 'sidecar-node', bundleKey(electronPath))
+  const app = path.join(helperRoot, 'DSH Node.app')
+  const contents = path.join(app, 'Contents')
   const dest = path.join(contents, 'MacOS', EXEC_NAME)
   const fwLink = path.join(contents, 'Frameworks')
   const plist = path.join(contents, 'Info.plist')
+  const stamp = path.join(helperRoot, 'stub-stamp')
+  const expectedStamp = stubStamp(electronPath)
   let fwTarget = ''
   try {
     fwTarget = fs.realpathSync(frameworks)
   } catch {
     fwTarget = frameworks
   }
+  // Ad-hoc sign changes the stub's byte size, so do not compare sizes.
   const ready =
     fs.existsSync(dest)
-    && fs.statSync(dest).size === fs.statSync(electronPath).size
+    && fs.existsSync(stamp)
+    && fs.readFileSync(stamp, 'utf8').trim() === expectedStamp
     && fs.existsSync(plist)
     && fs.readFileSync(plist, 'utf8').includes(BUNDLE_ID)
     && fs.existsSync(fwLink)
+    && !sidecarHelperUnsafeToExec(codesignVerbose(app))
   if (ready) {
     try {
       if (fs.realpathSync(fwLink) === fwTarget) return dest
@@ -99,5 +144,10 @@ export function ensureSidecarNodeApp(electronPath: string, root: string): string
   }
   fs.symlinkSync(fwTarget, fwLink)
   fs.writeFileSync(plist, INFO_PLIST)
+  fs.writeFileSync(stamp, `${expectedStamp}\n`)
+  if (!adhocSignApp(app) && sidecarHelperUnsafeToExec(codesignVerbose(app))) {
+    console.warn(`dsh-desktop: sidecar helper ${app} is still Developer ID / hardened; using the main binary`)
+    return electronPath
+  }
   return dest
 }

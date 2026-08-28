@@ -4,7 +4,27 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, it } from 'node:test'
 
-import { electronFrameworksDir, ensureSidecarNodeApp } from './sidecar-node-app.ts'
+import {
+  electronFrameworksDir,
+  ensureSidecarNodeApp,
+  isAdhocCodesignText,
+  sidecarHelperUnsafeToExec,
+} from './sidecar-node-app.ts'
+
+describe('sidecar helper signature', () => {
+  it('treats ad-hoc output as safe and Developer ID + runtime as unsafe', () => {
+    assert.equal(isAdhocCodesignText('Signature=adhoc\nTeamIdentifier=not set'), true)
+    assert.equal(isAdhocCodesignText('CodeDirectory v=20400 size=333 flags=0x2(adhoc)'), true)
+    assert.equal(sidecarHelperUnsafeToExec('Signature=adhoc\nflags=0x2(adhoc)'), false)
+    assert.equal(
+      sidecarHelperUnsafeToExec(
+        'Authority=Developer ID Application: Guoxin Shan (26V3H94EN7)\nflags=0x10000(runtime)',
+      ),
+      true,
+    )
+    assert.equal(sidecarHelperUnsafeToExec('code object is not signed at all'), false)
+  })
+})
 
 describe('ensureSidecarNodeApp', () => {
   it('is a no-op when Frameworks is missing', () => {
@@ -37,6 +57,8 @@ describe('ensureSidecarNodeApp', () => {
       assert.notEqual(helper, stub)
       assert.equal(fs.readFileSync(helper, 'utf8'), 'electron-stub')
       const contents = path.dirname(path.dirname(helper))
+      const helperRoot = path.dirname(path.dirname(contents))
+      assert.equal(fs.existsSync(path.join(helperRoot, 'stub-stamp')), true)
       const plist = fs.readFileSync(path.join(contents, 'Info.plist'), 'utf8')
       assert.match(plist, /LSUIElement/)
       assert.match(plist, /LSBackgroundOnly/)
