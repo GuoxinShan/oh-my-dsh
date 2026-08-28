@@ -255,7 +255,7 @@ test('stale journal restores the backup before new work', () => {
   const home = scratchHome('recovery');
   fs.mkdirSync(home, { recursive: true });
   const id = '999-1';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   fs.mkdirSync(paths.backup, { recursive: true });
   fs.writeFileSync(path.join(paths.backup, 'package.json'), '{"name":"original"}\n');
   const originalIdentity = identityFingerprint(captureProfileIdentity(paths.backup));
@@ -288,7 +288,7 @@ test('rolling-back phase restores original after candidate move', () => {
   const home = scratchHome('rolling-back');
   fs.mkdirSync(home, { recursive: true });
   const id = '999-6';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   fs.mkdirSync(paths.backup, { recursive: true });
   fs.writeFileSync(path.join(paths.backup, 'package.json'), '{"name":"original"}\n');
   const originalIdentity = identityFingerprint(captureProfileIdentity(paths.backup));
@@ -320,7 +320,7 @@ test('promoted marker finishes an interrupted commit', () => {
   const home = scratchHome('promoted');
   fs.mkdirSync(home, { recursive: true });
   const id = '999-2';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   completeShadow(paths.shadowHome, 'candidate');
   fs.writeFileSync(path.join(paths.shadowProfile, MARKER_NAME), `${id}\n`);
   fs.mkdirSync(path.dirname(paths.profile), { recursive: true });
@@ -359,7 +359,7 @@ test('changed home patch rolls back an interrupted promotion', () => {
   const originalPatch = Buffer.from('- id: original-home-layer\n');
   fs.writeFileSync(patch, originalPatch);
   const id = '999-7';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   const originalIdentity = identityFingerprint(captureProfileIdentity(paths.profile));
   fs.renameSync(paths.profile, paths.backup);
   completeShadow(paths.shadowHome, 'candidate');
@@ -467,7 +467,7 @@ test('phase and marker conflict preserves every path', () => {
   const home = scratchHome('phase-conflict');
   fs.mkdirSync(home, { recursive: true });
   const id = '999-5';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   completeShadow(paths.shadowHome, 'candidate');
   fs.writeFileSync(path.join(paths.shadowProfile, MARKER_NAME), `${id}\n`);
   fs.mkdirSync(path.dirname(paths.profile), { recursive: true });
@@ -493,7 +493,7 @@ test('phase updates keep the primary journal parseable', () => {
   const home = scratchHome('append-only-phase');
   fs.mkdirSync(home, { recursive: true });
   const id = '999-6';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   const journal = staleJournal({
     id,
     phase: 'prepared',
@@ -524,7 +524,7 @@ test('live journal blocks a second mutation', () => {
   fs.mkdirSync(home, { recursive: true });
   const pid = process.pid;
   const id = '999-3';
-  const paths = repairPaths(home, id);
+  const paths = repairPaths(home, 'web', id);
   const ownerLstart = psLstart(pid);
   assert.ok(ownerLstart !== null, 'test process has a start token');
   writeNewJournal(

@@ -4,12 +4,13 @@ import path from 'node:path'
 import { BrowserWindow, Notification, app, ipcMain, shell } from 'electron'
 
 import { APP_ID } from './constants.ts'
+import { getE2eVerdict, setE2eVerdict } from './e2e-verdict.ts'
 import { sanitizeDownloadName, uniquePath } from './files.ts'
 import { userHome } from './paths.ts'
-import { checkUpdate, downloadUpdate, installUpdate, updateStatusSnapshot } from './updater.ts'
+import { presentSurfaceMenu } from './surface-switch.ts'
+import { cancelUpdate, checkUpdate, downloadUpdate, installUpdate, updateStatusSnapshot } from './updater.ts'
 import { allowedExternalUrl } from './urls.ts'
 
-let e2eVerdict: string | undefined
 let mainWindow: BrowserWindow | undefined
 
 export function setMainWindow(window: BrowserWindow | undefined): void {
@@ -61,7 +62,7 @@ export function saveFile(name: string, base64: string): string {
 }
 
 export function ipcVerdict(): string | undefined {
-  return e2eVerdict
+  return getE2eVerdict()
 }
 
 export function registerIpc(): void {
@@ -78,10 +79,14 @@ export function registerIpc(): void {
     return saveFile(args.name, args.base64)
   })
   ipcMain.handle('dsh_desktop_e2e_report', (_event, args: { verdict?: string }) => {
-    e2eVerdict = args.verdict
+    if (args.verdict !== undefined) setE2eVerdict(args.verdict)
   })
   ipcMain.handle('dsh_desktop_check_update', () => checkUpdate())
   ipcMain.handle('dsh_desktop_update_status', () => updateStatusSnapshot())
   ipcMain.handle('dsh_desktop_download_update', () => downloadUpdate())
+  ipcMain.handle('dsh_desktop_cancel_update', () => cancelUpdate())
   ipcMain.handle('dsh_desktop_install_update', () => installUpdate())
+  // Surface switch carries no renderer-supplied path on purpose: the shell
+  // owns the picker, so webview content cannot steer the filesystem choice.
+  ipcMain.handle('dsh_desktop_switch_surface', () => presentSurfaceMenu(mainWindow))
 }

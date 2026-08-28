@@ -215,13 +215,18 @@ function timestamp(): string {
  * macOS one-node sidecar must not `setsid` the GUI .app binary — Launch
  * Services would register a second Dock tile. Spawn the LSUIElement helper
  * (`runtime.node` after `ensureSidecarNodeApp`) as a normal child.
+ *
+ * The profile travels as the launcher's `--profile <name>` flag; the `web`
+ * subcommand alias is only sugar for `--profile web`, so one uniform form
+ * serves the default surface and every switched surface.
  */
 export function planSidecarSpawn(
   runtime: Pick<Runtime, 'node' | 'argsPrefix' | 'cli'>,
   port: number,
   platform = process.platform,
+  profile = 'web',
 ): { command: string; args: string[]; detached: boolean } {
-  const args = [...runtime.argsPrefix, runtime.cli, 'web', '--port', String(port), '--no-open']
+  const args = [...runtime.argsPrefix, runtime.cli, '--profile', profile, '--port', String(port), '--no-open']
   return {
     command: runtime.node,
     args,
@@ -229,11 +234,11 @@ export function planSidecarSpawn(
   }
 }
 
-export function spawnSidecar(runtime: Runtime, home: string, port: number): string {
+export function spawnSidecar(runtime: Runtime, home: string, port: number, profile = 'web'): string {
   const logPath = sidecarLogPath(home)
   const log = fs.openSync(logPath, 'a')
   const env = sidecarEnv(runtime, { DSH_HOME: home })
-  const plan = planSidecarSpawn(runtime, port)
+  const plan = planSidecarSpawn(runtime, port, process.platform, profile)
   const child = spawn(
     plan.command,
     plan.args,
@@ -263,7 +268,7 @@ export function spawnSidecar(runtime: Runtime, home: string, port: number): stri
   }
   sidecar = child
   console.log(
-    `dsh-desktop: sidecar ${runtime.oneNode ? 'one-node' : 'two-node'} pid=${String(child.pid)} node=${plan.command} port=${String(port)} log=${logPath}`,
+    `dsh-desktop: sidecar ${runtime.oneNode ? 'one-node' : 'two-node'} pid=${String(child.pid)} node=${plan.command} profile=${profile} port=${String(port)} log=${logPath}`,
   )
   child.on('error', (error) => {
     console.error(`dsh-desktop: sidecar error: ${error.message}`)

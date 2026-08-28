@@ -31,6 +31,7 @@ import { DesktopDragStrip } from './titlebar.tsx'
 import { installNotifications } from './notifications.ts'
 import { createNotifyInbox } from './notify-inbox.ts'
 import { NotifyIndicator, type NotifyCenterInjected } from './notify-center.tsx'
+import { installSurfaceMenu } from './surface-menu.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -78,6 +79,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'desktop-bridge: dictionaries')
   ctx.effect(() => installExternalLinks(document, invoke, logger), 'desktop-bridge: external links')
   ctx.effect(() => installDownloads(document, invoke, logger), 'desktop-bridge: downloads')
+  ctx.effect(() => installSurfaceMenu(document, invoke, logger), 'desktop-bridge: surface menu')
   const inbox = createNotifyInbox()
   const openSession = (sessionId: string): void => {
     ctx.sessions.open(sessionId as Parameters<typeof ctx.sessions.open>[0])

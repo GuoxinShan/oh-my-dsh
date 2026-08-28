@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import type { PluginRef } from './plugins.ts'
-import { mutateWebProfileExpected, type ProfileExpectation } from './profile-repair.ts'
+import { mutateProfileExpected, type ProfileExpectation } from './profile-repair.ts'
 import { runtimeEnv, type Runtime } from './runtime.ts'
 
 function openInstallLog(logs: string): number {
@@ -25,8 +25,8 @@ function runCli(runtime: Runtime, args: string[], home: string, logs: string): v
   }
 }
 
-function pluginAlreadyInProfile(plugin: string, packageName: string, home: string): boolean {
-  const linked = path.join(home, 'profiles/web/node_modules', packageName)
+function pluginAlreadyInProfile(plugin: string, packageName: string, home: string, profileName: string): boolean {
+  const linked = path.join(home, 'profiles', profileName, 'node_modules', packageName)
   try {
     return fs.realpathSync.native(linked) === fs.realpathSync.native(plugin)
   } catch {
@@ -34,14 +34,14 @@ function pluginAlreadyInProfile(plugin: string, packageName: string, home: strin
   }
 }
 
-function resolvedProfileDependencies(home: string, excluded: string[]): Array<[string, string]> {
-  const manifest = path.join(home, 'profiles/web/package.json')
+function resolvedProfileDependencies(home: string, profileName: string, excluded: string[]): Array<[string, string]> {
+  const manifest = path.join(home, 'profiles', profileName, 'package.json')
   if (!fs.existsSync(manifest)) return []
   const value = JSON.parse(fs.readFileSync(manifest, 'utf8')) as { dependencies?: Record<string, string> }
   const resolved: Array<[string, string]> = []
   for (const packageName of Object.keys(value.dependencies ?? {})) {
     if (excluded.includes(packageName)) continue
-    const linked = path.join(home, 'profiles/web/node_modules', packageName)
+    const linked = path.join(home, 'profiles', profileName, 'node_modules', packageName)
     try {
       resolved.push([packageName, fs.realpathSync.native(linked)])
     } catch {
@@ -51,8 +51,8 @@ function resolvedProfileDependencies(home: string, excluded: string[]): Array<[s
   return resolved
 }
 
-function validatePreservedDependencies(home: string, expected: Array<[string, string]>): void {
-  const profile = path.join(home, 'profiles/web/node_modules')
+function validatePreservedDependencies(home: string, profileName: string, expected: Array<[string, string]>): void {
+  const profile = path.join(home, 'profiles', profileName, 'node_modules')
   for (const [packageName, target] of expected) {
     let actual: string
     try {
@@ -85,51 +85,93 @@ function validateProtectedProfileFiles(profile: string, expected: Array<[string,
   }
 }
 
+/**
+ * Templates mirrored from the harness `initProfile`. A hand-made profile
+ * (manifest only) never triggers the CLI's init-on-first-use, which keys on
+ * a MISSING package.json — without these two files the staged install gets
+ * pnpm's default isolated linker instead of the hoisted layout the module
+ * fallback expects. Healing happens inside the shadow, so the real profile
+ * only ever gains them as part of a committed transaction.
+ */
+const PROFILE_PATCH_TEMPLATE = `# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; \`!!js\` expressions allowed).
+[]
+`
+
+const PROFILE_PNPM_WORKSPACE = `packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+`
+
+function ensureProfileScaffold(profile: string): void {
+  const patch = path.join(profile, 'cordis.patch.yml')
+  if (!fs.existsSync(patch)) fs.writeFileSync(patch, PROFILE_PATCH_TEMPLATE)
+  const workspace = path.join(profile, 'pnpm-workspace.yaml')
+  if (!fs.existsSync(workspace)) fs.writeFileSync(workspace, PROFILE_PNPM_WORKSPACE)
+}
+
+/**
+ * True when every desktop-owned package already resolves to this release in
+ * the named profile — the skip condition for both boot and surface prepare.
+ */
+export function desktopPackagesInstalled(
+  plugins: PluginRef[],
+  home: string,
+  profileName: string,
+): boolean {
+  return plugins.every((plugin) => pluginAlreadyInProfile(plugin.dir, plugin.package, home, profileName))
+}
+
 export function runDesktopPluginInstall(
   runtime: Runtime,
   plugins: PluginRef[],
   home: string,
   logs: string,
+  profileName: string,
   expectation: ProfileExpectation,
 ): void {
   const missing = plugins
-    .filter((plugin) => !pluginAlreadyInProfile(plugin.dir, plugin.package, home))
+    .filter((plugin) => !pluginAlreadyInProfile(plugin.dir, plugin.package, home, profileName))
     .map((plugin) => plugin.package)
   if (missing.length === 0) {
-    console.log('dsh-desktop: desktop-owned packages already target this release, skip plugin add')
+    console.log(`dsh-desktop: desktop-owned packages already target this release in ${profileName}, skip plugin add`)
     return
   }
-  console.log(`dsh-desktop: stage web profile update for ${missing.join(', ')}`)
+  console.log(`dsh-desktop: stage ${profileName} profile update for ${missing.join(', ')}`)
   const targets = plugins.map((plugin) => [plugin.package, plugin.dir] as const)
   const managed = plugins.map((plugin) => plugin.package)
-  const preserved = resolvedProfileDependencies(home, managed)
-  mutateWebProfileExpected(home, targets, expectation, (shadowHome, hadOriginal) => {
-    const shadowProfile = path.join(shadowHome, 'profiles/web')
+  const preserved = resolvedProfileDependencies(home, profileName, managed)
+  mutateProfileExpected(home, profileName, targets, expectation, (shadowHome, hadOriginal) => {
+    const shadowProfile = path.join(shadowHome, 'profiles', profileName)
     const protectedFiles = hadOriginal ? captureProtectedProfileFiles(shadowProfile) : []
+    ensureProfileScaffold(shadowProfile)
     if (hadOriginal && fs.existsSync(path.join(shadowProfile, 'pnpm-lock.yaml'))) {
-      runCli(runtime, ['plugin', '--profile', 'web', 'install'], shadowHome, logs)
+      runCli(runtime, ['plugin', '--profile', profileName, 'install'], shadowHome, logs)
     }
     for (const plugin of plugins) {
-      if (!pluginAlreadyInProfile(plugin.dir, plugin.package, shadowHome)) {
-        runCli(runtime, ['plugin', '--profile', 'web', 'add', plugin.dir], shadowHome, logs)
+      if (!pluginAlreadyInProfile(plugin.dir, plugin.package, shadowHome, profileName)) {
+        runCli(runtime, ['plugin', '--profile', profileName, 'add', plugin.dir], shadowHome, logs)
       }
     }
-    runCli(runtime, ['plugin', '--profile', 'web', 'install'], shadowHome, logs)
+    runCli(runtime, ['plugin', '--profile', profileName, 'install'], shadowHome, logs)
     for (const plugin of plugins) {
-      if (!pluginAlreadyInProfile(plugin.dir, plugin.package, shadowHome)) {
+      if (!pluginAlreadyInProfile(plugin.dir, plugin.package, shadowHome, profileName)) {
         throw new Error(`staged ${plugin.package} does not resolve to ${plugin.dir}`)
       }
     }
-    validatePreservedDependencies(shadowHome, preserved)
+    validatePreservedDependencies(shadowHome, profileName, preserved)
     validateProtectedProfileFiles(shadowProfile, protectedFiles)
-    runCli(runtime, ['--profile', 'web', '--dump-config'], shadowHome, logs)
+    runCli(runtime, ['--profile', profileName, '--dump-config'], shadowHome, logs)
   })
 }
 
-export function frozenProfileInstallOnce(runtime: Runtime, home: string, logs: string): void {
-  runCli(runtime, ['plugin', '--profile', 'web', 'install'], home, logs)
+export function frozenProfileInstallOnce(runtime: Runtime, home: string, logs: string, profileName: string): void {
+  runCli(runtime, ['plugin', '--profile', profileName, 'install'], home, logs)
 }
 
-export function validateProfileConfig(runtime: Runtime, home: string, logs: string): void {
-  runCli(runtime, ['--profile', 'web', '--dump-config'], home, logs)
+export function validateProfileConfig(runtime: Runtime, home: string, logs: string, profileName: string): void {
+  runCli(runtime, ['--profile', profileName, '--dump-config'], home, logs)
 }

@@ -79,3 +79,17 @@ export async function revealMainWindow(): Promise<void> {
   if (lastUrl === undefined) return
   await openMainWindow(lastUrl, lastE2e)
 }
+
+/**
+ * Point the live window at a new sidecar URL (surface switch). A destroyed
+ * window (macOS background retention corner) is rebuilt at the new URL.
+ */
+export async function reloadMainWindow(url: string): Promise<void> {
+  lastUrl = url
+  const current = getMainWindow()
+  if (current === undefined || current.isDestroyed()) {
+    await openMainWindow(url, lastE2e)
+    return
+  }
+  await current.loadURL(url)
+}

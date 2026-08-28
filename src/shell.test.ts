@@ -61,14 +61,14 @@ describe('bundledRuntime one-node PATH', () => {
       const runtime = bundledRuntime(root, true, process.execPath, false, shimRoot)
       assert.equal(runtime.oneNode, true)
       assert.equal(runtime.pathPrepend.length, 2)
-      assert.equal(runtime.pathPrepend[0], path.join(shimRoot, 'node-shim', nodeShimKey(process.execPath)))
+      assert.equal(runtime.pathPrepend[0], path.join(shimRoot, 'node-shim', nodeShimKey(runtime.node)))
       assert.equal(runtime.pathPrepend[1], toolsBin)
       assert.equal(fs.existsSync(path.join(toolsBin, 'node')), false)
       assert.ok(runtime.argsPrefix.includes('tsx/esm'))
       if (process.platform === 'darwin' && runtime.dockGuard !== undefined) {
         assert.equal(runtime.argsPrefix[0], '--import')
         assert.equal(runtime.argsPrefix[1], runtime.dockGuard.hideDockJs)
-        const shim = fs.readFileSync(path.join(shimRoot, 'node-shim', nodeShimKey(process.execPath), 'node'), 'utf8')
+        const shim = fs.readFileSync(path.join(shimRoot, 'node-shim', nodeShimKey(runtime.node), 'node'), 'utf8')
         assert.ok(shim.includes('hide-dock.mjs'))
         const env = sidecarEnv(runtime)
         assert.equal(env.DSH_DARWIN_PGRP_HELPER, runtime.dockGuard.pgrpHelper)
@@ -207,7 +207,12 @@ describe('planSidecarSpawn', () => {
     const plan = planSidecarSpawn(base, 4123, 'darwin')
     assert.equal(plan.command, base.node)
     assert.equal(plan.detached, false)
-    assert.deepEqual(plan.args, [...base.argsPrefix, base.cli, 'web', '--port', '4123', '--no-open'])
+    assert.deepEqual(plan.args, [...base.argsPrefix, base.cli, '--profile', 'web', '--port', '4123', '--no-open'])
+  })
+
+  it('targets a switched surface through the launcher --profile flag', () => {
+    const plan = planSidecarSpawn(base, 4123, 'darwin', 'work')
+    assert.deepEqual(plan.args, [...base.argsPrefix, base.cli, '--profile', 'work', '--port', '4123', '--no-open'])
   })
 
   it('keeps a detached unix spawn on Linux', () => {

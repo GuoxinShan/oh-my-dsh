@@ -1,9 +1,14 @@
-// Staged web-profile mutation for desktop-owned package installation.
+// Staged profile mutation for desktop-owned package installation.
 //
 // pnpm install/add can rewrite the manifest, lockfile, and node_modules. Run
 // those commands against a sibling shadow DSH_HOME, then promote the complete
 // profile only after validation. The sibling topology preserves relative
 // file:/link: depth, and a journal recovers every interrupted rename phase.
+//
+// The transaction was web-only at first; runtime surface switching runs the
+// same machinery against any managed profile. The journal is home-level (one
+// transaction at a time), and recovery derives the profile from the journal's
+// recorded realProfile so an interrupted non-web transaction heals too.
 
 import { execFileSync } from 'node:child_process';
 import { createHash, type Hash } from 'node:crypto';
@@ -84,27 +89,37 @@ export function checkWebProfileExpectation(
     return;
   }
   const actual = webProfileIdentity(dshHome);
-  validateExpectation(expectation, actual);
+  validateExpectation(expectation, actual, PROFILE_NAME);
 }
 
+/**
+ * Recover any interrupted profile transaction before new mutations. The
+ * journal records its own target profile, so a crashed non-web transaction
+ * heals here too; with no journal, a stray marker in ANY profile is loud.
+ */
 export function recoverWebProfile(dshHome: string): void {
   recoverStaleRepair(dshHome);
 }
 
-export function webProfileIdentity(dshHome: string): string | null {
-  const profile = path.join(dshHome, 'profiles', PROFILE_NAME);
+export function profileIdentity(dshHome: string, profileName: string): string | null {
+  const profile = path.join(dshHome, 'profiles', profileName);
   if (!pathExists(profile)) {
     return null;
   }
   if (!isDirectory(profile)) {
-    throw new Error(`web profile path is not a directory: ${profile}`);
+    throw new Error(`${profileName} profile path is not a directory: ${profile}`);
   }
   return identityFingerprint(captureProfileIdentity(profile));
+}
+
+export function webProfileIdentity(dshHome: string): string | null {
+  return profileIdentity(dshHome, PROFILE_NAME);
 }
 
 function validateExpectation(
   expectation: ProfileExpectation,
   actual: string | null,
+  profileName: string,
 ): void {
   let mismatch: boolean;
   if (expectation === 'unchecked') {
@@ -116,7 +131,7 @@ function validateExpectation(
   }
   if (mismatch) {
     throw new Error(
-      `${EXPECTATION_MISMATCH} web profile changed after the approved state; review it before retrying`,
+      `${EXPECTATION_MISMATCH} ${profileName} profile changed after the approved state; review it before retrying`,
     );
   }
 }
@@ -164,7 +179,7 @@ export function mutateWebProfile(
   targets: ReadonlyArray<readonly [string, string]>,
   mutate: MutateProfile,
 ): void {
-  mutateWebProfileExpected(dshHome, targets, 'unchecked', mutate);
+  mutateProfileExpected(dshHome, PROFILE_NAME, targets, 'unchecked', mutate);
 }
 
 /**
@@ -177,6 +192,18 @@ export function mutateWebProfileExpected(
   expectation: ProfileExpectation,
   mutate: MutateProfile,
 ): void {
+  mutateProfileExpected(dshHome, PROFILE_NAME, targets, expectation, mutate);
+}
+
+/** The profile-named variant: runtime surface switching manages non-web profiles. */
+export function mutateProfileExpected(
+  dshHome: string,
+  profileName: string,
+  targets: ReadonlyArray<readonly [string, string]>,
+  expectation: ProfileExpectation,
+  mutate: MutateProfile,
+): void {
+  validateProfileName(profileName);
   try {
     fs.mkdirSync(dshHome, { recursive: true });
   } catch (error) {
@@ -184,19 +211,19 @@ export function mutateWebProfileExpected(
   }
   recoverStaleRepair(dshHome);
 
-  const profile = path.join(dshHome, 'profiles', PROFILE_NAME);
+  const profile = path.join(dshHome, 'profiles', profileName);
   if (pathExists(profile) && !isDirectory(profile)) {
-    throw new Error(`web profile path is not a directory: ${profile}`);
+    throw new Error(`${profileName} profile path is not a directory: ${profile}`);
   }
   const hadOriginal = isDirectory(profile);
   const originalIdentity = hadOriginal
     ? identityFingerprint(captureProfileIdentity(profile))
     : null;
-  validateExpectation(expectation, originalIdentity);
+  validateExpectation(expectation, originalIdentity, profileName);
   const homePatch = path.join(dshHome, 'cordis.patch.yml');
   const originalHomePatch = readOptionalFile(homePatch);
   const id = transactionId();
-  const paths = repairPaths(dshHome, id);
+  const paths = repairPaths(dshHome, profileName, id);
   const ownerPid = process.pid;
   const ownerLstart = psLstart(ownerPid);
   if (ownerLstart === null) {
@@ -256,7 +283,7 @@ export function mutateWebProfileExpected(
       ? identityFingerprint(captureProfileIdentity(paths.profile))
       : null;
     if (currentIdentity !== originalIdentity) {
-      throw new Error('web profile changed outside the desktop repair transaction');
+      throw new Error(`${profileName} profile changed outside the desktop repair transaction`);
     }
     if (!optionalFileEquals(readOptionalFile(homePatch), originalHomePatch)) {
       throw new Error(
@@ -392,11 +419,17 @@ export function mutateWebProfileExpected(
 function recoverStaleRepair(dshHome: string): void {
   const journalPath = path.join(dshHome, JOURNAL_NAME);
   if (!pathExists(journalPath)) {
-    const marker = path.join(dshHome, 'profiles', PROFILE_NAME, MARKER_NAME);
-    if (pathExists(marker)) {
-      throw new Error(
-        `profile transaction marker exists without a journal: ${marker}; preserving it for manual recovery`,
-      );
+    // Any profile's marker without a journal is unrecoverable by us; scan
+    // every profile, not just web, so a crashed non-web transaction is loud.
+    const profiles = path.join(dshHome, 'profiles');
+    for (const entry of pathExists(profiles) ? readDirEntries(profiles) : []) {
+      if (!entry.isDirectory()) continue;
+      const marker = path.join(profiles, entry.name, MARKER_NAME);
+      if (pathExists(marker)) {
+        throw new Error(
+          `profile transaction marker exists without a journal: ${marker}; preserving it for manual recovery`,
+        );
+      }
     }
     return;
   }
@@ -415,12 +448,12 @@ function recoverStaleRepair(dshHome: string): void {
   validateJournal(dshHome, journal);
   if (pidMatches(journal.ownerPid, journal.ownerLstart)) {
     throw new Error(
-      `web profile repair already owned by live process ${journal.ownerPid}`,
+      `profile repair already owned by live process ${journal.ownerPid}`,
     );
   }
   journal.phase = readDurablePhase(journalPath, journal);
 
-  const paths = repairPaths(dshHome, journal.id);
+  const paths = repairPaths(dshHome, journalProfileName(journal), journal.id);
   const real = pathExists(paths.profile);
   const backup = pathExists(paths.backup);
   const shadow = pathExists(paths.shadowProfile);
@@ -626,12 +659,38 @@ function finishPromotedRecovery(paths: RepairPaths, journal: RepairJournal): voi
   }
 }
 
+/** The transaction's target profile, derived from the journal's recorded real path. */
+function journalProfileName(journal: RepairJournal): string {
+  return path.basename(journal.realProfile);
+}
+
+/**
+ * Profile names mirror the harness launcher rule (`resolveProfileDir`): a
+ * single path component, never `.`/`..`, never the `node_modules` fallback
+ * directory. The journal derives its profile from a recorded path basename,
+ * so this check is the guard against a crafted journal escaping profiles/.
+ */
+function validateProfileName(profileName: string): void {
+  if (
+    profileName === '' ||
+    profileName === '.' ||
+    profileName === '..' ||
+    profileName === 'node_modules' ||
+    profileName.includes('/') ||
+    profileName.includes('\\')
+  ) {
+    throw new Error(`invalid profile name ${JSON.stringify(profileName)}`);
+  }
+}
+
 function validateJournal(dshHome: string, journal: RepairJournal): void {
   if (journal.schema !== JOURNAL_SCHEMA) {
     throw new Error(`unsupported profile repair journal schema ${journal.schema}`);
   }
   validateId(journal.id);
-  const paths = repairPaths(dshHome, journal.id);
+  const profileName = journalProfileName(journal);
+  validateProfileName(profileName);
+  const paths = repairPaths(dshHome, profileName, journal.id);
   if (
     journal.realProfile !== paths.profile ||
     journal.shadowProfile !== paths.shadowProfile ||
@@ -654,11 +713,11 @@ function validateJournal(dshHome: string, journal: RepairJournal): void {
 function validateStagedProfile(profile: string): void {
   for (const required of ['package.json', 'cordis.patch.yml', 'pnpm-workspace.yaml']) {
     if (!isFile(path.join(profile, required))) {
-      throw new Error(`staged web profile lacks ${required}: ${profile}`);
+      throw new Error(`staged profile lacks ${required}: ${profile}`);
     }
   }
   if (!isDirectory(path.join(profile, 'node_modules'))) {
-    throw new Error(`staged web profile lacks node_modules: ${profile}`);
+    throw new Error(`staged profile lacks node_modules: ${profile}`);
   }
 }
 
@@ -811,7 +870,8 @@ function markJournalPhase(journalPath: string, phase: RepairPhase): void {
   updateJournal(journalPath, journal);
 }
 
-function repairPaths(dshHome: string, id: string): RepairPaths {
+function repairPaths(dshHome: string, profileName: string, id: string): RepairPaths {
+  validateProfileName(profileName);
   validateId(id);
   const parent = path.dirname(dshHome);
   const name = path.basename(dshHome);
@@ -821,15 +881,15 @@ function repairPaths(dshHome: string, id: string): RepairPaths {
   if (name.length === 0) {
     throw new Error(`DSH_HOME has no final component: ${dshHome}`);
   }
-  // Sibling DSH homes keep profiles/web at identical depth and on the same
+  // Sibling DSH homes keep profiles/<name> at identical depth and on the same
   // volume, preserving pnpm's relative file:/link: specs and renameability.
   const shadowHome = path.join(parent, `.${name}-desktop-profile-repair-${id}`);
   const profiles = path.join(dshHome, 'profiles');
   return {
     journal: path.join(dshHome, JOURNAL_NAME),
-    profile: path.join(profiles, PROFILE_NAME),
-    backup: path.join(profiles, `.${PROFILE_NAME}-desktop-backup-${id}`),
-    shadowProfile: path.join(shadowHome, 'profiles', PROFILE_NAME),
+    profile: path.join(profiles, profileName),
+    backup: path.join(profiles, `.${profileName}-desktop-backup-${id}`),
+    shadowProfile: path.join(shadowHome, 'profiles', profileName),
     shadowHome,
   };
 }
@@ -1053,7 +1113,7 @@ function removeJournalRecords(journalPath: string): void {
 function validateOriginalIdentity(profile: string, expected: string): void {
   const actual = identityFingerprint(captureProfileIdentity(profile));
   if (actual !== expected) {
-    throw new Error('web profile changed during desktop transaction commit');
+    throw new Error('profile changed during desktop transaction commit');
   }
 }
 
@@ -1208,19 +1268,27 @@ function hashOsStr(digest: Hash, value: string): void {
 }
 
 function copyProfileTree(source: string, target: string): void {
+  copyProfileTreeAt(source, target, true);
+}
+
+/**
+ * Recursive copy; the profile root's `node_modules` is skipped (rebuildable),
+ * matching the root-only rule `captureTree` uses for identity fingerprints.
+ */
+function copyProfileTreeAt(source: string, target: string, isRoot: boolean): void {
   try {
     fs.mkdirSync(target, { recursive: true });
   } catch (error) {
     throw new Error(`create ${target}: ${message(error)}`);
   }
   for (const entry of readDirEntries(source)) {
-    if (path.basename(source) === PROFILE_NAME && entry.name === 'node_modules') {
+    if (isRoot && entry.name === 'node_modules') {
       continue;
     }
     const from = path.join(source, entry.name);
     const to = path.join(target, entry.name);
     if (entry.isDirectory()) {
-      copyProfileTree(from, to);
+      copyProfileTreeAt(from, to, false);
     } else if (entry.isFile()) {
       try {
         fs.copyFileSync(from, to);

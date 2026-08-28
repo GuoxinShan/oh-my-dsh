@@ -10,7 +10,8 @@ export interface ChoiceSpec {
   escape: string
 }
 
-function automationEnabled(): boolean {
+/** Dialogs become env-driven only for dev builds and the e2e probe. */
+export function automationEnabled(): boolean {
   return !app.isPackaged || process.env.DSH_DESKTOP_E2E_PROBE === '1'
 }
 

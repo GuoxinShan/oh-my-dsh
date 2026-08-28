@@ -46,6 +46,13 @@ import {
   spawnSidecar,
   waitReady,
 } from './sidecar.ts'
+import {
+  DEFAULT_SURFACE,
+  loadActiveSurface,
+  saveActiveSurface,
+  validateSurfaceDir,
+} from './surface.ts'
+import { configureSurfaceSwitch } from './surface-switch.ts'
 import { openMainWindow } from './window.ts'
 import { MISSING_RESTORE_SOURCE } from './constants.ts'
 
@@ -99,11 +106,11 @@ function restoreAdoptionBackup(
       if (!fs.existsSync(path.join(profile, 'pnpm-lock.yaml'))) {
         throw new Error('profile backup has no pnpm-lock.yaml for a frozen restore')
       }
-      frozenProfileInstallOnce(runtime, shadowHome, root)
+      frozenProfileInstallOnce(runtime, shadowHome, root, 'web')
       if (profileSnapshotIdentity(profile) !== backup.snapshotIdentity) {
         throw new Error('frozen restore changed the backed-up Web Profile configuration')
       }
-      validateProfileConfig(runtime, shadowHome, root)
+      validateProfileConfig(runtime, shadowHome, root, 'web')
     })
   }
   if (!currentProfileMatchesBackup(canonicalHome, backup)) {
@@ -227,7 +234,7 @@ function installWithProfileRepair(
           ? 'missing'
           : { identity: current.backup.sourceIdentity }
         : 'unchecked'
-      runDesktopPluginInstall(runtime, plugins, home, root, expectation)
+      runDesktopPluginInstall(runtime, plugins, home, root, 'web', expectation)
       if (current.status === 'adopting') {
         current = transition(root, current, 'active', current.backup)
         if (current.backup !== null) {
@@ -350,9 +357,40 @@ export async function bootSequence(packaged: boolean, electronPath: string): Pro
   if (installed.outcome === 'exitRequested') return 'exitRequested'
   ensurePluginRuntimeLinks(plugins, runtime)
 
+  // The active surface defaults to web; a switched surface must still pass
+  // validation at boot (a terminal edit could have broken or deleted it), and
+  // gets the same desktop-package transaction before it boots. Any failure
+  // falls back to web with the state reset, never a dead window.
+  let surface = loadActiveSurface(root, home)
+  if (surface !== DEFAULT_SURFACE) {
+    const verdict = validateSurfaceDir(home, path.join(home, 'profiles', surface))
+    if (!verdict.ok) {
+      alertDialog(
+        '运行面已失效',
+        `上次使用的运行面「${surface}」已不可用：\n\n${verdict.reason}\n\n本次启动回退到默认运行面「${DEFAULT_SURFACE}」。`,
+      )
+      saveActiveSurface(root, home, DEFAULT_SURFACE)
+      surface = DEFAULT_SURFACE
+    }
+  }
+  if (surface !== DEFAULT_SURFACE) {
+    try {
+      runDesktopPluginInstall(runtime, plugins, home, root, surface, 'unchecked')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      alertDialog(
+        '运行面准备失败',
+        `无法为运行面「${surface}」准备桌面组件，本次启动回退到「${DEFAULT_SURFACE}」。\n\n${message}\n\n安装日志：${root}/logs/install.log`,
+      )
+      saveActiveSurface(root, home, DEFAULT_SURFACE)
+      surface = DEFAULT_SURFACE
+    }
+  }
+  configureSurfaceSwitch({ runtime, plugins, home, root })
+
   const port = await freePort()
   const url = `http://127.0.0.1:${String(port)}`
-  const sidecarLog = spawnSidecar(runtime, home, port)
+  const sidecarLog = spawnSidecar(runtime, home, port, surface)
   if (!(await waitReady(port))) {
     killSidecar()
     throw new Error(`harness server at ${url} did not answer GET / within 120s (see ${sidecarLog})`)
