@@ -11,6 +11,7 @@ import {
 import { ensureSidecarNodeApp } from './sidecar-node-app.ts'
 import { extractBundleTar, readRevisionManifest } from './extract.ts'
 import { repoRoot, resourceDir, shellRoot, userHome } from './paths.ts'
+import { decideRuntimeSource, downloadRuntimeTarball, runtimeArtifactName } from './runtime-artifact.ts'
 
 export interface Runtime {
   node: string
@@ -259,7 +260,17 @@ function sourceRuntime(electronPath: string): Runtime {
   }
 }
 
-function releaseRuntimeDir(packaged: boolean): string | undefined {
+function appVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot(), 'package.json'), 'utf8')) as { version?: string }
+    if (typeof pkg.version === 'string' && pkg.version) return pkg.version
+  } catch {
+    // packaged builds still have package.json next to the asar via electron
+  }
+  return process.env.npm_package_version ?? '0.0.0'
+}
+
+export function releaseRuntimeDir(packaged: boolean): string | undefined {
   if (!packaged) return undefined
   const resources = resourceDir(true)
   if (resources === undefined) return undefined
@@ -269,15 +280,28 @@ function releaseRuntimeDir(packaged: boolean): string | undefined {
   if (!sha) throw new Error(`bundled runtime-revision.json has no sha: ${path.join(resources, 'runtime-revision.json')}`)
   const tarball = typeof value.runtimeTarball === 'string' ? value.runtimeTarball : ''
   const root = path.join(shellRoot(), 'runtime', sha)
-  if (
+  const bundledTar = path.join(resources, 'runtime.tar.gz')
+  const okMatches = Boolean(
     tarball
     && fs.existsSync(path.join(root, '.ok'))
-    && fs.readFileSync(path.join(root, '.ok'), 'utf8').trim() === tarball
-  ) {
-    return root
+    && fs.readFileSync(path.join(root, '.ok'), 'utf8').trim() === tarball,
+  )
+  const source = decideRuntimeSource({ okMatches, bundledTarExists: fs.existsSync(bundledTar) })
+  if (source === 'ok-cache') return root
+  let tar = bundledTar
+  if (source === 'download') {
+    if (!tarball) {
+      throw new Error(`slim app has no bundled runtime.tar.gz and runtime-revision.json has no runtimeTarball hash`)
+    }
+    tar = downloadRuntimeTarball({
+      sha,
+      expectedSha256: tarball,
+      version: appVersion(),
+      dest: path.join(shellRoot(), 'runtime-tarballs', runtimeArtifactName(sha)),
+    })
   }
-  extractBundleTar(path.join(resources, 'runtime.tar.gz'), root, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', tarball)
-  console.log(`dsh-desktop: extracted bundled runtime ${sha} to ${root}`)
+  extractBundleTar(tar, root, 'dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', tarball)
+  console.log(`dsh-desktop: extracted ${source === 'download' ? 'downloaded' : 'bundled'} runtime ${sha} to ${root}`)
   return root
 }
 

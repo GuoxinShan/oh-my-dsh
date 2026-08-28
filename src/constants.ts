@@ -1,6 +1,8 @@
 export const PRODUCT_NAME = 'Oh My DSH'
 export const APP_ID = 'dev.dsh.desktop'
 export const SHELL_NAME = 'dsh-desktop'
+export const UPDATER_GITHUB_OWNER = 'aka-danielZhang'
+export const UPDATER_GITHUB_REPO = 'oh-my-dsh'
 
 export const BRIDGE_PACKAGE = 'dsh-desktop-bridge'
 export const COMPACTION_PACKAGE = 'dsh-compaction-hierarchical'

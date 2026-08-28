@@ -27,8 +27,9 @@ pnpm desktop:build
 
 产物：
 
-- macOS：`release/Oh My DSH-<ver>-arm64.dmg` 与同目录 zip（updater）
-- Windows：`release/Oh My DSH-<ver>-setup.exe`
+- macOS：完整 `release/Oh-My-DSH-<ver>-arm64.dmg`（含 `runtime.tar.gz`）；**瘦** updater zip（剥掉 runtime，`scripts/slim-mac-updater-zip.mjs` 在 electron-builder 之后重打 zip + `.blockmap` + `latest-mac.yml`）
+- 两个平台都另放 `release/runtime-<sha>-<platform>-<arch>.tar.gz`，给瘦 zip / 缓存未命中时按 sha 补拉
+- Windows：完整 `release/Oh My DSH-<ver>-setup.exe`（NSIS 仍自带 runtime，离线能装）
 
 `src/resources/` 与 `dist-electron/`、`release/` 均 gitignored。
 
@@ -42,6 +43,8 @@ pnpm desktop:build
 ## 2. 包结构与首启解压（原理）
 
 runtime 与三个桌面自有插件以 **tar.gz 资源**进包（不是散目录拷贝）：runtime 树是 pnpm 安装产物（3k+ 符号链接），electron-builder 对目录 extraResources 不承诺保链接（解引用拷贝会让 .pnpm store 膨胀到 GB 级）；tar 往返链接感知。此外 tarball 方案让 App Translocation 不再影响可写性（解压到 home 后树恒可写），并允许 prepare 在归档前对 runtime 树里的每个 Mach-O 统一签名。注意 notarytool 会展开扫描 tarball，归档本身不能隐藏未签名二进制。
+
+Mac 热更新 zip **不含** `runtime.tar.gz`（sha 未变时不必再传约 115MB）。DMG / NSIS 仍自带，离线首装不变。打包态 `releaseRuntimeDir`：`.ok` 哈希命中 → 用 `~/.dsh-desktop/runtime/<sha>`；否则抽包内 tar；再否则按 `runtime-<sha>-<platform>-<arch>.tar.gz` 从该次 GitHub Release 下载并校 sha256。瘦 zip 与这条补拉必须同发，否则 OTA 用户会撞上 `bundled tarball missing`。
 
 首次启动时壳把资源原子解压到 home：
 
@@ -114,7 +117,7 @@ export CSC_NAME="$DSH_CODESIGN_IDENTITY"                                    # el
 export APPLE_ID="<Apple ID 邮箱>"
 export APPLE_APP_SPECIFIC_PASSWORD="<App 专用密码>"
 export APPLE_TEAM_ID="<TEAMID>"
-pnpm desktop:build -- --mac
+pnpm desktop:build -- --mac   # 内含 slim-mac-updater-zip：公证的是瘦 zip
 bash scripts/notarize-mac-artifacts.sh release/*.dmg release/*.zip
 ```
 
@@ -145,6 +148,8 @@ bash scripts/notarize-mac-artifacts.sh release/*.dmg release/*.zip
 - **架构**：macOS 只打 aarch64；Windows 只打 x86_64 NSIS currentUser。分发时确认对方机器架构。
 - **验证机的「干净」标准**：没有 DSH checkout、没有本仓库 clone 的机器才是目标用户画像——装了 dev 环境的机器会走 source 兜底掩盖打包缺陷。
 - **首启解压窗口**：~500MB 解压约 10–20s，窗口出现前有一段无反馈等待（后续可在窗口加启动进度）。
+- **Mac 热更第一次整包**：`electron-updater` 差分前提是 `~/Library/Caches/oh-my-dsh-updater/update.zip`。DMG 安装没有这份缓存。从「带 runtime 的旧 zip」升到瘦 zip 的那一次也会整包或差量很差，再下一版（两份都是瘦 zip）才明显变小。不要删 updater 缓存。`disableDifferentialDownload` 禁止打开。
+- **Chromium 不单独拆包**：Mac 公证不允许只热换 `app.asar`。第二次起靠 zip blockmap 跳过未改的 Electron Framework。
 - **tar**：解压用系统 `tar`（macOS/Windows 10+ 自带 bsdtar；Linux 上一般也有）。GNU tar 对 `C:\...` 需要 `--force-local`；Win11 bsdtar 3.8.4 不认此选项。prepare 与壳按 `tar --help` 探测。
 - **runtime 不可跨 OS**：在 mac 组装的树不能打进 Windows 安装包。
 - App Translocation：从 DMG 直接拖进 /Applications 不触发；但**直接在 DMG 挂载卷里双击运行**会触发只读随机路径——解压方案对此免疫（写入目标是 home），行为仍推荐拖装。
