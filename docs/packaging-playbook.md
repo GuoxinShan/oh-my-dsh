@@ -107,7 +107,7 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev
 
 ## 5. 分发与 Gatekeeper
 
-**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 保持 `mac.notarize: false`（只签 `.app` 再打 dmg）。瘦 zip 由 slim 从 `.app` 生成后再公证。CI 随后跑 `scripts/notarize-mac-artifacts.sh`：zip（OTA）和 DMG（安装盘）**并行** `notarytool submit --wait`，再 staple + `spctl` DMG。两份文件 hash 不同，必须两张 ticket；并行只把墙钟从相加变成 `max`。只 staple 会因「Record not found」失败。DMG Finder 校验必须在公证前提交结束（不要对同一 DMG 同时 `hdiutil attach` 与 `notarytool`）。
+**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 保持 `mac.notarize: false`（只签 `.app` 再打 dmg）。瘦 zip 由 slim 从 `.app` 生成后再公证。CI 随后跑 `scripts/notarize-mac-artifacts.sh`：zip（OTA）和 DMG（安装盘）**并行** `notarytool submit --wait`，再 staple + `spctl` DMG。两份文件 hash 不同，必须两张 ticket；并行只把墙钟从相加变成 `max`。只 staple 会因「Record not found」失败。DMG Finder 校验必须在公证前提交结束（不要对同一 DMG 同时 `hdiutil attach` 与 `notarytool`）。校验用临时 venv 装 `ds-store`，不要 `pip --user`（macos-latest 的 Homebrew Python 是 PEP 668，会拒装）。
 
 一次完整公证构建的环境变量：
 
