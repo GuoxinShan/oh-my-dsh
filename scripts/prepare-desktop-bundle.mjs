@@ -26,10 +26,10 @@
  * `src/resources/` is gitignored — regenerated per build via
  * `pnpm desktop:prepare` (also wired as the first half of desktop:build).
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, mkdirSync, writeFileSync, statSync, readdirSync, openSync, readSync, closeSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pnpm } from './cli-bins.mjs'
 
@@ -117,10 +117,33 @@ function assembleRuntime() {
   run('node', [resolve(repoRoot, 'scripts/prepare-runtime.mjs')], { cwd: repoRoot })
 }
 
-function buildDesktopPlugins() {
+function pluginHasCachedLib(pluginDir) {
+  return existsSync(resolve(pluginDir, 'lib/index.js'))
+}
+
+function runAsync(cmd, args, opts = {}) {
+  const shell = opts.shell ?? (process.platform === 'win32' && /\.cmd$/i.test(String(cmd)))
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(cmd, args, { stdio: 'inherit', ...opts, shell })
+    child.on('error', reject)
+    child.on('exit', (code) => {
+      if (code === 0) resolvePromise()
+      else reject(new Error(`${cmd} ${args.join(' ')} exited ${String(code)}`))
+    })
+  })
+}
+
+async function buildDesktopPlugins() {
+  const allowCache = process.env.DSH_DESKTOP_USE_CACHED_PLUGIN_LIBS === '1'
+  const jobs = []
   for (const pluginDir of desktopPluginDirs) {
-    run(pnpm, ['run', 'build'], { cwd: pluginDir })
+    if (allowCache && pluginHasCachedLib(pluginDir)) {
+      console.log(`prepare-desktop-bundle: skip build ${basename(pluginDir)} (cached lib)`)
+      continue
+    }
+    jobs.push(runAsync(pnpm, ['run', 'build'], { cwd: pluginDir }))
   }
+  await Promise.all(jobs)
 }
 
 if (prepareMode === 'build') {
@@ -130,7 +153,7 @@ if (prepareMode === 'build') {
   const checkout = process.env.DSH_CHECKOUT || runtimeSrc
   run(pnpm, ['run', 'setup'], { cwd: bridgeDir, env: { ...process.env, DSH_CHECKOUT: checkout } })
   console.log('prepare-desktop-bundle: building desktop plugins (skip typecheck/test)...')
-  buildDesktopPlugins()
+  await buildDesktopPlugins()
 } else {
   console.log('prepare-desktop-bundle: verifying desktop plugins...')
   run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
@@ -156,9 +179,15 @@ if (!existsSync(electronPkg)) {
   process.exit(1)
 }
 const electronVersion = JSON.parse(readFileSync(electronPkg, 'utf8')).version
-console.log(`prepare-desktop-bundle: electron-rebuild ${electronVersion} in ${runtimeDir}/dsh`)
-run(pnpm, ['exec', 'electron-rebuild', '-f', '-m', resolve(runtimeDir, 'dsh'), '-v', String(electronVersion).replace(/^v/, '')], { cwd: repoRoot })
-writeFileSync(resolve(runtimeDir, '.electron-abi'), `${electronVersion}\n`)
+const abiMarker = resolve(runtimeDir, '.electron-abi')
+const abiMatches = existsSync(abiMarker) && readFileSync(abiMarker, 'utf8').trim() === electronVersion
+if (abiMatches) {
+  console.log(`prepare-desktop-bundle: skip electron-rebuild (ABI ${electronVersion} already marked)`)
+} else {
+  console.log(`prepare-desktop-bundle: electron-rebuild ${electronVersion} in ${runtimeDir}/dsh`)
+  run(pnpm, ['exec', 'electron-rebuild', '-f', '-m', resolve(runtimeDir, 'dsh'), '-v', String(electronVersion).replace(/^v/, '')], { cwd: repoRoot })
+  writeFileSync(abiMarker, `${electronVersion}\n`)
+}
 
 
 // 2.5 Sign every Mach-O in the runtime tree. Apple's notary scanner descends

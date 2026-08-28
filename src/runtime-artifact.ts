@@ -63,6 +63,33 @@ export function patchUpdaterYml(yml: string, sha512: string, size: number): stri
     .replace(/^(\s*size:\s*)\d+ *$/gm, `$1${String(size)}`)
 }
 
+export function latestMacYml(input: {
+  version: string
+  file: string
+  sha512: string
+  size: number
+  releaseDate: string
+  releaseNotes?: string
+}): string {
+  const lines = [
+    `version: ${input.version}`,
+    'files:',
+    `  - url: ${input.file}`,
+    `    sha512: ${input.sha512}`,
+    `    size: ${input.size}`,
+    `path: ${input.file}`,
+    `sha512: ${input.sha512}`,
+    `releaseDate: '${input.releaseDate}'`,
+  ]
+  const notes = input.releaseNotes?.replace(/\r\n/g, '\n').trim()
+  if (notes) {
+    lines.push('releaseNotes: |')
+    for (const line of notes.split('\n')) lines.push(`  ${line}`)
+  }
+  lines.push('')
+  return lines.join('\n')
+}
+
 export function downloadUrlToFile(url: string, dest: string): void {
   fs.mkdirSync(path.dirname(dest), { recursive: true })
   const tmp = `${dest}.part`

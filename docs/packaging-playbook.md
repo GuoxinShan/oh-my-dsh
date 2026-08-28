@@ -27,7 +27,7 @@ pnpm desktop:build
 
 产物：
 
-- macOS：完整 `release/Oh-My-DSH-<ver>-arm64.dmg`（含 `runtime.tar.gz`）；**瘦** updater zip（剥掉 runtime，`scripts/slim-mac-updater-zip.mjs` 在 electron-builder 之后重打 zip + `.blockmap` + `latest-mac.yml`）
+- macOS：完整 `release/Oh-My-DSH-<ver>-arm64.dmg`（含 `runtime.tar.gz`）；**瘦** updater zip（electron-builder 只打 DMG；`scripts/slim-mac-updater-zip.mjs` 从已签 `.app` 剥 runtime 后写 zip + `.blockmap` + 完整 `latest-mac.yml`）
 - 两个平台都另放 `release/runtime-<sha>-<platform>-<arch>.tar.gz`，给瘦 zip / 缓存未命中时按 sha 补拉
 - Windows：完整 `release/Oh My DSH-<ver>-setup.exe`（NSIS 仍自带 runtime，离线能装）
 
@@ -107,7 +107,7 @@ DSH_DESKTOP_E2E_PROBE=1 DSH_DESKTOP_E2E_EXIT=1 pnpm desktop:dev
 
 ## 5. 分发与 Gatekeeper
 
-**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 保持 `mac.notarize: false`（只签 `.app` 再打 zip/dmg）。CI 随后跑 `scripts/notarize-mac-artifacts.sh`：zip（OTA）和 DMG（安装盘）**并行** `notarytool submit --wait`，再 staple + `spctl` DMG。两份文件 hash 不同，必须两张 ticket；并行只把墙钟从相加变成 `max`。只 staple 会因「Record not found」失败。
+**签名+公证**：产物为 Developer ID 签名 + Apple 公证版，`spctl -a -vv -t install` 应答 `source=Notarized Developer ID`。electron-builder 保持 `mac.notarize: false`（只签 `.app` 再打 dmg）。瘦 zip 由 slim 从 `.app` 生成后再公证。CI 随后跑 `scripts/notarize-mac-artifacts.sh`：zip（OTA）和 DMG（安装盘）**并行** `notarytool submit --wait`，再 staple + `spctl` DMG。两份文件 hash 不同，必须两张 ticket；并行只把墙钟从相加变成 `max`。只 staple 会因「Record not found」失败。DMG Finder 校验必须在公证前提交结束（不要对同一 DMG 同时 `hdiutil attach` 与 `notarytool`）。
 
 一次完整公证构建的环境变量：
 
