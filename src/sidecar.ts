@@ -189,17 +189,45 @@ function timestamp(): string {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
 }
 
+/**
+ * Unix sidecar used to `spawn(..., { detached: true })` → libuv `setsid`.
+ * That makes the one-node Electron binary a session leader of the GUI .app,
+ * so Launch Services briefly puts a second Dock tile up until hide-dock
+ * demotes it. Route through `dsh-pgrp` instead: same pid becomes a process
+ * group leader without a new session, and `kill(-pid)` still holds.
+ */
+export function planSidecarSpawn(
+  runtime: Pick<Runtime, 'node' | 'argsPrefix' | 'cli' | 'dockGuard'>,
+  port: number,
+  platform = process.platform,
+): { command: string; args: string[]; detached: boolean } {
+  const args = [...runtime.argsPrefix, runtime.cli, 'web', '--port', String(port), '--no-open']
+  if (platform === 'darwin' && runtime.dockGuard !== undefined) {
+    return {
+      command: runtime.dockGuard.pgrpHelper,
+      args: [runtime.node, ...args],
+      detached: false,
+    }
+  }
+  return {
+    command: runtime.node,
+    args,
+    detached: platform !== 'win32',
+  }
+}
+
 export function spawnSidecar(runtime: Runtime, home: string, port: number): string {
   const logPath = sidecarLogPath(home)
   const log = fs.openSync(logPath, 'a')
   const env = sidecarEnv(runtime, { DSH_HOME: home })
+  const plan = planSidecarSpawn(runtime, port)
   const child = spawn(
-    runtime.node,
-    [...runtime.argsPrefix, runtime.cli, 'web', '--port', String(port), '--no-open'],
+    plan.command,
+    plan.args,
     {
       cwd: runtime.cwd,
       env,
-      detached: process.platform !== 'win32',
+      detached: plan.detached,
       // Windows: taskkill /T is the tree-kill stand-in for a Job Object
       // (CREATE_BREAKAWAY_JOB is not a first-class Node spawn option).
       stdio: ['ignore', log, log],

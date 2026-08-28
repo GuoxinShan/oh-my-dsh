@@ -4,6 +4,10 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS 打开应用时 Dock 不再闪一颗马上消失的图标（sidecar 不再 `setsid` 成第二份 `.app`）。
+
 ## [0.3.0-rc.3] - 2026-08-27
 
 ### Changed
