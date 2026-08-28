@@ -46,7 +46,7 @@
 git tag v0.3.0-rc.2 && git push origin v0.3.0-rc.2
 ```
 
-推 tag 即触发 release.yml：`desktop-macos`（组装 runtime → electron-rebuild → electron-builder 只签名打 dmg/zip → `scripts/slim-mac-updater-zip.mjs` 剥 runtime 后重打 zip/blockmap → `scripts/notarize-mac-artifacts.sh` 并行公证**瘦** zip 与完整 DMG，再 staple DMG）与 `desktop-windows`（同套 prepare，出完整 NSIS + 该平台 `runtime-<sha>-win32-x64.tar.gz`）并行，`desktop-publish` 从 `CHANGELOG.md` 抽取该版本说明后上传 Release（dmg、瘦 zip、setup.exe、runtime tarball、latest-mac.yml、latest.yml；`prerelease: false`、`make_latest: true`）。任一侧失败则不发版。发版 prepare 走 `DSH_DESKTOP_PREPARE_MODE=build`（跳过已在 CI 跑过的 typecheck/test）。
+推 tag 即触发 release.yml：`desktop-macos` 与 `desktop-windows` 并行。Mac：缓存命中则跳过 electron-rebuild / 六包 build / 重打 `runtime.tar.gz` → electron-builder **只打 DMG** → slim 从 `.app` 写瘦 zip + `latest-mac.yml` → 校验 DMG 布局 → 并行公证瘦 zip 与完整 DMG。Windows：同套 prepare，出完整 NSIS + `runtime-<sha>-win32-x64.tar.gz`。两侧把产物直传 **draft** Release；`desktop-publish` 只合成 `CHANGELOG` 说明与 `latest.json`，校验两侧附件齐全后揭稿（`--draft=false --latest`）。任一侧失败则不揭稿。发版 prepare 走 `DSH_DESKTOP_PREPARE_MODE=build`（跳过已在 CI 跑过的 typecheck/test）。
 
 验证：Actions 页面全绿 → Releases 页该 tag 为 latest → 本地 `spctl -a -vv` 下载的 dmg 应答 `Notarized Developer ID`。需要复核安装页时用临时 venv 安装 `ds-store==1.3.1`，再把该 venv 的 `bin` 放到 `PATH` 后执行 `bash scripts/verify-dmg-layout.sh <下载的.dmg>`；脚本会解析发布件的 Finder 记录，而不是只看构建目录。
 

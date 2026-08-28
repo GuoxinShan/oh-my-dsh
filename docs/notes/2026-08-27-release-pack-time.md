@@ -19,3 +19,5 @@
 
 - 一张 ticket 盖 zip + DMG（`v0.3.0-rc.1` staple-only 已炸）。
 - mac/win 共用 runtime 树（native + Electron ABI）。
+
+后续墙钟刀见 `docs/notes/2026-08-28-faster-release-pipeline.md`。

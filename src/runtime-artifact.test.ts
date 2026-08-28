@@ -7,6 +7,7 @@ import { describe, it } from 'node:test'
 import { releaseRuntimeDir } from './runtime.ts'
 import {
   decideRuntimeSource,
+  latestMacYml,
   patchUpdaterYml,
   runtimeArtifactName,
   runtimeDownloadUrls,
@@ -58,6 +59,39 @@ describe('stripRuntimeResources', () => {
     assert.equal(fs.existsSync(path.join(dir, 'runtime.tar.gz')), false)
     assert.equal(fs.existsSync(path.join(dir, 'runtime-revision.json')), true)
     fs.rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+describe('latestMacYml', () => {
+  it('writes a zip-pointing updater yml without borrowing a dmg path', () => {
+    const yml = latestMacYml({
+      version: '0.3.0-rc.5',
+      file: 'Oh-My-DSH-0.3.0-rc.5-arm64.zip',
+      sha512: 'abc',
+      size: 360000000,
+      releaseDate: '2026-08-28T06:00:00.000Z',
+      releaseNotes: '### Faster\n- zip is slim',
+    })
+    assert.match(yml, /^version: 0\.3\.0-rc\.5$/m)
+    assert.match(yml, /url: Oh-My-DSH-0\.3\.0-rc\.5-arm64\.zip/)
+    assert.match(yml, /^path: Oh-My-DSH-0\.3\.0-rc\.5-arm64\.zip$/m)
+    assert.match(yml, /sha512: abc/)
+    assert.match(yml, /size: 360000000/)
+    assert.match(yml, /releaseDate: '2026-08-28T06:00:00\.000Z'/)
+    assert.match(yml, /^releaseNotes: \|$/m)
+    assert.match(yml, /^  - zip is slim$/m)
+    assert.equal(yml.includes('.dmg'), false)
+  })
+
+  it('omits releaseNotes when empty', () => {
+    const yml = latestMacYml({
+      version: '1.0.0',
+      file: 'app.zip',
+      sha512: 'x',
+      size: 1,
+      releaseDate: '2026-01-01T00:00:00.000Z',
+    })
+    assert.equal(yml.includes('releaseNotes'), false)
   })
 })
 

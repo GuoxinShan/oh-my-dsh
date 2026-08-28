@@ -1,16 +1,17 @@
 /**
- * Replace the electron-builder Mac updater zip with a copy of the signed
- * .app that omits runtime.tar.gz. DMG stays self-contained. Blockmap and
- * latest-mac.yml are regenerated from the slim zip so differential matches
- * what clients actually download.
+ * Build the Mac updater zip from the signed .app (electron-builder only
+ * emits a DMG). The zip omits runtime.tar.gz. Blockmap and latest-mac.yml
+ * are written here so they point at the slim zip, never the DMG.
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { releaseNotesForVersion } from './release-notes.mjs'
 
 const require = createRequire(import.meta.url)
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -28,10 +29,24 @@ export function stripRuntimeResources(resourcesDir) {
   return removed
 }
 
-export function patchUpdaterYml(yml, sha512, size) {
-  return yml
-    .replace(/^(\s*sha512:\s*)\S+ *$/gm, `$1${sha512}`)
-    .replace(/^(\s*size:\s*)\d+ *$/gm, `$1${String(size)}`)
+export function latestMacYml(input) {
+  const lines = [
+    `version: ${input.version}`,
+    'files:',
+    `  - url: ${input.file}`,
+    `    sha512: ${input.sha512}`,
+    `    size: ${input.size}`,
+    `path: ${input.file}`,
+    `sha512: ${input.sha512}`,
+    `releaseDate: '${input.releaseDate}'`,
+  ]
+  const notes = input.releaseNotes?.replace(/\r\n/g, '\n').trim()
+  if (notes) {
+    lines.push('releaseNotes: |')
+    for (const line of notes.split('\n')) lines.push(`  ${line}`)
+  }
+  lines.push('')
+  return lines.join('\n')
 }
 
 function findMacApp() {
@@ -48,6 +63,19 @@ function findUpdaterZip() {
     .filter((name) => name.endsWith('.zip') && !name.endsWith('.blockmap'))
     .map((name) => join(releaseDir, name))
     .find((file) => statSync(file).isFile())
+}
+
+function zipArchForApp(appPath) {
+  if (appPath.includes(`${join('mac-arm64', 'Oh My DSH.app')}`)) return 'arm64'
+  if (appPath.includes(`${join('mac-x64', 'Oh My DSH.app')}`)) return 'x64'
+  return 'x64'
+}
+
+function updaterZipPath(appPath) {
+  const existing = findUpdaterZip()
+  if (existing) return existing
+  const version = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version
+  return join(releaseDir, `Oh-My-DSH-${version}-${zipArchForApp(appPath)}.zip`)
 }
 
 function codesignIdentity() {
@@ -111,15 +139,30 @@ function writeBlockmap(zipPath) {
   execFileSync(appBuilder, ['blockmap', '--input', zipPath, '--output', blockmap], { stdio: 'inherit' })
 }
 
-function updateLatestYml(zipPath) {
+function writeLatestYml(zipPath) {
+  const version = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version
   const ymlPath = join(releaseDir, 'latest-mac.yml')
-  if (!existsSync(ymlPath)) {
-    throw new Error('slim-mac-updater-zip: latest-mac.yml missing')
+  let releaseDate = new Date().toISOString()
+  if (existsSync(ymlPath)) {
+    const match = readFileSync(ymlPath, 'utf8').match(/^releaseDate:\s*'([^']+)'/m)
+    if (match) releaseDate = match[1]
   }
-  const sha512 = sha512Base64(zipPath)
-  const size = statSync(zipPath).size
-  writeFileSync(ymlPath, patchUpdaterYml(readFileSync(ymlPath, 'utf8'), sha512, size))
-  console.log(`slim-mac-updater-zip: latest-mac.yml sha512/size → ${size} bytes`)
+  let releaseNotes
+  try {
+    const changelog = readFileSync(join(repoRoot, 'CHANGELOG.md'), 'utf8')
+    releaseNotes = releaseNotesForVersion(changelog, version).notes
+  } catch {
+    // local unsigned builds may lack a matching heading
+  }
+  writeFileSync(ymlPath, latestMacYml({
+    version,
+    file: basename(zipPath),
+    sha512: sha512Base64(zipPath),
+    size: statSync(zipPath).size,
+    releaseDate,
+    releaseNotes,
+  }))
+  console.log(`slim-mac-updater-zip: wrote ${ymlPath} (${statSync(zipPath).size} bytes)`)
 }
 
 export async function slimMacUpdaterZip() {
@@ -128,28 +171,22 @@ export async function slimMacUpdaterZip() {
     return
   }
   const app = findMacApp()
-  const zip = findUpdaterZip()
-  if (app === undefined || zip === undefined) {
-    console.log('slim-mac-updater-zip: skip (no mac .app/zip in release/)')
-    return
+  if (app === undefined) {
+    throw new Error('slim-mac-updater-zip: no mac .app in release/')
   }
+  const zip = updaterZipPath(app)
   const stage = mkdtempSync(join(tmpdir(), 'dsh-slim-'))
   const stagedApp = join(stage, 'Oh My DSH.app')
   execFileSync('ditto', [app, stagedApp], { stdio: 'inherit' })
   const resources = join(stagedApp, 'Contents', 'Resources', 'resources')
   const removed = existsSync(resources) ? stripRuntimeResources(resources) : []
-  if (!removed.includes('runtime.tar.gz')) {
-    console.log('slim-mac-updater-zip: runtime.tar.gz already absent; keep existing zip')
-    rmSync(stage, { recursive: true, force: true })
-    return
-  }
   resignApp(stagedApp)
   zipApp(stagedApp, zip)
   writeBlockmap(zip)
-  updateLatestYml(zip)
+  writeLatestYml(zip)
   rmSync(stage, { recursive: true, force: true })
   const mb = (statSync(zip).size / 1024 / 1024).toFixed(1)
-  console.log(`slim-mac-updater-zip: wrote ${zip} (${mb} MB, stripped ${removed.join(', ')})`)
+  console.log(`slim-mac-updater-zip: wrote ${zip} (${mb} MB, stripped ${removed.join(', ') || 'nothing'})`)
 }
 
 const invoked = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])
