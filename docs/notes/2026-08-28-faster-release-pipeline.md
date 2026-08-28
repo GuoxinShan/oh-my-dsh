@@ -23,6 +23,8 @@
    - 公证/打包后 `scripts/upload-draft-release.sh`：`gh release create --draft || 已存在` + `gh release upload --clobber`。
    - `desktop-publish` 不再 download 400MB artifact；校验两侧附件齐全后上传 `latest.json`，`gh release edit --draft=false --latest`。一侧失败则不揭稿，draft 留着下次 `--clobber`。
 
+`v0.3.0-rc.5` 在 slim 重打 blockmap 时炸了：`require('app-builder-bin')` 在 pnpm 隔离树里解析不到，而且 electron-builder 26 已经改成 `app-builder-lib` 的 JS Rabin blockmap，那个 CLI 不再随依赖安装。修法：经 `electron-builder` → `app-builder-lib` 调 `buildBlockMap(zip, 'gzip', zip.blockmap)`。空 tag `v0.3.0-rc.5`（无 Release）发 `v0.3.0-rc.6` 后删掉，避免旧 `-rc` 客户端刮 atom。
+
 ## 不做
 
 - 一张 ticket 盖 zip + DMG（已炸过）。

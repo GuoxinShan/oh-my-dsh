@@ -122,21 +122,28 @@ function sha512Base64(file) {
   return createHash('sha512').update(readFileSync(file)).digest('base64')
 }
 
-function findAppBuilder() {
+/**
+ * electron-builder 26 dropped the app-builder-bin CLI. Blockmaps are a JS
+ * Rabin fingerprint in app-builder-lib. Resolve through electron-builder so
+ * pnpm's isolated tree still finds the nested package.
+ */
+export function loadBuildBlockMap() {
   try {
-    return require('app-builder-bin')
-  } catch {
-    return undefined
+    const fromEb = createRequire(require.resolve('electron-builder/package.json'))
+    const fromLib = createRequire(fromEb.resolve('app-builder-lib/package.json'))
+    const { buildBlockMap } = fromLib('./out/targets/blockmap/blockmap.js')
+    if (typeof buildBlockMap !== 'function') throw new Error('buildBlockMap is not a function')
+    return buildBlockMap
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`slim-mac-updater-zip: electron-builder 26 JS blockmap is required (${message})`)
   }
 }
 
-function writeBlockmap(zipPath) {
+async function writeBlockmap(zipPath) {
   const blockmap = `${zipPath}.blockmap`
-  const appBuilder = findAppBuilder()
-  if (appBuilder === undefined) {
-    throw new Error('slim-mac-updater-zip: app-builder-bin is required to regenerate the blockmap')
-  }
-  execFileSync(appBuilder, ['blockmap', '--input', zipPath, '--output', blockmap], { stdio: 'inherit' })
+  const buildBlockMap = loadBuildBlockMap()
+  await buildBlockMap(zipPath, 'gzip', blockmap)
 }
 
 function writeLatestYml(zipPath) {
@@ -182,7 +189,7 @@ export async function slimMacUpdaterZip() {
   const removed = existsSync(resources) ? stripRuntimeResources(resources) : []
   resignApp(stagedApp)
   zipApp(stagedApp, zip)
-  writeBlockmap(zip)
+  await writeBlockmap(zip)
   writeLatestYml(zip)
   rmSync(stage, { recursive: true, force: true })
   const mb = (statSync(zip).size / 1024 / 1024).toFixed(1)
