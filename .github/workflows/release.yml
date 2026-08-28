@@ -153,10 +153,11 @@ jobs:
       - name: Verify DMG Finder layout
         run: |
           set -euo pipefail
-          python3 -m pip install --user --quiet --disable-pip-version-check ds-store==1.3.1
-          USER_BIN="$(python3 -c 'import site; print(site.getuserbase())')/bin"
+          # Homebrew Python on macos-latest is PEP 668 managed; pip --user fails.
+          python3 -m venv "$RUNNER_TEMP/dmg-layout-venv"
+          "$RUNNER_TEMP/dmg-layout-venv/bin/pip" install --quiet --disable-pip-version-check ds-store==1.3.1
           DMG=$(ls release/*.dmg | head -1)
-          PATH="$USER_BIN:$PATH" bash scripts/verify-dmg-layout.sh "$DMG"
+          PATH="$RUNNER_TEMP/dmg-layout-venv/bin:$PATH" bash scripts/verify-dmg-layout.sh "$DMG"
 
       - name: Notarize zip and DMG in parallel
         env:
