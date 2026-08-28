@@ -18,3 +18,9 @@ rc.3 用 `dsh-pgrp` + `TransformProcessType` 降后台：
 把 69KB Electron stub **复制**进 `~/.dsh-desktop/sidecar-node/<sha>/DSH Node.app`，Info.plist 写 `LSUIElement` + `LSBackgroundOnly`，`Contents/Frameworks` 软链到壳的 Frameworks（`@rpath` 仍有效）。spawn 这条路径、`detached: false`，不依赖 clang。
 
 `node-shim` 也 exec 这份 helper，避免 `yzj-cli` 的 `env node` 再拉起主程序。退出按 PPID 树杀，不再 `kill(-pgid)`（子进程与窗口同组）。
+
+## 2026-08-28 续：复制后不重签会被 SIGKILL
+
+Developer ID + Hardened Runtime 的 stub 拷进新 bundle、改 Info.plist 之后，`spctl` 报 `invalid resource directory`。`ELECTRON_RUN_AS_NODE` 直接 137，sidecar 日志是空的，壳等满 120s 报 `GET /` 超时。完整 DMG 里有 `runtime.tar.gz`，这次不是在拉 runtime。
+
+修法：写出 helper 后 `codesign --force --sign -`（与 hide-dock dylib 同一姿势）。已有 helper 若仍是 Developer ID / runtime，下一启动重做。签不掉就退回主程序，宁可再闪一颗 Dock 也不能起不来。

@@ -4,6 +4,12 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.8] - 2026-08-28
+
+### Fixed
+
+- macOS sidecar 的 `DSH Node.app` 复制后改为 ad-hoc 重签。此前 Developer ID + Hardened Runtime 的 stub 换了 Info.plist 会被系统 SIGKILL，日志空白，启动空等 120 秒。
+
 ## [0.3.0-rc.6] - 2026-08-28
 
 ### Changed
