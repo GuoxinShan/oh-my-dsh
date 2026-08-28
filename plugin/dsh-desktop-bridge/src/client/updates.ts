@@ -29,6 +29,8 @@ export interface DesktopUpdaterInjected {
   updateGeneration: () => number
   /** Recheck, download, and verify the newest signed package. */
   downloadUpdate: () => Promise<void>
+  /** Cancel the in-flight download; the shell status returns to available. */
+  cancelUpdate: () => Promise<void>
   /** Install the verified package and restart the desktop process. */
   installUpdate: () => Promise<never>
 }

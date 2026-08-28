@@ -72,6 +72,13 @@ export function createUpdateCoordinator(invoke: UpdateInvoke): DesktopUpdaterInj
     return request
   }
 
+  const cancelUpdate = async (): Promise<void> => {
+    // Cancel must overtake the serialized queue: the download it cancels still
+    // occupies `tail`, so queueing behind it would deadlock the cancel. The
+    // shell is the single-flight authority and no-ops outside busy phases.
+    await invoke('dsh_desktop_cancel_update')
+  }
+
   const installUpdate = (): Promise<never> => {
     if (activeInstall !== undefined) return activeInstall
     if (activeDownload !== undefined) return Promise.reject(new Error('update download still in progress'))
@@ -93,6 +100,7 @@ export function createUpdateCoordinator(invoke: UpdateInvoke): DesktopUpdaterInj
     getUpdateStatus,
     updateGeneration: () => generation,
     downloadUpdate,
+    cancelUpdate,
     installUpdate,
   }
 }

@@ -29,6 +29,14 @@ export const zh = {
   'update.confirm.download': '打开下载页',
   'update.confirm.downloadTitle': '下载 v{version}',
   'update.confirm.downloadDescription': '新版无法自动热更新。确认后将打开 GitHub Releases 下载页。',
+  'update.dialog.downloading': '正在下载 v{version}',
+  'update.dialog.ready': 'v{version} 已准备就绪',
+  'update.dialog.progress': '下载进度',
+  'update.dialog.cancel': '取消下载',
+  'update.dialog.restart': '重启以更新',
+  'update.dialog.failed': '下载失败',
+  'update.dialog.retry': '重试',
+  'update.dialog.close': '关闭',
 } satisfies Record<string, string>
 
 /** The namespace key union. */
@@ -63,6 +71,14 @@ export const en = {
   'update.confirm.download': 'Open download page',
   'update.confirm.downloadTitle': 'Download v{version}',
   'update.confirm.downloadDescription': 'This release cannot be installed in place. Confirm to open the GitHub Releases page.',
+  'update.dialog.downloading': 'Downloading v{version}',
+  'update.dialog.ready': 'v{version} is ready',
+  'update.dialog.progress': 'Download progress',
+  'update.dialog.cancel': 'Cancel download',
+  'update.dialog.restart': 'Restart to update',
+  'update.dialog.failed': 'Download failed',
+  'update.dialog.retry': 'Retry',
+  'update.dialog.close': 'Close',
 } satisfies Record<DesktopBridgeKey, string>
 
 /** The locale namespace id this plugin registers. */

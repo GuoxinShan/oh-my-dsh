@@ -1,4 +1,4 @@
-/** Quiet periodic updater control shared by the rail and non-mac fallback. */
+/** Quiet updater control plus the download dialog shared by rail and fallback. */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import {
   Button,
@@ -10,7 +10,7 @@ import {
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { isElectronCutoverNotes, parseUpdateNotes } from './update-notes.ts'
 import {
-  isUpdateBusy, isUpdateIndicatorVisible, notesFromStatus, statusFromCheck,
+  formatBytes, isUpdateBusy, isUpdateIndicatorVisible, notesFromStatus, statusFromCheck,
   updatePercent, visibleUpdateNotes,
   type DesktopUpdaterInjected, type DesktopUpdateStatus,
 } from './updates.ts'
@@ -23,7 +23,7 @@ const UPDATE_INTERVAL_MS = 2 * 60 * 60 * 1000
 /** First check delay after mount, beyond the boot request burst. */
 const FIRST_CHECK_DELAY_MS = 3000
 
-/** Shared CSS for the busy spinner and the confirmation notes panel. */
+/** Shared CSS for the busy spinner, the download dialog, and the notes panel. */
 const UPDATE_CONTROL_CSS = [
   '@keyframes desktop-update-spin{to{transform:rotate(360deg)}}',
   '[data-desktop-update-spinner]{display:inline-flex;animation:desktop-update-spin .8s linear infinite}',
@@ -31,11 +31,24 @@ const UPDATE_CONTROL_CSS = [
   // Inline `all:unset` on this button wipes the rail sheet's no-drag; the
   // 28px drag strip then steals clicks except the bottom ~2px of the icon.
   '[data-desktop-update-button]{-webkit-app-region:no-drag!important}',
-  // Modal card is a flex column; without a cap the notes flex item's
-  // min-height:auto (content size) wins over max-height and shoves the
-  // footer off-screen. Pin the card, let only the notes pane scroll.
-  '.dsh-desktop-update-dialog{max-height:calc(100dvh - 48px)}',
-  '.dsh-desktop-update-dialog-content{flex:1 1 auto;min-height:0;overflow:hidden}',
+  // Headless dialog card: wider than the 380px default, and the card's own
+  // bottom padding is replaced by the dialog body's.
+  '.dsh-desktop-update-dialog{width:min(440px,100%);max-height:calc(100dvh - 48px);padding-bottom:0}',
+  '[data-desktop-update-dialog-card]{display:flex;flex-direction:column;gap:16px;padding:22px 24px 20px;min-width:0}',
+  '[data-desktop-update-dialog-head]{display:flex;align-items:center;gap:12px;min-width:0}',
+  '[data-desktop-update-dialog-icon]{flex:none;width:40px;height:40px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l);color:var(--dsw-alias-label-primary)}',
+  '[data-desktop-update-dialog-title]{margin:0;font-size:15px;line-height:22px;font-weight:600;color:var(--dsw-alias-label-primary)}',
+  '[data-desktop-update-dialog-description]{margin:0;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary))}',
+  '[data-desktop-update-progress-block]{display:flex;flex-direction:column;gap:8px}',
+  '[data-desktop-update-progress-meta]{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:12px;color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary))}',
+  '[data-desktop-update-progress]{height:6px;border-radius:999px;background:var(--dsw-alias-border-l);overflow:hidden}',
+  '[data-desktop-update-progress-fill]{height:100%;border-radius:inherit;background:var(--dsw-alias-label-primary);transition:width .15s linear}',
+  '[data-desktop-update-progress][data-indeterminate] [data-desktop-update-progress-fill]{width:36%;transition:none;animation:desktop-update-indeterminate 1.1s ease-in-out infinite}',
+  '@keyframes desktop-update-indeterminate{0%{margin-left:-36%}100%{margin-left:100%}}',
+  '@media (prefers-reduced-motion:reduce){[data-desktop-update-progress][data-indeterminate] [data-desktop-update-progress-fill]{animation:none;width:100%}}',
+  '[data-desktop-update-dialog-footer]{display:flex;align-items:center;justify-content:flex-end;gap:8px}',
+  // The notes pane scrolls inside the capped card instead of shoving the
+  // footer off-screen.
   '[data-desktop-update-notes]{margin:0;min-height:0;max-height:min(240px,36vh);overflow:auto;overscroll-behavior:contain;padding:12px 14px;border:1px solid var(--dsw-alias-border-l);border-radius:10px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);}',
   '[data-desktop-update-notes] h3{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary));}',
   '[data-desktop-update-notes][data-empty] p{margin:0;font-size:13px;line-height:1.5;opacity:.72}',
@@ -47,18 +60,25 @@ const UPDATE_CONTROL_CSS = [
   '[data-desktop-update-changelog] li:last-child{margin:0}',
 ].join('')
 
+/** Version carried by the status variants that have one. */
+function statusVersionOf(status: DesktopUpdateStatus): string | undefined {
+  return 'version' in status ? status.version : undefined
+}
+
 /** The compact updater button rendered beside the sidebar toggle. */
 export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null {
-  const { checkUpdate, getUpdateStatus, updateGeneration, downloadUpdate, installUpdate, t } = props
+  const { checkUpdate, getUpdateStatus, updateGeneration, downloadUpdate, cancelUpdate, installUpdate, t } = props
   const [status, setStatus] = useState<DesktopUpdateStatus>({ phase: 'idle' })
   const [requested, setRequested] = useState(false)
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const mounted = useRef(true)
   const statusRequest = useRef(0)
   /** Notes survive preparing/downloading snapshots that omit the field. */
   const lastNotes = useRef('')
-  /** One auto-download attempt per version per mount; failures stay click-to-retry. */
-  const autoDownloadVersion = useRef<string | undefined>()
+  /** Version survives the versionless preparing snapshot. */
+  const lastVersion = useRef('')
+  /** Previous phase, for the busy → ready auto-reopen of the dialog. */
+  const prevPhase = useRef<DesktopUpdateStatus['phase']>('idle')
 
   const refreshStatus = useCallback(async (
     requestGeneration: number,
@@ -70,6 +90,8 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
       if (mounted.current && updateGeneration() === requestGeneration && statusRequest.current === sequence) {
         const incoming = visibleUpdateNotes(notesFromStatus(snapshot))
         if (incoming.length > 0) lastNotes.current = incoming
+        const version = statusVersionOf(snapshot)
+        if (version !== undefined && version !== '') lastVersion.current = version
         setStatus(snapshot)
       }
     } catch {
@@ -79,6 +101,8 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
           && statusRequest.current === sequence) {
           const incoming = visibleUpdateNotes(notesFromStatus(fallback))
           if (incoming.length > 0) lastNotes.current = incoming
+          const version = statusVersionOf(fallback)
+          if (version !== undefined && version !== '') lastVersion.current = version
           setStatus(fallback)
         }
     }
@@ -113,6 +137,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
           if (found !== null) {
             const incoming = visibleUpdateNotes(found.notes)
             if (incoming.length > 0) lastNotes.current = incoming
+            lastVersion.current = found.version
           }
           void refreshStatus(requestGeneration, statusFromCheck(found))
         },
@@ -142,22 +167,23 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
     return () => { clearInterval(timer) }
   }, [refreshStatus, status, updateGeneration])
 
-  const availableVersion = status.phase === 'available' ? status.version : undefined
-  // Discover → background download. Ready stays quiet until the user clicks.
+  // A user-driven download that finishes while the dialog is hidden reopens it
+  // for the restart confirmation.
   useEffect(() => {
-    if (availableVersion === undefined) return
-    if (autoDownloadVersion.current === availableVersion) return
-    autoDownloadVersion.current = availableVersion
-    startDownload(availableVersion)
-  }, [availableVersion, startDownload])
+    const previous = prevPhase.current
+    prevPhase.current = status.phase
+    if (!requested) return
+    if ((previous === 'preparing' || previous === 'downloading') && status.phase === 'ready') {
+      setDialogOpen(true)
+    }
+  }, [status, requested])
 
-  const onDownload = useCallback(() => {
-    if (status.phase === 'ready') {
-      setConfirmOpen(true)
+  const onActivate = useCallback(() => {
+    if (isUpdateBusy(status) || status.phase === 'ready') {
+      setDialogOpen(true)
       return
     }
-    if (isUpdateBusy(status)) return
-    const target = 'version' in status ? status.version : undefined
+    const target = statusVersionOf(status)
     void (async () => {
       try {
         if (status.phase === 'failed') {
@@ -168,11 +194,11 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
             await refreshStatus(updateGeneration(), { phase: 'current' })
             return
           }
-          autoDownloadVersion.current = found.version
+          setDialogOpen(true)
           startDownload(found.version)
           return
         }
-        if (target !== undefined) autoDownloadVersion.current = target
+        setDialogOpen(true)
         startDownload(target)
       } catch {
         const fallback: DesktopUpdateStatus = target === undefined
@@ -183,9 +209,22 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
     })()
   }, [checkUpdate, refreshStatus, startDownload, status, updateGeneration])
 
+  const onCancelDownload = useCallback(() => {
+    setDialogOpen(false)
+    void (async () => {
+      try {
+        await cancelUpdate()
+      } catch {
+        // Archived shells without the cancel command keep downloading; the
+        // status resync below leaves the spinner clickable for reopening.
+      }
+      await refreshStatus(updateGeneration())
+    })()
+  }, [cancelUpdate, refreshStatus, updateGeneration])
+
   const onInstall = useCallback(() => {
     if (status.phase !== 'ready') return
-    setConfirmOpen(false)
+    setDialogOpen(false)
     const request = installUpdate()
     const requestGeneration = updateGeneration()
     setStatus({ phase: 'installing', version: status.version })
@@ -203,6 +242,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
 
   const busy = isUpdateBusy(status)
   const percent = updatePercent(status)
+  const version = statusVersionOf(status) ?? lastVersion.current
   const notes = visibleUpdateNotes(
     (status.phase === 'ready' ? status.notes : '') || lastNotes.current,
   )
@@ -225,6 +265,29 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
       ? <span data-desktop-update-spinner=""><IconLoadingOutline16 /></span>
       : <IconDownloadOutline16 />
 
+  const dialogVisible = dialogOpen
+    && (status.phase === 'preparing' || status.phase === 'downloading' || status.phase === 'ready'
+      || status.phase === 'failed' || status.phase === 'installing' || status.phase === 'restarting')
+  const downloading = status.phase === 'preparing' || status.phase === 'downloading'
+  const installing = status.phase === 'installing' || status.phase === 'restarting'
+  const dialogTitle = downloading
+    ? t('update.dialog.downloading', { version })
+    : status.phase === 'ready'
+      ? t(cutover ? 'update.confirm.downloadTitle' : 'update.dialog.ready', { version })
+      : status.phase === 'failed'
+        ? t('update.dialog.failed')
+        : t('update.installing')
+  const dialogIcon = status.phase === 'ready'
+    ? <IconCheckOutline16 size={20} />
+    : busy || installing
+      ? <span data-desktop-update-spinner=""><IconLoadingOutline16 size={20} /></span>
+      : <IconDownloadOutline16 size={20} />
+  const bytesLabel = status.phase === 'downloading'
+    ? status.total === undefined
+      ? formatBytes(status.downloaded)
+      : `${formatBytes(status.downloaded)} / ${formatBytes(status.total)}`
+    : t('update.preparing')
+
   return (
     <>
       <style>{UPDATE_CONTROL_CSS}</style>
@@ -235,8 +298,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         aria-label={title}
         aria-busy={busy}
         title={title}
-        onClick={onDownload}
-        disabled={busy}
+        onClick={onActivate}
         style={{
           all: 'unset',
           boxSizing: 'border-box',
@@ -246,7 +308,7 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
           width: '22px',
           height: '22px',
           borderRadius: '6px',
-          cursor: busy ? 'default' : 'pointer',
+          cursor: 'pointer',
           opacity: busy ? 0.72 : 1,
           color: 'inherit',
           pointerEvents: 'auto',
@@ -257,52 +319,108 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
         {icon}
       </button>
       <Modal
-        open={confirmOpen && status.phase === 'ready'}
-        onClose={() => { setConfirmOpen(false) }}
+        open={dialogVisible}
+        onClose={() => { setDialogOpen(false) }}
         className="dsh-desktop-update-dialog"
-        contentClassName="dsh-desktop-update-dialog-content"
-        title={status.phase === 'ready'
-          ? t(cutover ? 'update.confirm.downloadTitle' : 'update.confirm.title', { version: status.version })
-          : t('update.confirm.title', { version: '' })}
-        closeLabel={t('update.confirm.later')}
-        description={status.phase === 'ready'
-          ? t(cutover ? 'update.confirm.downloadDescription' : 'update.confirm.description', { version: status.version })
-          : ''}
-        footer={(
-          <>
-            <Button variant="outline" size="sm" onClick={() => { setConfirmOpen(false) }}>
-              {t('update.confirm.later')}
-            </Button>
-            <Button variant="primary" size="sm" onClick={onInstall}>
-              {t(cutover ? 'update.confirm.download' : 'update.confirm.install')}
-            </Button>
-          </>
-        )}
+        title={dialogTitle}
+        closeLabel={t('update.dialog.close')}
+        headless
       >
-        <section
-          data-desktop-update-notes=""
-          data-empty={notes.length === 0 ? '' : undefined}
-          aria-label={t('update.confirm.notes')}
-        >
-          <h3>{t('update.confirm.notes')}</h3>
-          {notes.length === 0 || noteBlocks.length === 0
-            ? <p>{t('update.confirm.empty')}</p>
-            : (
-              <div data-desktop-update-changelog="">
-                {noteBlocks.map((block, index) => {
-                  if (block.type === 'heading') return <h4 key={index}>{block.text}</h4>
-                  if (block.type === 'list') {
-                    return (
-                      <ul key={index}>
-                        {block.items.map((item, itemIndex) => <li key={itemIndex}>{item}</li>)}
-                      </ul>
-                    )
-                  }
-                  return <p key={index}>{block.text}</p>
-                })}
+        <div data-desktop-update-dialog-card="">
+          <div data-desktop-update-dialog-head="">
+            <span data-desktop-update-dialog-icon="">{dialogIcon}</span>
+            <h2 data-desktop-update-dialog-title="">{dialogTitle}</h2>
+          </div>
+          {downloading && (
+            <div data-desktop-update-progress-block="">
+              <div data-desktop-update-progress-meta="">
+                <span>{t('update.dialog.progress')}</span>
+                <span>{bytesLabel}</span>
               </div>
-            )}
-        </section>
+              <div
+                data-desktop-update-progress=""
+                role="progressbar"
+                aria-label={t('update.dialog.progress')}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                {...(percent === undefined
+                  ? { 'data-indeterminate': '' }
+                  : { 'aria-valuenow': percent })}
+              >
+                <div
+                  data-desktop-update-progress-fill=""
+                  style={percent === undefined ? undefined : { width: `${percent}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {status.phase === 'ready' && (
+            <>
+              <p data-desktop-update-dialog-description="">
+                {t(cutover ? 'update.confirm.downloadDescription' : 'update.confirm.description', { version })}
+              </p>
+              <section
+                data-desktop-update-notes=""
+                data-empty={notes.length === 0 ? '' : undefined}
+                aria-label={t('update.confirm.notes')}
+              >
+                <h3>{t('update.confirm.notes')}</h3>
+                {notes.length === 0 || noteBlocks.length === 0
+                  ? <p>{t('update.confirm.empty')}</p>
+                  : (
+                    <div data-desktop-update-changelog="">
+                      {noteBlocks.map((block, index) => {
+                        if (block.type === 'heading') return <h4 key={index}>{block.text}</h4>
+                        if (block.type === 'list') {
+                          return (
+                            <ul key={index}>
+                              {block.items.map((item, itemIndex) => <li key={itemIndex}>{item}</li>)}
+                            </ul>
+                          )
+                        }
+                        return <p key={index}>{block.text}</p>
+                      })}
+                    </div>
+                  )}
+              </section>
+            </>
+          )}
+          {status.phase === 'failed' && (
+            <p data-desktop-update-dialog-description="">{status.message}</p>
+          )}
+          {installing && (
+            <p data-desktop-update-dialog-description="">{t('update.installing')}</p>
+          )}
+          {!installing && (
+            <div data-desktop-update-dialog-footer="">
+              {downloading && (
+                <Button variant="outline" size="sm" onClick={onCancelDownload}>
+                  {t('update.dialog.cancel')}
+                </Button>
+              )}
+              {status.phase === 'ready' && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => { setDialogOpen(false) }}>
+                    {t('update.confirm.later')}
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={onInstall}>
+                    {t(cutover ? 'update.confirm.download' : 'update.dialog.restart')}
+                  </Button>
+                </>
+              )}
+              {status.phase === 'failed' && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => { setDialogOpen(false) }}>
+                    {t('update.dialog.close')}
+                  </Button>
+                  <Button variant="primary" size="sm" onClick={onActivate}>
+                    {t('update.dialog.retry')}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </Modal>
     </>
   )

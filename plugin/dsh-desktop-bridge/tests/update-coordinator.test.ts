@@ -86,8 +86,7 @@ test('serializes check, download, and confirmed install', async () => {
   assert.equal(checkCalls, 2)
 })
 
-test('clears a rejected check so an ordinary retry reaches the shell', async () => {
-  let calls = 0
+test('clears a rejected check so an ordinary retry reaches the shell', async () => {  let calls = 0
   const updater = createUpdateCoordinator((command) => {
     assert.equal(command, 'dsh_desktop_check_update')
     calls += 1
@@ -99,4 +98,38 @@ test('clears a rejected check so an ordinary retry reaches the shell', async () 
   await assert.rejects(updater.checkUpdate(), /offline/)
   assert.equal(await updater.checkUpdate(), null)
   assert.equal(calls, 2)
+})
+
+test('cancel overtakes the serialized queue without disturbing it', async () => {
+  const downloadGate = deferred<void>()
+  const order: string[] = []
+  let checkCalls = 0
+  const updater = createUpdateCoordinator((command) => {
+    order.push(command)
+    if (command === 'dsh_desktop_check_update') {
+      checkCalls += 1
+      return checkCalls === 1
+        ? Promise.resolve({ update: { version: '0.3.0', notes: '' } })
+        : Promise.resolve({ update: null })
+    }
+    if (command === 'dsh_desktop_download_update') return downloadGate.promise
+    if (command === 'dsh_desktop_cancel_update') return Promise.resolve()
+    throw new Error(`unexpected command: ${command}`)
+  })
+
+  await updater.checkUpdate(true)
+  const download = updater.downloadUpdate()
+  await Promise.resolve()
+  // The cancel reaches the shell while the download still occupies the tail.
+  await updater.cancelUpdate()
+  assert.deepEqual(order, [
+    'dsh_desktop_check_update',
+    'dsh_desktop_download_update',
+    'dsh_desktop_cancel_update',
+  ])
+
+  downloadGate.resolve()
+  await download
+  // After the unwind the queue is healthy again.
+  assert.equal(await updater.checkUpdate(true), null)
 })

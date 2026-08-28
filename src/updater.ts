@@ -95,6 +95,18 @@ function applyUpdateMirror(): void {
   writeUpdaterLog('info', [`DSH_UPDATE_MIRROR=${mirror} (versioned /releases/download/ only)`])
 }
 
+/** Cancel handle carried by each checkForUpdates result (no new dependency). */
+type UpdateCancellation = NonNullable<
+  NonNullable<Awaited<ReturnType<typeof autoUpdater.checkForUpdates>>>['cancellationToken']
+>
+
+/** The token of the in-flight download; cancelUpdate() cancels exactly this. */
+let activeCancellation: UpdateCancellation | undefined
+/** Cancel arriving while downloadUpdate is still in its pre-download check. */
+let cancelRequested = false
+/** Notes survive status phases that omit the field (cancel restores available). */
+let lastUpdateNotes = ''
+
 let updaterConfigured = false
 
 function configureUpdater(): typeof autoUpdater {
@@ -132,6 +144,7 @@ export async function checkUpdate(): Promise<{ update: { version: string; notes:
     }
     const info = result.updateInfo
     const notes = notesOf(info)
+    lastUpdateNotes = notes
     setUpdateStatus({ phase: 'available', version: info.version, notes })
     return { update: { version: info.version, notes } }
   } catch (error) {
@@ -149,10 +162,21 @@ export async function downloadUpdate(): Promise<void> {
   if (!app.isPackaged) throw new Error('updates are disabled in unpackaged builds')
   const expected = claimUpdateDownload()
   const updater = configureUpdater()
+  cancelRequested = false
+  let token: UpdateCancellation | undefined
   try {
     const result = await updater.checkForUpdates()
     if (result === null) throw new Error('no update available')
     const info = result.updateInfo
+    lastUpdateNotes = notesOf(info)
+    token = result.cancellationToken
+    activeCancellation = token
+    // A cancel that arrived during the pre-download check still wins.
+    if (cancelRequested || token?.cancelled === true) {
+      token?.cancel()
+      setUpdateStatus({ phase: 'available', version: info.version, notes: lastUpdateNotes })
+      return
+    }
     setUpdateStatus({ phase: 'downloading', version: info.version, downloaded: 0 })
     updater.removeAllListeners('download-progress')
     updater.on('download-progress', (progress) => {
@@ -163,9 +187,15 @@ export async function downloadUpdate(): Promise<void> {
         ...(progress.total > 0 ? { total: progress.total } : {}),
       })
     })
-    await updater.downloadUpdate()
+    await updater.downloadUpdate(token)
     setUpdateStatus({ phase: 'ready', version: info.version, notes: notesOf(info) })
   } catch (error) {
+    // A user cancel is not a failure: restore the downloadable state.
+    if (cancelRequested || token?.cancelled === true) {
+      const version = statusVersion(updateStatusSnapshot()) ?? expected
+      setUpdateStatus({ phase: 'available', version, notes: lastUpdateNotes })
+      return
+    }
     const message = error instanceof Error ? error.message : String(error)
     const version = statusVersion(updateStatusSnapshot()) ?? expected
     setUpdateStatus({
@@ -174,7 +204,22 @@ export async function downloadUpdate(): Promise<void> {
       ...(version === undefined ? {} : { version }),
     })
     throw new Error(message)
+  } finally {
+    if (activeCancellation === token) activeCancellation = undefined
   }
+}
+
+/**
+ * Cancel an in-flight preparing/downloading run. The status returns to
+ * `available` (version and notes retained) once the download unwinds, and the
+ * pending download_update call resolves instead of failing. Idempotent: any
+ * other phase is a no-op.
+ */
+export function cancelUpdate(): void {
+  const snapshot = updateStatusSnapshot()
+  if (snapshot.phase !== 'preparing' && snapshot.phase !== 'downloading') return
+  cancelRequested = true
+  activeCancellation?.cancel()
 }
 
 export function installUpdate(): never {
