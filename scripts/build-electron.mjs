@@ -28,3 +28,12 @@ execFileSync('pnpm', ['exec', 'electron-builder', '--config', 'electron-builder.
   shell: process.platform === 'win32',
   env: process.env,
 })
+
+const { stageRuntimeArtifact } = await import('./stage-runtime-artifact.mjs')
+stageRuntimeArtifact()
+
+const builtMac = args.includes('--mac') || (!args.includes('--win') && !args.includes('--linux') && process.platform === 'darwin')
+if (builtMac) {
+  const { slimMacUpdaterZip } = await import('./slim-mac-updater-zip.mjs')
+  await slimMacUpdaterZip()
+}

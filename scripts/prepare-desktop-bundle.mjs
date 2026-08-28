@@ -276,6 +276,7 @@ console.log(`prepare-desktop-bundle: model-efforts-editor.tar.gz ${mb(modelEffor
 // own hash, so same-runtime plugin rebuilds cannot boot stale code.
 const manifest = {
   ...revision,
+  runtimeArtifact: `runtime-${revision.sha}-${process.platform}-${process.arch}.tar.gz`,
   runtimeTarball: await sha256(runtimeTar),
   bridgeTarball: await sha256(bridgeTar),
   compactionHierarchicalTarball: await sha256(compactionTar),

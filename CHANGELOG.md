@@ -4,6 +4,13 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.5] - 2026-08-28
+
+### Changed
+
+- Mac 热更新 zip 不再重复携带未变的 runtime tarball；DMG 仍可离线安装。已热更过一次后走 zip 差分，日志在 `~/.dsh-desktop/logs/updater.log`。
+- 自动更新走系统代理 / `HTTPS_PROXY`；可选 `DSH_UPDATE_MIRROR` 加速 GitHub 大文件下载，失败回落官方 Release。
+
 ## [0.3.0-rc.4] - 2026-08-28
 
 ### Fixed
