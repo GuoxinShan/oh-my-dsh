@@ -97,6 +97,11 @@ function sleep(ms: number): void {
   }
 }
 
+/** Every pid in the snapshot is gone — only then are ports held by grandchildren free. */
+function treeGone(pids: number[]): boolean {
+  return pids.every((pid) => psLstart(pid) === null)
+}
+
 export function termThenKill(pid: number): void {
   if (process.platform === 'win32') {
     spawn('taskkill', ['/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' })
@@ -120,7 +125,7 @@ export function termThenKill(pid: number): void {
   }
   const deadline = Date.now() + TERM_GRACE_MS
   while (Date.now() < deadline) {
-    if (psLstart(pid) === null) return
+    if (treeGone(tree)) return
     sleep(LADDER_TICK_MS)
   }
   for (const item of tree) {
@@ -129,6 +134,15 @@ export function termThenKill(pid: number): void {
     } catch {
       // gone
     }
+  }
+  // The root dying is not the tree dying: a plugin-spawned grandchild (an RPC
+  // server on a fixed port, say) can outlive it by seconds, and the very next
+  // spawn — e.g. a runtime surface switch — would rebind that port. Wait the
+  // SIGKILLs out.
+  const sweepDeadline = Date.now() + TERM_GRACE_MS
+  while (Date.now() < sweepDeadline) {
+    if (treeGone(tree)) return
+    sleep(LADDER_TICK_MS)
   }
 }
 
@@ -290,6 +304,9 @@ export async function waitReady(port: number): Promise<boolean> {
   const started = Date.now()
   let consecutive = 0
   while (Date.now() - started < PROBE_BUDGET_MS) {
+    // A sidecar that already exited will never answer — fail fast instead of
+    // burning the whole probe budget behind a dead window.
+    if (sidecar !== undefined && (sidecar.exitCode !== null || sidecar.signalCode !== null)) return false
     if (await probeReady(port)) {
       consecutive += 1
       // Two answers in a row so a crashing boot cannot look ready.
@@ -300,6 +317,14 @@ export async function waitReady(port: number): Promise<boolean> {
     await new Promise((resolve) => setTimeout(resolve, PROBE_INTERVAL_MS))
   }
   return false
+}
+
+/** Why the current sidecar died, for failure dialogs; null while it runs. */
+export function currentSidecarExit(): string | null {
+  if (sidecar === undefined) return null
+  if (sidecar.exitCode !== null) return `exit code ${String(sidecar.exitCode)}`
+  if (sidecar.signalCode !== null) return `signal ${sidecar.signalCode}`
+  return null
 }
 
 async function probeReady(port: number): Promise<boolean> {

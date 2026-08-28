@@ -31,7 +31,7 @@ import { setE2eVerdict } from './e2e-verdict.ts'
 import { desktopPackagesInstalled, runDesktopPluginInstall } from './install.ts'
 import type { PluginRef } from './plugins.ts'
 import type { Runtime } from './runtime.ts'
-import { freePort, killSidecar, spawnSidecar, waitReady } from './sidecar.ts'
+import { freePort, killSidecar, spawnSidecar, waitReady, currentSidecarExit } from './sidecar.ts'
 import {
   loadActiveSurface,
   profilesRoot,
@@ -158,6 +158,7 @@ async function runSurfaceSwitchFlow(): Promise<void> {
       return
     }
     // Rollback: the state file never moved, so the next boot is unaffected.
+    const exitInfo = currentSidecarExit()
     killSidecar()
     const backPort = await freePort()
     spawnSidecar(runtime, home, backPort, previous)
@@ -165,9 +166,12 @@ async function runSurfaceSwitchFlow(): Promise<void> {
     if (restored) {
       await reloadMainWindow(`http://127.0.0.1:${String(backPort)}`)
     }
+    const cause = exitInfo !== null
+      ? `新运行面的后台进程一启动就退出了（${exitInfo}）`
+      : `运行面「${verdict.name}」未在 120 秒内就绪`
     alertDialog(
       '切换运行面失败',
-      `运行面「${verdict.name}」未在 120 秒内就绪。${restored ? `已回退到「${previous}」。` : `回退到「${previous}」也失败，请重启应用。`}\n\n日志：${path.join(home, 'logs')}`,
+      `${cause}。${restored ? `已回退到「${previous}」。` : `回退到「${previous}」也失败，请重启应用。`}\n\n常见原因：目标运行面的插件监听的固定端口被占用（可用 lsof -i :<port> 查占用方）。\n\n日志：${path.join(home, 'logs')}`,
     )
     setE2eVerdict(`fail:ready-${verdict.name}`)
   } catch (error) {

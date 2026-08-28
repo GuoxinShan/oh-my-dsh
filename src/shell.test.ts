@@ -16,7 +16,7 @@ import {
   selectAssembledRuntimeDir,
   sidecarEnv,
 } from './runtime.ts'
-import { flattenPidTree, planSidecarSpawn, sweepDecision } from './sidecar.ts'
+import { flattenPidTree, killSidecar, planSidecarSpawn, spawnSidecar, sweepDecision, waitReady } from './sidecar.ts'
 import {
   claimUpdateCheck,
   resetUpdateStatusForTests,
@@ -236,6 +236,32 @@ describe('flattenPidTree', () => {
       return []
     }
     assert.deepEqual(flattenPidTree(1, childrenOf), [4, 2, 3, 1])
+  })
+})
+
+describe('waitReady', () => {
+  it('fails fast when the spawned sidecar exits before answering', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-waitready-'))
+    try {
+      // A process that exits immediately; the extra plan args land in argv.
+      const runtime = {
+        node: process.execPath,
+        argsPrefix: ['-e', 'process.exit(1)'],
+        cli: 'noop.js',
+        cwd: home,
+        pathPrepend: [] as string[],
+        oneNode: false,
+      }
+      spawnSidecar(runtime, home, 1, 'web')
+      const started = Date.now()
+      const ok = await waitReady(1)
+      assert.equal(ok, false)
+      // Fast-fail, not the 120s probe budget.
+      assert.ok(Date.now() - started < 30_000, `took ${String(Date.now() - started)}ms`)
+    } finally {
+      killSidecar()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
   })
 })
 
