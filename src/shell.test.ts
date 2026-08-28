@@ -16,7 +16,7 @@ import {
   selectAssembledRuntimeDir,
   sidecarEnv,
 } from './runtime.ts'
-import { planSidecarSpawn, sweepDecision } from './sidecar.ts'
+import { flattenPidTree, planSidecarSpawn, sweepDecision } from './sidecar.ts'
 import {
   claimUpdateCheck,
   resetUpdateStatusForTests,
@@ -198,37 +198,39 @@ describe('shouldRetainBackground', () => {
 
 describe('planSidecarSpawn', () => {
   const base = {
-    node: '/App/Oh My DSH.app/Contents/MacOS/Oh My DSH',
+    node: '/tmp/DSH Node.app/Contents/MacOS/DSH Node',
     argsPrefix: ['--import', 'tsx/esm'],
     cli: '/runtime/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js',
   }
 
-  it('wraps the macOS one-node sidecar in dsh-pgrp and does not setsid', () => {
-    const plan = planSidecarSpawn(
-      { ...base, dockGuard: { pgrpHelper: '/tmp/dsh-pgrp', hideDockJs: '', spawnGuardJs: '', hideDockLib: '' } },
-      4123,
-      'darwin',
-    )
-    assert.equal(plan.command, '/tmp/dsh-pgrp')
+  it('spawns the macOS sidecar as a child, not a session leader', () => {
+    const plan = planSidecarSpawn(base, 4123, 'darwin')
+    assert.equal(plan.command, base.node)
     assert.equal(plan.detached, false)
-    assert.deepEqual(plan.args, [base.node, ...base.argsPrefix, base.cli, 'web', '--port', '4123', '--no-open'])
+    assert.deepEqual(plan.args, [...base.argsPrefix, base.cli, 'web', '--port', '4123', '--no-open'])
   })
 
-  it('keeps a detached unix spawn when the dock guard is missing', () => {
-    const plan = planSidecarSpawn(base, 80, 'darwin')
+  it('keeps a detached unix spawn on Linux', () => {
+    const plan = planSidecarSpawn(base, 80, 'linux')
     assert.equal(plan.command, base.node)
     assert.equal(plan.detached, true)
-    assert.equal(plan.args[0], '--import')
   })
 
-  it('does not wrap Windows', () => {
-    const plan = planSidecarSpawn(
-      { ...base, dockGuard: { pgrpHelper: '/tmp/dsh-pgrp', hideDockJs: '', spawnGuardJs: '', hideDockLib: '' } },
-      80,
-      'win32',
-    )
+  it('does not detach on Windows', () => {
+    const plan = planSidecarSpawn(base, 80, 'win32')
     assert.equal(plan.command, base.node)
     assert.equal(plan.detached, false)
+  })
+})
+
+describe('flattenPidTree', () => {
+  it('emits descendants before the root', () => {
+    const childrenOf = (pid: number): number[] => {
+      if (pid === 1) return [2, 3]
+      if (pid === 2) return [4]
+      return []
+    }
+    assert.deepEqual(flattenPidTree(1, childrenOf), [4, 2, 3, 1])
   })
 })
 

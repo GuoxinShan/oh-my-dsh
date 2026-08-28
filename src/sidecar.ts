@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -64,20 +64,36 @@ export function unregisterSidecar(pid: number): void {
   if (kept.length !== entries.length) storeRegistry(registryFile, kept)
 }
 
+function childPids(pid: number): number[] {
+  try {
+    const text = execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
+    return text
+      .split(/\s+/)
+      .map((item) => Number(item))
+      .filter((item) => Number.isInteger(item) && item > 0)
+  } catch {
+    return []
+  }
+}
+
+/** Descendants first, then `root`, so SIGTERM/SIGKILL does not leave orphans. */
+export function flattenPidTree(root: number, childrenOf: (pid: number) => number[]): number[] {
+  const seen = new Set<number>()
+  const out: number[] = []
+  const walk = (pid: number): void => {
+    if (seen.has(pid)) return
+    seen.add(pid)
+    for (const child of childrenOf(pid)) walk(child)
+    out.push(pid)
+  }
+  walk(root)
+  return out
+}
+
 function sleep(ms: number): void {
   const until = Date.now() + ms
   while (Date.now() < until) {
     // busy wait is fine for the short TERM ladder ticks
-  }
-}
-
-function signalTarget(pid: number): number {
-  if (process.platform === 'win32') return pid
-  try {
-    process.kill(-pid, 0)
-    return -pid
-  } catch {
-    return pid
   }
 }
 
@@ -92,21 +108,27 @@ export function termThenKill(pid: number): void {
     spawn('taskkill', ['/F', '/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' })
     return
   }
-  const target = signalTarget(pid)
-  try {
-    process.kill(target, 'SIGTERM')
-  } catch {
-    return
+  // Sidecar is a normal child (same session as the GUI). kill(-pid) would
+  // hit the window's process group. Walk PPID instead.
+  const tree = flattenPidTree(pid, childPids)
+  for (const item of tree) {
+    try {
+      process.kill(item, 'SIGTERM')
+    } catch {
+      // gone
+    }
   }
   const deadline = Date.now() + TERM_GRACE_MS
   while (Date.now() < deadline) {
     if (psLstart(pid) === null) return
     sleep(LADDER_TICK_MS)
   }
-  try {
-    process.kill(target, 'SIGKILL')
-  } catch {
-    // already gone
+  for (const item of tree) {
+    try {
+      process.kill(item, 'SIGKILL')
+    } catch {
+      // gone
+    }
   }
 }
 
@@ -190,29 +212,20 @@ function timestamp(): string {
 }
 
 /**
- * Unix sidecar used to `spawn(..., { detached: true })` → libuv `setsid`.
- * That makes the one-node Electron binary a session leader of the GUI .app,
- * so Launch Services briefly puts a second Dock tile up until hide-dock
- * demotes it. Route through `dsh-pgrp` instead: same pid becomes a process
- * group leader without a new session, and `kill(-pid)` still holds.
+ * macOS one-node sidecar must not `setsid` the GUI .app binary — Launch
+ * Services would register a second Dock tile. Spawn the LSUIElement helper
+ * (`runtime.node` after `ensureSidecarNodeApp`) as a normal child.
  */
 export function planSidecarSpawn(
-  runtime: Pick<Runtime, 'node' | 'argsPrefix' | 'cli' | 'dockGuard'>,
+  runtime: Pick<Runtime, 'node' | 'argsPrefix' | 'cli'>,
   port: number,
   platform = process.platform,
 ): { command: string; args: string[]; detached: boolean } {
   const args = [...runtime.argsPrefix, runtime.cli, 'web', '--port', String(port), '--no-open']
-  if (platform === 'darwin' && runtime.dockGuard !== undefined) {
-    return {
-      command: runtime.dockGuard.pgrpHelper,
-      args: [runtime.node, ...args],
-      detached: false,
-    }
-  }
   return {
     command: runtime.node,
     args,
-    detached: platform !== 'win32',
+    detached: platform !== 'win32' && platform !== 'darwin',
   }
 }
 
@@ -250,7 +263,7 @@ export function spawnSidecar(runtime: Runtime, home: string, port: number): stri
   }
   sidecar = child
   console.log(
-    `dsh-desktop: sidecar ${runtime.oneNode ? 'one-node' : 'two-node'} pid=${String(child.pid)} node=${runtime.node} port=${String(port)} log=${logPath}`,
+    `dsh-desktop: sidecar ${runtime.oneNode ? 'one-node' : 'two-node'} pid=${String(child.pid)} node=${plan.command} port=${String(port)} log=${logPath}`,
   )
   child.on('error', (error) => {
     console.error(`dsh-desktop: sidecar error: ${error.message}`)
