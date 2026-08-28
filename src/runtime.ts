@@ -8,6 +8,7 @@ import {
   ensureDarwinDockGuard,
   type DarwinDockGuard,
 } from './darwin-dock-guard.ts'
+import { ensureSidecarNodeApp } from './sidecar-node-app.ts'
 import { extractBundleTar, readRevisionManifest } from './extract.ts'
 import { repoRoot, resourceDir, shellRoot, userHome } from './paths.ts'
 
@@ -155,10 +156,11 @@ export function bundledRuntime(
       throw new Error(`sidecar still resolved a second node at ${nodeBinary}`)
     }
     const dockGuard = ensureDarwinDockGuard(shimRoot)
-    const shim = ensureNodeShim(electronPath, shimRoot, dockGuard)
+    const node = ensureSidecarNodeApp(electronPath, shimRoot)
+    const shim = ensureNodeShim(node, shimRoot, dockGuard)
     neutralizeToolsNodeShims(dir)
     return {
-      node: electronPath,
+      node,
       argsPrefix: [...dockGuardImports(dockGuard), '--import', 'tsx/esm'],
       cli,
       cwd: path.join(dir, 'dsh'),
@@ -235,9 +237,10 @@ function sourceRuntime(electronPath: string): Runtime {
   const inElectron = typeof process.versions.electron === 'string' && process.versions.electron.length > 0
   if (inElectron) {
     const dockGuard = ensureDarwinDockGuard(shellRoot())
-    const shim = ensureNodeShim(electronPath, shellRoot(), dockGuard)
+    const node = ensureSidecarNodeApp(electronPath, shellRoot())
+    const shim = ensureNodeShim(node, shellRoot(), dockGuard)
     return {
-      node: electronPath,
+      node,
       argsPrefix: [...dockGuardImports(dockGuard), '--import', 'tsx/esm'],
       cli: path.join(checkout, 'apps/cli/src/bin.ts'),
       cwd: checkout,
