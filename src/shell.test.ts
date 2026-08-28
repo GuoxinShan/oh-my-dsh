@@ -16,7 +16,7 @@ import {
   selectAssembledRuntimeDir,
   sidecarEnv,
 } from './runtime.ts'
-import { sweepDecision } from './sidecar.ts'
+import { planSidecarSpawn, sweepDecision } from './sidecar.ts'
 import {
   claimUpdateCheck,
   resetUpdateStatusForTests,
@@ -193,6 +193,42 @@ describe('shouldRetainBackground', () => {
     assert.equal(shouldRetainBackground('darwin', true), false)
     assert.equal(shouldRetainBackground('win32', false), false)
     assert.equal(shouldRetainBackground('linux', false), false)
+  })
+})
+
+describe('planSidecarSpawn', () => {
+  const base = {
+    node: '/App/Oh My DSH.app/Contents/MacOS/Oh My DSH',
+    argsPrefix: ['--import', 'tsx/esm'],
+    cli: '/runtime/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js',
+  }
+
+  it('wraps the macOS one-node sidecar in dsh-pgrp and does not setsid', () => {
+    const plan = planSidecarSpawn(
+      { ...base, dockGuard: { pgrpHelper: '/tmp/dsh-pgrp', hideDockJs: '', spawnGuardJs: '', hideDockLib: '' } },
+      4123,
+      'darwin',
+    )
+    assert.equal(plan.command, '/tmp/dsh-pgrp')
+    assert.equal(plan.detached, false)
+    assert.deepEqual(plan.args, [base.node, ...base.argsPrefix, base.cli, 'web', '--port', '4123', '--no-open'])
+  })
+
+  it('keeps a detached unix spawn when the dock guard is missing', () => {
+    const plan = planSidecarSpawn(base, 80, 'darwin')
+    assert.equal(plan.command, base.node)
+    assert.equal(plan.detached, true)
+    assert.equal(plan.args[0], '--import')
+  })
+
+  it('does not wrap Windows', () => {
+    const plan = planSidecarSpawn(
+      { ...base, dockGuard: { pgrpHelper: '/tmp/dsh-pgrp', hideDockJs: '', spawnGuardJs: '', hideDockLib: '' } },
+      80,
+      'win32',
+    )
+    assert.equal(plan.command, base.node)
+    assert.equal(plan.detached, false)
   })
 })
 

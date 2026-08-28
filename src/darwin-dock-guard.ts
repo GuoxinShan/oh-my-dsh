@@ -29,11 +29,16 @@ static void dsh_hide_dock(void) {
 `
 
 const PGRP_C = `/* New process group without setsid(2). Session leaders of a GUI .app
- * are what Launch Services promotes to a generic "exec" Dock tile. */
+ * are what Launch Services promotes to a Dock tile — a second Oh My DSH
+ * icon, or a generic "exec" for this unbundled helper. Hide first, then
+ * exec so the policy rides on the same pid. */
+#include <ApplicationServices/ApplicationServices.h>
 #include <unistd.h>
 #include <stdlib.h>
 
 int main(int argc, char **argv) {
+  ProcessSerialNumber psn = { 0, kCurrentProcess };
+  (void)TransformProcessType(&psn, kProcessTransformToBackgroundApplication);
   if (argc < 2) return 127;
   if (setpgid(0, 0) != 0) return 126;
   execvp(argv[1], argv + 1);
@@ -229,7 +234,13 @@ export function ensureDarwinDockGuard(root: string): DarwinDockGuard | undefined
     hideDockLib,
     hideSrc,
   ])
-  const pgrpOk = compile(pgrpSrc, pgrpHelper, ['-o', pgrpHelper, pgrpSrc])
+  const pgrpOk = compile(pgrpSrc, pgrpHelper, [
+    '-framework',
+    'ApplicationServices',
+    '-o',
+    pgrpHelper,
+    pgrpSrc,
+  ])
   try {
     fs.unlinkSync(hideSrc)
     fs.unlinkSync(pgrpSrc)
