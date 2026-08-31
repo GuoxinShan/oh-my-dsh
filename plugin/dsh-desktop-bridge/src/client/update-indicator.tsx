@@ -8,6 +8,7 @@ import {
   Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import { UpdateLogo } from './update-logo.tsx'
 import { isElectronCutoverNotes, parseUpdateNotes } from './update-notes.ts'
 import {
   formatBytes, isUpdateBusy, isUpdateIndicatorVisible, notesFromStatus, statusFromCheck,
@@ -36,7 +37,7 @@ const UPDATE_CONTROL_CSS = [
   '.dsh-desktop-update-dialog{width:min(440px,100%);max-height:calc(100dvh - 48px);padding-bottom:0}',
   '[data-desktop-update-dialog-card]{display:flex;flex-direction:column;gap:16px;padding:22px 24px 20px;min-width:0}',
   '[data-desktop-update-dialog-head]{display:flex;align-items:center;gap:12px;min-width:0}',
-  '[data-desktop-update-dialog-icon]{flex:none;width:40px;height:40px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l);color:var(--dsw-alias-label-primary)}',
+  '[data-desktop-update-dialog-icon]{flex:none;width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center}',
   '[data-desktop-update-dialog-title]{margin:0;font-size:15px;line-height:22px;font-weight:600;color:var(--dsw-alias-label-primary)}',
   '[data-desktop-update-dialog-description]{margin:0;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-secondary,var(--dsw-alias-label-primary))}',
   '[data-desktop-update-progress-block]{display:flex;flex-direction:column;gap:8px}',
@@ -277,11 +278,9 @@ export function UpdateControl(props: UpdateIndicatorProps): ReactElement | null 
       : status.phase === 'failed'
         ? t('update.dialog.failed')
         : t('update.installing')
-  const dialogIcon = status.phase === 'ready'
-    ? <IconCheckOutline16 size={20} />
-    : busy || installing
-      ? <span data-desktop-update-spinner=""><IconLoadingOutline16 size={20} /></span>
-      : <IconDownloadOutline16 size={20} />
+  // The dialog header shows the static app logo in every phase; live progress
+  // belongs to the bar and the byte counter, not a spinning icon.
+  const dialogIcon = <UpdateLogo />
   const bytesLabel = status.phase === 'downloading'
     ? status.total === undefined
       ? formatBytes(status.downloaded)

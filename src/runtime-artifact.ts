@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -130,6 +130,121 @@ export function downloadRuntimeTarball(input: {
       }
       return input.dest
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      errors.push(`${url}: ${message}`)
+    }
+  }
+  throw new Error(`could not download runtime ${input.sha}: ${errors.join('; ')}`)
+}
+
+/**
+ * Read the new bundle's runtime-revision.json out of a downloaded update zip
+ * (one small entry, so a synchronous unzip is fine). Slim zips carry no
+ * runtime.tar.gz but always carry this manifest.
+ */
+export function readBundledRevisionFromZip(zipPath: string): { sha?: string; runtimeTarball?: string } | undefined {
+  const result = spawnSync('unzip', ['-p', zipPath, '*/Contents/Resources/runtime-revision.json'], {
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+    windowsHide: true,
+  })
+  if (result.status !== 0 || typeof result.stdout !== 'string' || result.stdout.trim() === '') return undefined
+  try {
+    return JSON.parse(result.stdout) as { sha?: string; runtimeTarball?: string }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Async variant of downloadUrlToFile for the windowed pre-stage phase: the
+ * sync spawnSync would freeze the whole app while a 371MB runtime downloads.
+ * `onBytes` reports the growing .part size; `signal` kills the child (cancel).
+ */
+export function downloadUrlToFileAsync(
+  url: string,
+  dest: string,
+  onBytes?: (bytes: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  const tmp = `${dest}.part`
+  fs.rmSync(tmp, { force: true })
+  return new Promise((resolve, reject) => {
+    const child = spawn('curl', ['-fL', '--retry', '2', '--connect-timeout', '30', '-o', tmp, url], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    const reporter = onBytes === undefined
+      ? undefined
+      : setInterval(() => {
+          try {
+            onBytes(fs.statSync(tmp).size)
+          } catch {
+            // tmp is not created until curl opens it
+          }
+        }, 200)
+    const onAbort = (): void => { child.kill('SIGTERM') }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    const finish = (error?: Error): void => {
+      if (reporter !== undefined) clearInterval(reporter)
+      signal?.removeEventListener('abort', onAbort)
+      if (error !== undefined) {
+        fs.rmSync(tmp, { force: true })
+        reject(error)
+        return
+      }
+      try {
+        fs.renameSync(tmp, dest)
+        resolve()
+      } catch (renameError) {
+        reject(renameError instanceof Error ? renameError : new Error(String(renameError)))
+      }
+    }
+    child.on('error', (error) => { finish(error) })
+    child.on('close', (code, killSignal) => {
+      if (code === 0) {
+        finish()
+        return
+      }
+      const reason = killSignal !== null ? `killed by ${killSignal}` : `exit ${String(code)}`
+      finish(new Error(`download failed (${reason}): ${url}`))
+    })
+  })
+}
+
+/** Async sibling of downloadRuntimeTarball; same candidates, cache, and verification. */
+export async function downloadRuntimeTarballAsync(input: {
+  sha: string
+  expectedSha256: string
+  version: string
+  dest: string
+  env?: NodeJS.ProcessEnv
+  onBytes?: (bytes: number) => void
+  signal?: AbortSignal
+}): Promise<string> {
+  if (fs.existsSync(input.dest) && sha256File(input.dest) === input.expectedSha256) return input.dest
+  const mirror = readUpdateMirror(input.env)
+  const urls = runtimeDownloadUrls({ sha: input.sha, version: input.version }).flatMap((url) => withMirrorFallback(url, mirror))
+  const seen = new Set<string>()
+  const errors: string[] = []
+  // Read through a function: abort flips between the loop check and the catch.
+  const isAborted = (): boolean => input.signal?.aborted === true
+  for (const url of urls) {
+    if (seen.has(url)) continue
+    seen.add(url)
+    if (isAborted()) throw new Error('runtime pre-stage cancelled')
+    try {
+      console.log(`dsh-desktop: pre-staging runtime ${input.sha.slice(0, 12)} from ${url}`)
+      await downloadUrlToFileAsync(url, input.dest, input.onBytes, input.signal)
+      const got = sha256File(input.dest)
+      if (got !== input.expectedSha256) {
+        fs.rmSync(input.dest, { force: true })
+        throw new Error(`sha256 mismatch: got ${got}, expected ${input.expectedSha256}`)
+      }
+      return input.dest
+    } catch (error) {
+      if (isAborted()) throw new Error('runtime pre-stage cancelled')
       const message = error instanceof Error ? error.message : String(error)
       errors.push(`${url}: ${message}`)
     }

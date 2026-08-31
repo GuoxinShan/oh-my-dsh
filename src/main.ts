@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, autoUpdater as nativeAutoUpdater } from 'electron'
 
 import { bootSequence } from './boot.ts'
 import { APP_ID, PRODUCT_NAME } from './constants.ts'
@@ -26,6 +26,13 @@ if (!gotLock) {
   app.on('before-quit', () => {
     setAppQuitting(true)
     killSidecar()
+  })
+  // electron-updater's quitAndInstall closes every window BEFORE app emits
+  // before-quit; the keep-alive close veto would otherwise veto those closes
+  // and ShipIt would wait for a termination that never happens (the 2026-08-31
+  // restart failure). Lift the veto as soon as the update quit sequence starts.
+  nativeAutoUpdater.on('before-quit-for-update', () => {
+    setAppQuitting(true)
   })
   app.on('window-all-closed', () => {
     if (shouldRetainBackground(process.platform, false)) return

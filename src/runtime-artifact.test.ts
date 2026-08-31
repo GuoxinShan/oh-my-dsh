@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, it } from 'node:test'
+import { spawnSync } from 'node:child_process'
 
 import { releaseRuntimeDir } from './runtime.ts'
 import {
@@ -10,6 +11,7 @@ import {
   latestMacYml,
   patchUpdaterYml,
   runtimeArtifactName,
+  readBundledRevisionFromZip,
   runtimeDownloadUrls,
   stripRuntimeResources,
 } from './runtime-artifact.ts'
@@ -138,6 +140,41 @@ describe('releaseRuntimeDir cache hit', () => {
       else Object.defineProperty(process, 'resourcesPath', previousResources)
       fs.rmSync(home, { recursive: true, force: true })
       fs.rmSync(appRoot, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('readBundledRevisionFromZip', () => {
+  it('returns undefined for a missing zip or a non-zip file', () => {
+    assert.equal(readBundledRevisionFromZip('/nonexistent/update.zip'), undefined)
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-rev-'))
+    try {
+      const notZip = path.join(dir, 'update.zip')
+      fs.writeFileSync(notZip, 'definitely not a zip')
+      assert.equal(readBundledRevisionFromZip(notZip), undefined)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('reads runtime-revision.json out of an app zip', (t) => {
+    const zip = spawnSync('zip', ['--version'], { stdio: 'ignore' })
+    if (zip.status !== 0) {
+      t.skip('zip binary unavailable')
+      return
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-rev-'))
+    try {
+      const entry = path.join(dir, 'Oh My DSH.app', 'Contents', 'Resources')
+      fs.mkdirSync(entry, { recursive: true })
+      const revision = { sha: 'abc123', runtimeTarball: 'def456' }
+      fs.writeFileSync(path.join(entry, 'runtime-revision.json'), JSON.stringify(revision))
+      const zipPath = path.join(dir, 'update.zip')
+      const packed = spawnSync('zip', ['-q', '-r', zipPath, 'Oh My DSH.app'], { cwd: dir, stdio: 'ignore' })
+      assert.equal(packed.status, 0)
+      assert.deepEqual(readBundledRevisionFromZip(zipPath), revision)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
     }
   })
 })

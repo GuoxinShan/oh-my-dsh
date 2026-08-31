@@ -5,6 +5,11 @@ import path from 'node:path'
 
 import { shellRoot } from './paths.ts'
 import {
+  downloadRuntimeTarballAsync,
+  readBundledRevisionFromZip,
+  runtimeArtifactName,
+} from './runtime-artifact.ts'
+import {
   electronProxyRules,
   readProxyUrl,
   readUpdateMirror,
@@ -102,6 +107,8 @@ type UpdateCancellation = NonNullable<
 
 /** The token of the in-flight download; cancelUpdate() cancels exactly this. */
 let activeCancellation: UpdateCancellation | undefined
+/** The mac runtime pre-stage child; cancelUpdate() aborts it. */
+let activePrestage: AbortController | undefined
 /** Cancel arriving while downloadUpdate is still in its pre-download check. */
 let cancelRequested = false
 /** Notes survive status phases that omit the field (cancel restores available). */
@@ -187,7 +194,29 @@ export async function downloadUpdate(): Promise<void> {
         ...(progress.total > 0 ? { total: progress.total } : {}),
       })
     })
-    await updater.downloadUpdate(token)
+    // The zip path is needed for the mac runtime pre-stage below.
+    let downloadedFile: string | undefined
+    const onDownloaded = (event: { downloadedFile?: unknown }): void => {
+      downloadedFile = typeof event.downloadedFile === 'string' ? event.downloadedFile : undefined
+    }
+    updater.once('update-downloaded', onDownloaded)
+    try {
+      await updater.downloadUpdate(token)
+    } finally {
+      updater.removeListener('update-downloaded', onDownloaded)
+    }
+    // Slim mac zips carry no runtime.tar.gz: pre-stage the new runtime while
+    // the user is still on the working app. Otherwise the post-restart boot
+    // stalls on an invisible ~370MB download (the 2026-08-31 restart failure's
+    // second half). ready means every payload is local.
+    if (process.platform === 'darwin' && downloadedFile !== undefined) {
+      setUpdateStatus({ phase: 'downloading', version: info.version, downloaded: 0 })
+      await prestageRuntime(downloadedFile, info.version)
+    }
+    if (cancelRequested) {
+      setUpdateStatus({ phase: 'available', version: info.version, notes: lastUpdateNotes })
+      return
+    }
     setUpdateStatus({ phase: 'ready', version: info.version, notes: notesOf(info) })
   } catch (error) {
     // A user cancel is not a failure: restore the downloadable state.
@@ -210,6 +239,46 @@ export async function downloadUpdate(): Promise<void> {
 }
 
 /**
+ * Pre-stage the slim zip's runtime tarball into the shellRoot cache so the
+ * post-restart boot extracts a local tar. Cache hits (extracted .ok or an
+ * already fetched tarball) make this a no-op. Fail loud: a runtime that
+ * cannot be fetched now would also fail at boot, and failing here keeps the
+ * user on the working app with a retryable error.
+ */
+async function prestageRuntime(zipPath: string, version: string): Promise<void> {
+  const revision = readBundledRevisionFromZip(zipPath)
+  const sha = typeof revision?.sha === 'string' ? revision.sha : ''
+  const expected = typeof revision?.runtimeTarball === 'string' ? revision.runtimeTarball : ''
+  if (sha === '' || expected === '') {
+    writeUpdaterLog('warn', [`runtime pre-stage skipped: no runtime-revision.json in ${zipPath}`])
+    return
+  }
+  const okFile = path.join(shellRoot(), 'runtime', sha, '.ok')
+  if (fs.existsSync(okFile) && fs.readFileSync(okFile, 'utf8').trim() === expected) {
+    writeUpdaterLog('info', [`runtime ${sha.slice(0, 12)} already extracted; pre-stage skipped`])
+    return
+  }
+  const controller = new AbortController()
+  activePrestage = controller
+  try {
+    await downloadRuntimeTarballAsync({
+      sha,
+      expectedSha256: expected,
+      version,
+      dest: path.join(shellRoot(), 'runtime-tarballs', runtimeArtifactName(sha)),
+      signal: controller.signal,
+      onBytes: (bytes) => {
+        if (!controller.signal.aborted) {
+          setUpdateStatus({ phase: 'downloading', version, downloaded: bytes })
+        }
+      },
+    })
+  } finally {
+    if (activePrestage === controller) activePrestage = undefined
+  }
+}
+
+/**
  * Cancel an in-flight preparing/downloading run. The status returns to
  * `available` (version and notes retained) once the download unwinds, and the
  * pending download_update call resolves instead of failing. Idempotent: any
@@ -220,6 +289,7 @@ export function cancelUpdate(): void {
   if (snapshot.phase !== 'preparing' && snapshot.phase !== 'downloading') return
   cancelRequested = true
   activeCancellation?.cancel()
+  activePrestage?.abort()
 }
 
 export function installUpdate(): never {
