@@ -8,14 +8,17 @@
 
 /** The rail appears only once the conversation is worth navigating. */
 export const MIN_QUESTIONS = 6
+/** The rail shows at most this many questions — the most recent ones. */
+export const RAIL_MAX_QUESTIONS = 10
 /** Collapsed rail height cap; the rail is vertically centered in the scroll body. */
 export const RAIL_MAX_HEIGHT = 220
 /** Horizontal inset from the scroll body's left edge. */
 export const RAIL_INSET_X = 6
-/** Auto-load safety cap: pages of history the rail's background pager pulls
- *  before giving up (guards pathological megalog sessions; the transcript
- *  pages 50 messages per loadOlder call). */
-export const MAX_AUTO_LOAD_PAGES = 40
+/** Fill-page safety cap: history pages the rail's background pager pulls to
+ *  collect RAIL_MAX_QUESTIONS questions before giving up (bounded fill — the
+ *  transcript keeps its native lazy rhythm; 0.2.0's full-history pull was
+ *  rolled back on review). */
+export const MAX_FILL_PAGES = 10
 
 /** Structural slice of one content block (text-bearing or not). */
 export interface ContentBlockLike {
@@ -27,6 +30,8 @@ export interface ContentBlockLike {
 export interface ChatNodeLike {
   readonly kind?: unknown
   readonly key: string
+  /** Sortable render position (event-seq axis); the transcript orders by this. */
+  readonly anchorSeq?: unknown
   readonly data?: unknown
 }
 
@@ -73,13 +78,17 @@ export function questionText(content: unknown): string {
  * nodes plus mid-turn `steering` admissions), in flow order.
  * @param session - the dispatched ConversationSnapshot share (structural).
  * @param t - locale seat for the attachment-only fallback text.
- * @returns one rail row per user/steering node.
+ * @returns one rail row per user/steering node, in conversation order
+ *   (oldest first). `nodes.values()` is INSERTION order — prepended history
+ *   pages land after the tail page, so without this sort the rail reads
+ *   newest-block-first once older history loads; the transcript itself uses
+ *   anchorSeq ordering (`orderedVisible`), which is the order mirrored here.
  */
 export function collectQuestions(session: SessionLike | null | undefined, t: RailTranslate): RailQuestion[] {
   const chat = session?.chat
   const nodes = chat?.nodes
   if (nodes === undefined || typeof nodes.values !== 'function') return []
-  const questions: RailQuestion[] = []
+  const questions: { question: RailQuestion; seq: number }[] = []
   for (const node of nodes.values()) {
     if (node === null || typeof node !== 'object') continue
     if (node.kind !== 'user' && node.kind !== 'steering') continue
@@ -91,14 +100,25 @@ export function collectQuestions(session: SessionLike | null | undefined, t: Rai
     const rawTime = data !== null && typeof data === 'object'
       ? (data as { readonly time?: unknown }).time
       : undefined
+    const rawSeq = data !== null && typeof data === 'object'
+      ? (data as { readonly seq?: unknown }).seq
+      : undefined
     const text = questionText(content)
     questions.push({
-      key: node.key,
-      text: text === '' ? t('message.nonText') : text,
-      time: typeof rawTime === 'number' ? rawTime : 0,
+      question: {
+        key: node.key,
+        text: text === '' ? t('message.nonText') : text,
+        time: typeof rawTime === 'number' ? rawTime : 0,
+      },
+      // Ordering key: the node's anchorSeq (event-seq axis, same order the
+      // transcript renders); fall back to the message's own seq, then time.
+      seq: typeof node.anchorSeq === 'number'
+        ? node.anchorSeq
+        : typeof rawSeq === 'number' ? rawSeq : typeof rawTime === 'number' ? rawTime : 0,
     })
   }
-  return questions
+  questions.sort((left, right) => left.seq - right.seq || left.question.key.localeCompare(right.question.key))
+  return questions.map(entry => entry.question)
 }
 
 /**
@@ -158,43 +178,53 @@ export function sameRailGeometry(a: RailGeometry | null, b: RailGeometry | null)
   return a.left === b.left && a.top === b.top && a.height === b.height
 }
 
-/** Structural slice of the session snapshot the auto-load decision reads. */
+/** Structural slice of the session snapshot the fill decision reads. */
 export interface RailSessionSnapshot {
   readonly openState?: unknown
   readonly hasMore?: unknown
 }
 
 /** Structural slice of the outward session face (ISession verb + snapshot
- *  source) the rail's background pager consumes. */
+ *  source) the rail's background fill loop and click-to-jump path consume. */
 export interface RailSessionFace {
-  getSnapshot(): RailSessionSnapshot
+  getSnapshot(): RailSessionSnapshot & SessionLike
   loadOlder(): Promise<void>
 }
 
-/** What the background pager should do on this tick. */
-export type AutoLoadAction = 'wait-open' | 'load' | 'stop'
-
-/**
- * Decide the background pager's next move. The transcript is windowed; the
- * rail wants the FULL question list up front, so it pages history in the
- * background — the stock prepend anchoring keeps the reader's position
- * stable while pages land. 'wait-open' covers the race where the rail mounts
- * before the session window finished opening.
- * @param snapshot - the session's current snapshot slice.
- * @param pagesLoaded - pages this loop has already pulled.
- * @returns the next action; 'stop' once fully loaded or the safety cap hit.
- */
-export function autoLoadDecision(
-  snapshot: RailSessionSnapshot,
-  pagesLoaded: number,
-): AutoLoadAction {
-  if (snapshot.openState !== 'open') return pagesLoaded === 0 ? 'wait-open' : 'stop'
-  if (snapshot.hasMore !== true) return 'stop'
-  return pagesLoaded >= MAX_AUTO_LOAD_PAGES ? 'stop' : 'load'
+/** Count the user's own messages currently inside the window. */
+export function countQuestions(session: SessionLike | null | undefined): number {
+  const nodes = session?.chat?.nodes
+  if (nodes === undefined || typeof nodes.values !== 'function') return 0
+  let count = 0
+  for (const node of nodes.values()) {
+    if (node !== null && typeof node === 'object'
+      && (node.kind === 'user' || node.kind === 'steering')) count += 1
+  }
+  return count
 }
 
-/** Whether the pager gave up at the safety cap with history still outside
- *  the window (panel header advertises this honestly). */
-export function autoLoadCapped(snapshot: RailSessionSnapshot, pagesLoaded: number): boolean {
-  return pagesLoaded >= MAX_AUTO_LOAD_PAGES && snapshot.hasMore === true
+/** What the background fill loop should do on this tick. */
+export type FillAction = 'wait-open' | 'load' | 'stop'
+
+/**
+ * Decide the fill loop's next move. The rail shows the most recent
+ * RAIL_MAX_QUESTIONS questions; the transcript keeps its native lazy rhythm,
+ * so the loop only pages history when the CURRENT window holds fewer
+ * questions than the rail wants (a sparse tail window). 'wait-open' covers
+ * the race where the rail mounts before the session window finished opening.
+ * @param snapshot - the session's current snapshot slice.
+ * @param questionCount - questions currently inside the window.
+ * @param pagesLoaded - pages this loop has already pulled.
+ * @returns the next action; 'stop' once the rail is full, history runs out,
+ *   or the fill cap is hit.
+ */
+export function fillDecision(
+  snapshot: RailSessionSnapshot,
+  questionCount: number,
+  pagesLoaded: number,
+): FillAction {
+  if (snapshot.openState !== 'open') return pagesLoaded === 0 ? 'wait-open' : 'stop'
+  if (snapshot.hasMore !== true) return 'stop'
+  if (questionCount >= RAIL_MAX_QUESTIONS) return 'stop'
+  return pagesLoaded >= MAX_FILL_PAGES ? 'stop' : 'load'
 }

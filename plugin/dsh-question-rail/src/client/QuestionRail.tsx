@@ -10,7 +10,8 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { QuestionRailKey } from './locales.ts'
 import {
-  autoLoadCapped, autoLoadDecision, collectQuestions, railGeometry, railVisible, sameRailGeometry,
+  MAX_FILL_PAGES, RAIL_MAX_QUESTIONS, collectQuestions, countQuestions, fillDecision,
+  railGeometry, railVisible, sameRailGeometry,
   type RailGeometry, type RailQuestion, type RailSessionFace, type SessionLike,
 } from './facts.ts'
 
@@ -84,19 +85,22 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
   const { session, sessionId, timers, resolveFace, t } = props
   const [hover, setHover] = useState(false)
   const [geometry, setGeometry] = useState<RailGeometry | null>(null)
-  const [capped, setCapped] = useState(false)
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
-  const questions: readonly RailQuestion[] = collectQuestions(session, key => t === undefined ? '[图片或附件]' : t(key))
-  const visible = railVisible(questions.length)
+  // Chronological questions inside the current window; the rail shows only
+  // the most recent RAIL_MAX_QUESTIONS (user direction 0.3.0: recent-10
+  // window, native lazy rhythm kept).
+  const allQuestions: readonly RailQuestion[] = collectQuestions(session, key => t === undefined ? '[图片或附件]' : t(key))
+  const questions = allQuestions.slice(-RAIL_MAX_QUESTIONS)
+  const visible = railVisible(allQuestions.length)
 
-  // Background pager (0.2.0): the transcript window is paged, but the rail's
-  // contract is "every question I asked". Page older history through the
-  // sanctioned SessionFace.loadOlder verb until the window covers the whole
-  // log (or the safety cap stops the loop); each landed page re-renders the
-  // dock share, so ticks fill in progressively. Stock prepend anchoring keeps
-  // the reader's scroll position stable while pages arrive.
+  // Bounded background fill (0.3.0): the transcript keeps its native lazy
+  // paging; the rail only pulls older pages while the CURRENT window holds
+  // fewer questions than the rail wants (sparse tail page), never draining
+  // history. Each landed page re-renders the dock share, so the latest-10
+  // window fills in progressively; stock prepend anchoring keeps the
+  // reader's scroll position stable.
   useEffect(() => {
     if (timers === undefined || resolveFace === undefined || sessionId === undefined) return undefined
     let cancelled = false
@@ -105,11 +109,9 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
       const face = resolveFace(sessionId)
       if (face === undefined) return
       while (!cancelled) {
-        const action = autoLoadDecision(face.getSnapshot(), pages)
-        if (action === 'stop') {
-          if (!cancelled) setCapped(autoLoadCapped(face.getSnapshot(), pages))
-          return
-        }
+        const snapshot = face.getSnapshot()
+        const action = fillDecision(snapshot, countQuestions(snapshot), pages)
+        if (action === 'stop') return
         if (action === 'wait-open') {
           await new Promise<void>(resume => { timers.timeout(resume, WAIT_OPEN_MS) })
           continue
@@ -142,15 +144,30 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
     if (hover && list !== null) list.scrollTop = list.scrollHeight
   }, [hover])
 
-  const jump = (key: string) => {
+  const jump = async (key: string) => {
     const body = findScrollBody()
     if (body === null) return
-    const row = findRow(body, key)
+    let row = findRow(body, key)
+    // Ensure-loaded guarantee: a shown question is normally in-window by
+    // construction, but if its row is missing (e.g. a render race right after
+    // a page landed), page history until it mounts, then scroll — clicking a
+    // tick always lands on its message.
+    if (row === null && timers !== undefined && resolveFace !== undefined && sessionId !== undefined) {
+      const face = resolveFace(sessionId)
+      for (let page = 0; face !== undefined && row === null && page < MAX_FILL_PAGES; page++) {
+        const snapshot = face.getSnapshot()
+        if (snapshot.openState !== 'open' || snapshot.hasMore !== true) break
+        await face.loadOlder()
+        row = findRow(body, key)
+      }
+    }
     if (row === null) return
     row.scrollIntoView({ behavior: 'smooth', block: 'start' })
     row.classList.add('dsh-qr-flash')
-    timers?.timeout(() => { row.classList.remove('dsh-qr-flash') }, FLASH_MS)
+    timers?.timeout(() => { row?.classList.remove('dsh-qr-flash') }, FLASH_MS)
   }
+
+  const onJump = (key: string) => { void jump(key) }
 
   const ariaLabel = t === undefined ? '我的问题刻度尺' : t('rail.ariaLabel')
   return (
@@ -170,7 +187,7 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
                 key={q.key}
                 className="dsh-qr-tick"
                 style={{ top: (((i + 0.5) / questions.length) * 100) + '%' }}
-                onClick={() => { jump(q.key) }}
+                onClick={() => { onJump(q.key) }}
               />
             ))}
           </div>
@@ -178,8 +195,6 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
             <div className="dsh-qr-panel">
               <div className="dsh-qr-header">
                 {t === undefined ? '我的问题（' + questions.length + '）' : t('panel.header', { count: questions.length })}
-                {capped && t !== undefined ? ' · ' + t('panel.cappedSuffix') : ''}
-                {capped && t === undefined ? ' · 更早的未载入' : ''}
               </div>
               <div className="dsh-qr-sep" />
               <div className="dsh-qr-list" ref={listRef}>
@@ -188,7 +203,7 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
                     key={q.key}
                     type="button"
                     className="dsh-qr-item"
-                    onClick={() => { jump(q.key) }}
+                    onClick={() => { onJump(q.key) }}
                   >
                     <span className="dsh-qr-text">{q.text}</span>
                     <span className="dsh-qr-time">{formatTime(q.time)}</span>

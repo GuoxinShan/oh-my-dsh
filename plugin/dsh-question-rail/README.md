@@ -29,11 +29,14 @@ harness `PLATFORM_MODULES` baseline when it moves.
   `scrollIntoView` 平滑滚动 + 1.6s 高亮闪烁。
 - 几何：120ms 轮询只校准锚点与滚动体的边距差（一次 `getBoundingClientRect`，
   未变化不 setState）；大位移由布局流承担。
-- 历史全量（0.2.0 起）：聊天视图是窗口化分页的（每页 50 条），但刻度尺的契约是
-  「我问过的全部问题」——挂载后经公开 `SessionFace.loadOlder()` 在后台逐页载入
-  历史直到 `hasMore=false`，刻度随每页落地渐进补齐；stock 的 prepend 锚定保证
-  阅读位置不跳。安全上限 `MAX_AUTO_LOAD_PAGES = 40`（2000 条消息），到顶后面板
-  标题追加「更早的未载入」。会话切换/卸载即取消循环。
+- 顺序：按节点 `anchorSeq` 排成时间正序（`chat.nodes.values()` 是插入序，
+  补历史页会追加在尾部，不排序就会读成倒序——0.2.0 实踩）。
+- 最近 10 条窗口（0.3.0 起）：刻度尺只展示**最近的 10 条提问**
+  （`RAIL_MAX_QUESTIONS`），正文保持原生懒加载节奏——仅当当前窗口里提问不足
+  10 条且还有更早历史时，后台才经公开 `SessionFace.loadOlder()` 补页
+  （`fillDecision`，上限 `MAX_FILL_PAGES = 10`），凑够即停；点击刻度/条目时若
+  目标消息行恰好不在 DOM（补页竞态），会继续懒加载到目标出现再平滑跳转
+  + 1.6s 高亮。（0.2.0 的「全量载入」经评审回滚，见决策记录。）
 
 ## Config
 

@@ -73,8 +73,8 @@ if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffort
   throw new Error(`desktop requires dsh-model-efforts-editor 0.1.0, found ${modelEffortsEditorPackage.name}@${modelEffortsEditorPackage.version}`)
 }
 const questionRailPackage = JSON.parse(readFileSync(resolve(questionRailDir, 'package.json'), 'utf8'))
-if (questionRailPackage.name !== 'dsh-question-rail' || questionRailPackage.version !== '0.2.0') {
-  throw new Error(`desktop requires dsh-question-rail 0.2.0, found ${questionRailPackage.name}@${questionRailPackage.version}`)
+if (questionRailPackage.name !== 'dsh-question-rail' || questionRailPackage.version !== '0.3.0') {
+  throw new Error(`desktop requires dsh-question-rail 0.3.0, found ${questionRailPackage.name}@${questionRailPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {

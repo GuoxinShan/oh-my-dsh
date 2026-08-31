@@ -79,3 +79,19 @@
 正文历史被完整载入，「加载更多」按钮随之消失（内容已全部就位，往上滑即纯滚动）
 ——经用户确认为可接受。inject 增加 `sessions`；`wait-open` 分支处理 rail 先于
 窗口打开挂载的竞态（250ms 重试，effect 取消即停）。
+
+## 0.3.0：回滚全量载入，改「最近 10 条 + 有界填充 + 点击保底」
+
+**评审反转**：0.2.0 上线后用户实测给出两条裁决——
+1. **顺序 bug**：`chat.nodes.values()` 是 Map 插入序；loadOlder 每补一页老历史就
+   追加在尾部，问题数组读成「新块在前、老块在后」。转写没事是因为 ChatView 用
+   `orderedVisible` 按 `anchorSeq` 排序——刻度尺必须同样排（0.3.0 起
+   `collectQuestions` 按 anchorSeq 时间序输出，回归测试钉住）。
+2. **载入策略**：不要全量拉历史。刻度尺只展示**最近 10 条**提问
+   （`RAIL_MAX_QUESTIONS = 10`），正文懒加载保持原生节奏；仅当当前窗口不足
+   10 条且还有更早历史时才后台补页（`fillDecision`，上限 `MAX_FILL_PAGES = 10`
+   即 500 条消息，凑够即停）；点击刻度/条目时若目标行恰好不在 DOM（补页竞态），
+   继续懒加载到目标出现再跳转高亮——「点击即达」是硬保证。
+
+`autoLoadDecision`/`autoLoadCapped`/`MAX_AUTO_LOAD_PAGES` 与 capped 标题后缀
+随之移除；`SessionFace.loadOlder()` 仍是唯一（且充分的）分页入口。

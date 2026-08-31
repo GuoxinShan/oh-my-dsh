@@ -3,8 +3,9 @@ import { test } from 'node:test'
 import { apply } from '../src/index.ts'
 import { apply as clientApply, inject } from '../src/client/index.ts'
 import {
-  MAX_AUTO_LOAD_PAGES, MIN_QUESTIONS, RAIL_MAX_HEIGHT, autoLoadCapped, autoLoadDecision,
-  collectQuestions, questionText, railGeometry, railVisible, sameRailGeometry, type ChatNodeLike,
+  MAX_FILL_PAGES, MIN_QUESTIONS, RAIL_MAX_HEIGHT, RAIL_MAX_QUESTIONS,
+  collectQuestions, countQuestions, fillDecision, questionText,
+  railGeometry, railVisible, sameRailGeometry, type ChatNodeLike,
 } from '../src/client/facts.ts'
 import { installQuestionRailCss, questionRailCss, type InstalledStyle } from '../src/client/stylesheet.ts'
 
@@ -47,6 +48,19 @@ test('collectQuestions keeps user and steering nodes in order, skips the rest', 
   ]), key => key)
   assert.deepEqual(questions.map(q => q.key), ['u1', 's1'])
   assert.deepEqual(questions.map(q => q.time), [100, 300])
+})
+
+test('collectQuestions sorts chronologically even when the store is insertion-ordered', () => {
+  // values() is Map insertion order: the tail page lands first, and every
+  // loadOlder prepend appends OLDER pages after it. The rail must mirror the
+  // transcript's anchorSeq order regardless (regression: ticks read reversed
+  // once history pages in).
+  const questions = collectQuestions(sessionOf([
+    { kind: 'user', key: 'new', anchorSeq: 30, data: { content: [{ type: 'text', text: '新' }], time: 300, seq: 30 } },
+    { kind: 'user', key: 'mid', anchorSeq: 20, data: { content: [{ type: 'text', text: '中' }], time: 200, seq: 20 } },
+    { kind: 'user', key: 'old', anchorSeq: 10, data: { content: [{ type: 'text', text: '老' }], time: 100, seq: 10 } },
+  ]), key => key)
+  assert.deepEqual(questions.map(q => q.key), ['old', 'mid', 'new'])
 })
 
 test('collectQuestions falls back for attachment-only messages and tolerates missing chat', () => {
@@ -115,18 +129,25 @@ test('stylesheet keeps the overflow guard that clips the expanded card', () => {
   assert.match(css, /overscroll-behavior: contain/)
 })
 
-test('autoLoadDecision waits for the window to open, then pages until history runs out', () => {
-  assert.equal(autoLoadDecision({ openState: 'loading', hasMore: true }, 0), 'wait-open')
-  assert.equal(autoLoadDecision({ openState: 'cold', hasMore: true }, 0), 'wait-open')
+test('fillDecision pages only until the rail has RAIL_MAX_QUESTIONS, never draining history', () => {
+  assert.equal(fillDecision({ openState: 'loading', hasMore: true }, 0, 0), 'wait-open')
+  assert.equal(fillDecision({ openState: 'cold', hasMore: true }, 0, 0), 'wait-open')
   // A mid-loop loss of 'open' (resync) stops instead of waiting forever.
-  assert.equal(autoLoadDecision({ openState: 'loading', hasMore: true }, 2), 'stop')
-  assert.equal(autoLoadDecision({ openState: 'open', hasMore: true }, 0), 'load')
-  assert.equal(autoLoadDecision({ openState: 'open', hasMore: false }, 0), 'stop')
-  assert.equal(autoLoadDecision({ openState: 'open', hasMore: true }, MAX_AUTO_LOAD_PAGES), 'stop')
+  assert.equal(fillDecision({ openState: 'loading', hasMore: true }, 3, 2), 'stop')
+  // Sparse window: keep paging while the rail is short and history remains.
+  assert.equal(fillDecision({ openState: 'open', hasMore: true }, 3, 0), 'load')
+  // Full rail: stop even though older history exists (native lazy rhythm).
+  assert.equal(fillDecision({ openState: 'open', hasMore: true }, RAIL_MAX_QUESTIONS, 0), 'stop')
+  assert.equal(fillDecision({ openState: 'open', hasMore: false }, 3, 0), 'stop')
+  assert.equal(fillDecision({ openState: 'open', hasMore: true }, 3, MAX_FILL_PAGES), 'stop')
 })
 
-test('autoLoadCapped reports only a capped loop with history still outside', () => {
-  assert.equal(autoLoadCapped({ openState: 'open', hasMore: true }, MAX_AUTO_LOAD_PAGES), true)
-  assert.equal(autoLoadCapped({ openState: 'open', hasMore: false }, MAX_AUTO_LOAD_PAGES), false)
-  assert.equal(autoLoadCapped({ openState: 'open', hasMore: true }, 3), false)
+test('countQuestions counts only user/steering nodes in the window', () => {
+  assert.equal(countQuestions(sessionOf([
+    node('user', 'u1', [], 1),
+    node('assistant', 'a1', [], 2),
+    node('steering', 's1', [], 3),
+  ])), 2)
+  assert.equal(countQuestions(undefined), 0)
+  assert.equal(countQuestions({}), 0)
 })
