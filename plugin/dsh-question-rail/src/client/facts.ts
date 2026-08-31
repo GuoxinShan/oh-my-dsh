@@ -1,0 +1,155 @@
+/**
+ * Pure rail facts, browser half. Every decision the rail makes — which chat
+ * nodes count as "my questions", when the rail shows at all, and where the
+ * rail sits relative to its dock anchor — is a DOM-free function here so the
+ * node:test suite can pin it. The component (QuestionRail.tsx) is a thin
+ * effect shell over these.
+ */
+
+/** The rail appears only once the conversation is worth navigating. */
+export const MIN_QUESTIONS = 6
+/** Collapsed rail height cap; the rail is vertically centered in the scroll body. */
+export const RAIL_MAX_HEIGHT = 220
+/** Horizontal inset from the scroll body's left edge. */
+export const RAIL_INSET_X = 6
+
+/** Structural slice of one content block (text-bearing or not). */
+export interface ContentBlockLike {
+  readonly type?: unknown
+  readonly text?: unknown
+}
+
+/** Structural slice of one chat node the rail reads. */
+export interface ChatNodeLike {
+  readonly kind?: unknown
+  readonly key: string
+  readonly data?: unknown
+}
+
+/** Structural slice of the ConversationSnapshot's chat store. */
+export interface ChatLike {
+  readonly nodes?: {
+    values(): Iterable<ChatNodeLike>
+  }
+}
+
+/** Structural slice of the dispatched ConversationSnapshot owner share. */
+export interface SessionLike {
+  readonly chat?: ChatLike | null
+}
+
+/** One question row, reduced to exactly what the rail renders and jumps to. */
+export interface RailQuestion {
+  readonly key: string
+  readonly text: string
+  readonly time: number
+}
+
+/** Copy keys the rail needs (structural subset of the locale seat's t). */
+export type RailTranslate = (key: 'message.nonText') => string
+
+/**
+ * Flatten one message's content blocks to a single-line preview.
+ * @param content - the node's content block array (untrusted shape).
+ * @returns whitespace-collapsed text; empty when no text block carries text.
+ */
+export function questionText(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  let out = ''
+  for (const block of content as readonly ContentBlockLike[]) {
+    if (block !== null && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
+      out += (out === '' ? '' : ' ') + block.text
+    }
+  }
+  return out.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Reduce the chat store to the user's own messages (turn-opening `user`
+ * nodes plus mid-turn `steering` admissions), in flow order.
+ * @param session - the dispatched ConversationSnapshot share (structural).
+ * @param t - locale seat for the attachment-only fallback text.
+ * @returns one rail row per user/steering node.
+ */
+export function collectQuestions(session: SessionLike | null | undefined, t: RailTranslate): RailQuestion[] {
+  const chat = session?.chat
+  const nodes = chat?.nodes
+  if (nodes === undefined || typeof nodes.values !== 'function') return []
+  const questions: RailQuestion[] = []
+  for (const node of nodes.values()) {
+    if (node === null || typeof node !== 'object') continue
+    if (node.kind !== 'user' && node.kind !== 'steering') continue
+    // data is the runtime's unknown payload; read the two leaves defensively.
+    const data: unknown = node.data
+    const content = data !== null && typeof data === 'object'
+      ? (data as { readonly content?: unknown }).content
+      : undefined
+    const rawTime = data !== null && typeof data === 'object'
+      ? (data as { readonly time?: unknown }).time
+      : undefined
+    const text = questionText(content)
+    questions.push({
+      key: node.key,
+      text: text === '' ? t('message.nonText') : text,
+      time: typeof rawTime === 'number' ? rawTime : 0,
+    })
+  }
+  return questions
+}
+
+/**
+ * The rail's visibility gate: short conversations need no navigation aid.
+ * @param count - collected question count.
+ * @returns whether the rail renders.
+ */
+export function railVisible(count: number): boolean {
+  return count >= MIN_QUESTIONS
+}
+
+/** DOM-rect slice the geometry math consumes (test-friendly). */
+export interface RectLike {
+  readonly left: number
+  readonly top: number
+  readonly height: number
+}
+
+/** The rail's geometry in anchor-relative coordinates. */
+export interface RailGeometry {
+  readonly left: number
+  readonly top: number
+  readonly height: number
+}
+
+/**
+ * Place the rail: horizontally hugging the scroll body's left edge,
+ * vertically centered on the scroll body, capped at RAIL_MAX_HEIGHT. The
+ * anchor element rides the composer stack inside the scroll body, so the
+ * anchor-relative offset carries the rail WITH the layout during sidebar
+ * transitions; only margin redistribution needs re-measuring.
+ * @param body - the [data-conversation-scroll] element's bounding rect.
+ * @param anchor - the dock anchor element's bounding rect.
+ * @returns anchor-relative geometry, or null when the body is too short to
+ *   host a rail (degenerate layout).
+ */
+export function railGeometry(body: RectLike, anchor: RectLike): RailGeometry | null {
+  if (body.height < 60) return null
+  const height = Math.max(80, Math.min(RAIL_MAX_HEIGHT, Math.round(body.height - 24)))
+  return {
+    left: Math.round(body.left + RAIL_INSET_X - anchor.left),
+    top: Math.round(body.top + body.height / 2 - anchor.top - height / 2),
+    height,
+  }
+}
+
+/**
+ * Cheap change detector so the 120ms measure poll never re-renders on a
+ * stable layout.
+ * @param a - previous geometry.
+ * @param b - next geometry.
+ * @returns whether both describe the same placement.
+ */
+export function sameRailGeometry(a: RailGeometry | null, b: RailGeometry | null): boolean {
+  if (a === b) return true
+  if (a === null || b === null) return false
+  return a.left === b.left && a.top === b.top && a.height === b.height
+}

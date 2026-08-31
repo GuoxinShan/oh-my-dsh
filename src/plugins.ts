@@ -8,6 +8,7 @@ import {
   COMPACTION_RUNTIME_PEERS,
   MODEL_EFFORTS_EDITOR_PACKAGE,
   MODEL_IMAGE_INPUT_PACKAGE,
+  QUESTION_RAIL_PACKAGE,
   SEND_WHILE_RUNNING_PACKAGE,
   WEB_SEARCH_TOGGLE_PACKAGE,
   WEB_SEARCH_TOGGLE_RUNTIME_PEERS,
@@ -88,6 +89,10 @@ export function findDesktopPlugins(packaged: boolean): PluginRef[] {
     {
       package: MODEL_EFFORTS_EDITOR_PACKAGE,
       dir: findPlugin(packaged, 'DSH_DESKTOP_MODEL_EFFORTS_EDITOR_PLUGIN', 'model-efforts-editor.tar.gz', 'modelEffortsEditorTarball', `plugins/${MODEL_EFFORTS_EDITOR_PACKAGE}`, 'plugin/dsh-model-efforts-editor', MODEL_EFFORTS_EDITOR_PACKAGE),
+    },
+    {
+      package: QUESTION_RAIL_PACKAGE,
+      dir: findPlugin(packaged, 'DSH_DESKTOP_QUESTION_RAIL_PLUGIN', 'question-rail.tar.gz', 'questionRailTarball', `plugins/${QUESTION_RAIL_PACKAGE}`, 'plugin/dsh-question-rail', QUESTION_RAIL_PACKAGE),
     },
   ]
 }

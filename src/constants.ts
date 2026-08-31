@@ -10,6 +10,7 @@ export const WEB_SEARCH_TOGGLE_PACKAGE = 'dsh-web-search-toggle'
 export const MODEL_IMAGE_INPUT_PACKAGE = 'dsh-model-image-input'
 export const SEND_WHILE_RUNNING_PACKAGE = 'dsh-send-while-running'
 export const MODEL_EFFORTS_EDITOR_PACKAGE = 'dsh-model-efforts-editor'
+export const QUESTION_RAIL_PACKAGE = 'dsh-question-rail'
 
 export const COMPACTION_RUNTIME_PEERS = [
   '@deepseek-ai/cordis',
