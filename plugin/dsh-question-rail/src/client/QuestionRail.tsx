@@ -10,14 +10,16 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { QuestionRailKey } from './locales.ts'
 import {
-  collectQuestions, railGeometry, railVisible, sameRailGeometry,
-  type RailGeometry, type RailQuestion, type SessionLike,
+  autoLoadCapped, autoLoadDecision, collectQuestions, railGeometry, railVisible, sameRailGeometry,
+  type RailGeometry, type RailQuestion, type RailSessionFace, type SessionLike,
 } from './facts.ts'
 
 /** Geometry poll cadence; each pass is one getBoundingClientRect pair. */
 const MEASURE_INTERVAL_MS = 120
 /** Jump-highlight duration, matching the flash animation. */
 const FLASH_MS = 1600
+/** Retry cadence while the session window is still opening. */
+const WAIT_OPEN_MS = 250
 
 /** Locale seat share (structural subset of the framework-injected t). */
 type RailTranslate = (key: QuestionRailKey, params?: Record<string, unknown>) => string
@@ -28,17 +30,26 @@ export interface RailTimers {
   readonly timeout: (callback: () => void, delay: number) => () => void
 }
 
+/** Resolve the current session's outward face (history paging verb) from the
+ *  sessions service; undefined while the session is neither listed nor scoped. */
+export type ResolveSessionFace = (sessionId: string) => RailSessionFace | undefined
+
 /**
- * Component props: the InputZone owner share (`session`) plus the apply-bound
- * timers and the locale seat — all optional structural subsets so the
- * composed contract stays assignable; absent shares render the bare anchor
- * (fail-invisible, never a crash).
+ * Component props: the InputZone owner share (`session`), the session id from
+ * the standard kit, plus the apply-bound timers / session-face resolver and
+ * the locale seat — all optional structural subsets so the composed contract
+ * stays assignable; absent shares render the bare anchor (fail-invisible,
+ * never a crash).
  */
 export interface QuestionRailProps {
   /** Point-in-time ConversationSnapshot share the slot dispatches with. */
   readonly session?: SessionLike
+  /** The session id from the session standard kit. */
+  readonly sessionId?: string
   /** Apply-closure timer faces (ctx.interval / ctx.timeout). */
   readonly timers?: RailTimers
+  /** Apply-closure sessions.face resolver (ctx.sessions.binding). */
+  readonly resolveFace?: ResolveSessionFace
   /** Locale seat bound by the `locale:` registration option. */
   readonly t?: RailTranslate
 }
@@ -70,14 +81,46 @@ function formatTime(time: number): string {
  * @returns the 0-height dock anchor hosting the absolutely positioned rail.
  */
 export function QuestionRailDock(props: QuestionRailProps): ReactElement {
-  const { session, timers, t } = props
+  const { session, sessionId, timers, resolveFace, t } = props
   const [hover, setHover] = useState(false)
   const [geometry, setGeometry] = useState<RailGeometry | null>(null)
+  const [capped, setCapped] = useState(false)
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
   const questions: readonly RailQuestion[] = collectQuestions(session, key => t === undefined ? '[图片或附件]' : t(key))
   const visible = railVisible(questions.length)
+
+  // Background pager (0.2.0): the transcript window is paged, but the rail's
+  // contract is "every question I asked". Page older history through the
+  // sanctioned SessionFace.loadOlder verb until the window covers the whole
+  // log (or the safety cap stops the loop); each landed page re-renders the
+  // dock share, so ticks fill in progressively. Stock prepend anchoring keeps
+  // the reader's scroll position stable while pages arrive.
+  useEffect(() => {
+    if (timers === undefined || resolveFace === undefined || sessionId === undefined) return undefined
+    let cancelled = false
+    let pages = 0
+    const run = async () => {
+      const face = resolveFace(sessionId)
+      if (face === undefined) return
+      while (!cancelled) {
+        const action = autoLoadDecision(face.getSnapshot(), pages)
+        if (action === 'stop') {
+          if (!cancelled) setCapped(autoLoadCapped(face.getSnapshot(), pages))
+          return
+        }
+        if (action === 'wait-open') {
+          await new Promise<void>(resume => { timers.timeout(resume, WAIT_OPEN_MS) })
+          continue
+        }
+        await face.loadOlder()
+        pages += 1
+      }
+    }
+    void run()
+    return () => { cancelled = true }
+  }, [timers, resolveFace, sessionId])
 
   useEffect(() => {
     if (timers === undefined) return undefined
@@ -135,6 +178,8 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
             <div className="dsh-qr-panel">
               <div className="dsh-qr-header">
                 {t === undefined ? '我的问题（' + questions.length + '）' : t('panel.header', { count: questions.length })}
+                {capped && t !== undefined ? ' · ' + t('panel.cappedSuffix') : ''}
+                {capped && t === undefined ? ' · 更早的未载入' : ''}
               </div>
               <div className="dsh-qr-sep" />
               <div className="dsh-qr-list" ref={listRef}>

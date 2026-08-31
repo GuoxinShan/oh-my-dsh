@@ -12,6 +12,10 @@ export const MIN_QUESTIONS = 6
 export const RAIL_MAX_HEIGHT = 220
 /** Horizontal inset from the scroll body's left edge. */
 export const RAIL_INSET_X = 6
+/** Auto-load safety cap: pages of history the rail's background pager pulls
+ *  before giving up (guards pathological megalog sessions; the transcript
+ *  pages 50 messages per loadOlder call). */
+export const MAX_AUTO_LOAD_PAGES = 40
 
 /** Structural slice of one content block (text-bearing or not). */
 export interface ContentBlockLike {
@@ -152,4 +156,45 @@ export function sameRailGeometry(a: RailGeometry | null, b: RailGeometry | null)
   if (a === b) return true
   if (a === null || b === null) return false
   return a.left === b.left && a.top === b.top && a.height === b.height
+}
+
+/** Structural slice of the session snapshot the auto-load decision reads. */
+export interface RailSessionSnapshot {
+  readonly openState?: unknown
+  readonly hasMore?: unknown
+}
+
+/** Structural slice of the outward session face (ISession verb + snapshot
+ *  source) the rail's background pager consumes. */
+export interface RailSessionFace {
+  getSnapshot(): RailSessionSnapshot
+  loadOlder(): Promise<void>
+}
+
+/** What the background pager should do on this tick. */
+export type AutoLoadAction = 'wait-open' | 'load' | 'stop'
+
+/**
+ * Decide the background pager's next move. The transcript is windowed; the
+ * rail wants the FULL question list up front, so it pages history in the
+ * background — the stock prepend anchoring keeps the reader's position
+ * stable while pages land. 'wait-open' covers the race where the rail mounts
+ * before the session window finished opening.
+ * @param snapshot - the session's current snapshot slice.
+ * @param pagesLoaded - pages this loop has already pulled.
+ * @returns the next action; 'stop' once fully loaded or the safety cap hit.
+ */
+export function autoLoadDecision(
+  snapshot: RailSessionSnapshot,
+  pagesLoaded: number,
+): AutoLoadAction {
+  if (snapshot.openState !== 'open') return pagesLoaded === 0 ? 'wait-open' : 'stop'
+  if (snapshot.hasMore !== true) return 'stop'
+  return pagesLoaded >= MAX_AUTO_LOAD_PAGES ? 'stop' : 'load'
+}
+
+/** Whether the pager gave up at the safety cap with history still outside
+ *  the window (panel header advertises this honestly). */
+export function autoLoadCapped(snapshot: RailSessionSnapshot, pagesLoaded: number): boolean {
+  return pagesLoaded >= MAX_AUTO_LOAD_PAGES && snapshot.hasMore === true
 }

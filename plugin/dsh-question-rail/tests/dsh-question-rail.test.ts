@@ -3,8 +3,8 @@ import { test } from 'node:test'
 import { apply } from '../src/index.ts'
 import { apply as clientApply, inject } from '../src/client/index.ts'
 import {
-  MIN_QUESTIONS, RAIL_MAX_HEIGHT, collectQuestions, questionText,
-  railGeometry, railVisible, sameRailGeometry, type ChatNodeLike,
+  MAX_AUTO_LOAD_PAGES, MIN_QUESTIONS, RAIL_MAX_HEIGHT, autoLoadCapped, autoLoadDecision,
+  collectQuestions, questionText, railGeometry, railVisible, sameRailGeometry, type ChatNodeLike,
 } from '../src/client/facts.ts'
 import { installQuestionRailCss, questionRailCss, type InstalledStyle } from '../src/client/stylesheet.ts'
 
@@ -14,7 +14,7 @@ test('host half exports a loadable surface entry', () => {
 
 test('client half exports a loadable plugin', () => {
   assert.equal(typeof clientApply, 'function')
-  for (const required of ['slots', 'locale', 'timer']) {
+  for (const required of ['slots', 'locale', 'sessions', 'timer']) {
     assert.ok(inject.includes(required), `inject includes ${required}`)
   }
 })
@@ -113,4 +113,20 @@ test('stylesheet keeps the overflow guard that clips the expanded card', () => {
   const css = questionRailCss()
   assert.match(css, /\.dsh-qr-rail \{[^}]*overflow: hidden/s)
   assert.match(css, /overscroll-behavior: contain/)
+})
+
+test('autoLoadDecision waits for the window to open, then pages until history runs out', () => {
+  assert.equal(autoLoadDecision({ openState: 'loading', hasMore: true }, 0), 'wait-open')
+  assert.equal(autoLoadDecision({ openState: 'cold', hasMore: true }, 0), 'wait-open')
+  // A mid-loop loss of 'open' (resync) stops instead of waiting forever.
+  assert.equal(autoLoadDecision({ openState: 'loading', hasMore: true }, 2), 'stop')
+  assert.equal(autoLoadDecision({ openState: 'open', hasMore: true }, 0), 'load')
+  assert.equal(autoLoadDecision({ openState: 'open', hasMore: false }, 0), 'stop')
+  assert.equal(autoLoadDecision({ openState: 'open', hasMore: true }, MAX_AUTO_LOAD_PAGES), 'stop')
+})
+
+test('autoLoadCapped reports only a capped loop with history still outside', () => {
+  assert.equal(autoLoadCapped({ openState: 'open', hasMore: true }, MAX_AUTO_LOAD_PAGES), true)
+  assert.equal(autoLoadCapped({ openState: 'open', hasMore: false }, MAX_AUTO_LOAD_PAGES), false)
+  assert.equal(autoLoadCapped({ openState: 'open', hasMore: true }, 3), false)
 })

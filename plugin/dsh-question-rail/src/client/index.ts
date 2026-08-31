@@ -10,7 +10,7 @@
  * reversible and collected by this fiber.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls ui-conversation's SlotMap declarations (the
 // 'conversation.input.dock' list seat and its InputZone owner share) so the
 // registration below typechecks against the real declaration — no runtime
@@ -18,7 +18,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { QuestionRailDock, type RailTimers } from './QuestionRail.tsx'
+import { QuestionRailDock, type RailTimers, type ResolveSessionFace } from './QuestionRail.tsx'
 import { installQuestionRailCss } from './stylesheet.ts'
 import { en, zh, type QuestionRailKey } from './locales.ts'
 
@@ -43,8 +43,10 @@ declare module '@deepseek-ai/cordis' {
 const NS = 'question-rail'
 
 /** Required services: the slot registry (declaration-aware), the locale
- *  registry, and the timer Service whose mixin the rail polls/flashes with. */
-export const inject = ['slots', 'locale', 'timer']
+ *  registry, the sessions face (background history paging through the
+ *  sanctioned SessionFace.loadOlder verb), and the timer Service whose mixin
+ *  the rail polls/flashes with. */
+export const inject = ['slots', 'locale', 'sessions', 'timer']
 
 /**
  * Client plugin body: install the rail stylesheet, register the dictionaries,
@@ -58,9 +60,11 @@ export function apply(ctx: ClientContext): void {
     interval: (callback, delay) => (ctx as Context).interval(callback, delay),
     timeout: (callback, delay) => (ctx as Context).timeout(callback, delay),
   }
-  /** Registration-stable component closure binding the fiber's timers. */
-  function QuestionRailDockWithTimers(props: Omit<Parameters<typeof QuestionRailDock>[0], 'timers'>) {
-    return QuestionRailDock({ ...props, timers })
+  const resolveFace: ResolveSessionFace = sessionId => ctx.sessions.binding(sessionId as SessionId)?.session
+  /** Registration-stable component closure binding the fiber's timers and
+   *  the session-face resolver. */
+  function QuestionRailDockWithTimers(props: Omit<Parameters<typeof QuestionRailDock>[0], 'timers' | 'resolveFace'>) {
+    return QuestionRailDock({ ...props, timers, resolveFace })
   }
   // slots.inject waits on the conversation entry's declaration (activation
   // order is unconstrained), reruns after redeclaration, and leaves with

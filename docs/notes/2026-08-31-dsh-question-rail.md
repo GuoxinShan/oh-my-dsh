@@ -59,3 +59,23 @@
   失配时 fail-invisible（测不到几何/消息行即不显示/不跳转），绝不 crash。
 - 早于当前窗口的历史（hasMore 未加载）没有消息行，对应条目点击不跳转——
   与聊天视图的分页契约一致。
+
+## 0.2.0：历史全量载入（同日追加）
+
+**问题**：刻度尺的数据源是当前窗口的 `chat.nodes`，而聊天视图分页（每页 50 条，
+`hasMore` + 「加载更多」）。长会话打开时只有尾页问题的刻度，往上滑点「加载更多」
+才逐渐补齐——与「刻度尺 = 我问过的全部问题」的契约矛盾。
+
+**研究结论**：`ctx.sessions.binding(sessionId).session` 的 `SessionFace`
+（`ISession & ObservableSnapshot<ConversationSnapshot>`）同时带行为动词
+`loadOlder()`（feature 代码的正式分页入口）与快照读取器 `getSnapshot()`
+（可读最新 `hasMore`/`openState`）——全公开 API，无需动上游。只读全量而不进
+窗口的方案需要 fork 给 SessionFace 加只读 history 枚举，成本不成比例，否决。
+
+**决策（路线 A，用户确认）**：rail 挂载后后台循环 `loadOlder()` 至
+`hasMore=false`（`autoLoadDecision` 纯函数：wait-open / load / stop；
+`MAX_AUTO_LOAD_PAGES = 40` 封顶，到顶面板标题追加「更早的未载入」）。刻度随每页
+落地渐进补齐；stock ChatView 的 prepend 锚定保证阅读位置不跳。已知副作用：
+正文历史被完整载入，「加载更多」按钮随之消失（内容已全部就位，往上滑即纯滚动）
+——经用户确认为可接受。inject 增加 `sessions`；`wait-open` 分支处理 rail 先于
+窗口打开挂载的竞态（250ms 重试，effect 取消即停）。
