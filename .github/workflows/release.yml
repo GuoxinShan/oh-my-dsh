@@ -134,6 +134,8 @@ jobs:
           pids+=($!)
           pnpm --dir plugin/dsh-model-efforts-editor install --frozen-lockfile &
           pids+=($!)
+          pnpm --dir plugin/dsh-question-rail install --frozen-lockfile &
+          pids+=($!)
           ec=0
           for pid in "${pids[@]}"; do
             wait "$pid" || ec=1
@@ -280,6 +282,8 @@ jobs:
           pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile &
           pids+=($!)
           pnpm --dir plugin/dsh-model-efforts-editor install --frozen-lockfile &
+          pids+=($!)
+          pnpm --dir plugin/dsh-question-rail install --frozen-lockfile &
           pids+=($!)
           ec=0
           for pid in "${pids[@]}"; do
