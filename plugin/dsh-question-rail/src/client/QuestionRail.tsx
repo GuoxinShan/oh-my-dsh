@@ -97,6 +97,8 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
   const allQuestions: readonly RailQuestion[] = collectQuestions(session, key => t === undefined ? '[图片或附件]' : t(key))
   const ticks = allQuestions.slice(-RAIL_MAX_QUESTIONS)
   const visible = railVisible(allQuestions.length)
+  const ticksRef = useRef(ticks.length)
+  ticksRef.current = ticks.length
 
   useEffect(() => {
     if (timers === undefined) return undefined
@@ -105,7 +107,7 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
       const body = findScrollBody()
       const next = body === null || anchor === null
         ? null
-        : railGeometry(body.getBoundingClientRect(), anchor.getBoundingClientRect())
+        : railGeometry(body.getBoundingClientRect(), anchor.getBoundingClientRect(), Math.max(ticksRef.current, 1))
       setGeometry(prev => (sameRailGeometry(prev, next) ? prev : next))
     }
     remeasure()
@@ -193,16 +195,15 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
           </div>
           {hover ? (
             <div className="dsh-qr-panel">
-              <div className="dsh-qr-header">
-                {t === undefined ? '我的问题（' + allQuestions.length + '）' : t('panel.header', { count: allQuestions.length })}
-              </div>
-              <div className="dsh-qr-sep" />
               <div className="dsh-qr-list" ref={listRef} onScroll={onListScroll}>
                 {allQuestions.map(q => (
                   <button
                     key={q.key}
                     type="button"
                     className="dsh-qr-item"
+                    // One slot per question: row i sits at the exact Y of
+                    // tick i, so expanding widens the rail in place (0.5.0).
+                    style={{ height: (geometry.height / Math.max(ticks.length, 1)) + 'px' }}
                     onClick={() => { onJump(q.key) }}
                   >
                     <span className="dsh-qr-text">{q.text}</span>

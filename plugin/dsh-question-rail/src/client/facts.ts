@@ -11,7 +11,11 @@ export const MIN_QUESTIONS = 6
 /** The rail shows at most this many questions — the most recent ones. */
 export const RAIL_MAX_QUESTIONS = 10
 /** Collapsed rail height cap; the rail is vertically centered in the scroll body. */
-export const RAIL_MAX_HEIGHT = 220
+export const RAIL_MAX_HEIGHT = 320
+/** Vertical pitch of one tick/item slot. Ticks and panel rows share this
+ *  grid, so expanding the rail widens in place — row i sits at the exact Y
+ *  of tick i, one slot per question, zero layout jump (0.5.0). */
+export const RAIL_SLOT_PX = 32
 /** Horizontal inset from the scroll body's left edge. */
 export const RAIL_INSET_X = 6
 /** Fill-page safety cap: history pages the rail's background pager pulls to
@@ -155,9 +159,11 @@ export interface RailGeometry {
  * @returns anchor-relative geometry, or null when the body is too short to
  *   host a rail (degenerate layout).
  */
-export function railGeometry(body: RectLike, anchor: RectLike): RailGeometry | null {
+export function railGeometry(body: RectLike, anchor: RectLike, slots: number): RailGeometry | null {
   if (body.height < 60) return null
-  const height = Math.max(80, Math.min(RAIL_MAX_HEIGHT, Math.round(body.height - 24)))
+  // One slot per question at RAIL_SLOT_PX pitch; the shared grid means the
+  // expanded panel's rows align 1:1 with the collapsed ticks.
+  const height = Math.max(80, Math.min(RAIL_MAX_HEIGHT, slots * RAIL_SLOT_PX, Math.round(body.height - 24)))
   return {
     left: Math.round(body.left + RAIL_INSET_X - anchor.left),
     top: Math.round(body.top + body.height / 2 - anchor.top - height / 2),

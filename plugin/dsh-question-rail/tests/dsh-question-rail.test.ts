@@ -76,21 +76,25 @@ test('railVisible gates below MIN_QUESTIONS', () => {
   assert.equal(railVisible(MIN_QUESTIONS + 5), true)
 })
 
-test('railGeometry centers the capped rail on the body, inset from its left edge', () => {
+test('railGeometry sizes one slot per question, capped at RAIL_MAX_HEIGHT, inset from the left edge', () => {
   const body = { left: 300, top: 40, height: 800 }
   const anchor = { left: 340, top: 700, height: 0 }
-  const g = railGeometry(body, anchor)
-  assert.ok(g !== null)
-  assert.equal(g.height, RAIL_MAX_HEIGHT)
-  assert.equal(g.left, 300 + 6 - 340)
-  assert.equal(g.top, Math.round(40 + 400 - 700 - RAIL_MAX_HEIGHT / 2))
+  const full = railGeometry(body, anchor, 10)
+  assert.ok(full !== null)
+  assert.equal(full.height, RAIL_MAX_HEIGHT)
+  assert.equal(full.left, 300 + 6 - 340)
+  assert.equal(full.top, Math.round(40 + 400 - 700 - RAIL_MAX_HEIGHT / 2))
+  const few = railGeometry(body, anchor, 6)
+  assert.ok(few !== null)
+  assert.equal(few.height, 6 * 32)
+  assert.equal(few.top, Math.round(40 + 400 - 700 - (6 * 32) / 2))
 })
 
 test('railGeometry floors short bodies and rejects degenerate ones', () => {
-  const short = railGeometry({ left: 0, top: 0, height: 100 }, { left: 0, top: 50, height: 0 })
+  const short = railGeometry({ left: 0, top: 0, height: 100 }, { left: 0, top: 50, height: 0 }, 10)
   assert.ok(short !== null)
   assert.equal(short.height, 80)
-  assert.equal(railGeometry({ left: 0, top: 0, height: 40 }, { left: 0, top: 0, height: 0 }), null)
+  assert.equal(railGeometry({ left: 0, top: 0, height: 40 }, { left: 0, top: 0, height: 0 }, 10), null)
 })
 
 test('sameRailGeometry treats equal placements as unchanged', () => {
