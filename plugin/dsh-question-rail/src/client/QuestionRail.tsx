@@ -114,10 +114,15 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
     return timers.interval(remeasure, MEASURE_INTERVAL_MS)
   }, [timers, allQuestions.length])
 
-  // Open with the latest question in view; the user reads the list bottom-up.
+  // The drawer list stays mounted across hovers (cross-fade, persistent
+  // scroll); only the FIRST expansion opens on the latest question.
+  const didInitScrollRef = useRef(false)
   useEffect(() => {
     const list = listRef.current
-    if (hover && list !== null) list.scrollTop = list.scrollHeight
+    if (hover && list !== null && !didInitScrollRef.current) {
+      didInitScrollRef.current = true
+      list.scrollTop = list.scrollHeight
+    }
   }, [hover])
 
   // Panel paging (0.4.0): scrolling the expanded list to its top edge pulls
@@ -172,6 +177,7 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
   const onJump = (key: string) => { void jump(key) }
 
   const ariaLabel = t === undefined ? '我的问题刻度尺' : t('rail.ariaLabel')
+  const slotPx = geometry === null ? 0 : geometry.height / Math.max(ticks.length, 1)
   return (
     <div className="dsh-qr-anchor" ref={anchorRef}>
       {!visible || geometry === null ? null : (
@@ -183,36 +189,34 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
           onMouseEnter={() => { setHover(true) }}
           onMouseLeave={() => { setHover(false) }}
         >
-          <div className="dsh-qr-track">
+          <div className="dsh-qr-track" aria-hidden={hover}>
             {ticks.map((q, i) => (
               <div
                 key={q.key}
                 className="dsh-qr-tick"
-                style={{ top: (((i + 0.5) / ticks.length) * 100) + '%' }}
+                // Same grid as the rows below: tick i center === row i center.
+                style={{ top: ((i + 0.5) * slotPx) + 'px' }}
                 onClick={() => { onJump(q.key) }}
               />
             ))}
           </div>
-          {hover ? (
-            <div className="dsh-qr-panel">
-              <div className="dsh-qr-list" ref={listRef} onScroll={onListScroll}>
-                {allQuestions.map(q => (
-                  <button
-                    key={q.key}
-                    type="button"
-                    className="dsh-qr-item"
-                    // One slot per question: row i sits at the exact Y of
-                    // tick i, so expanding widens the rail in place (0.5.0).
-                    style={{ height: (geometry.height / Math.max(ticks.length, 1)) + 'px' }}
-                    onClick={() => { onJump(q.key) }}
-                  >
-                    <span className="dsh-qr-text">{q.text}</span>
-                    <span className="dsh-qr-time">{formatTime(q.time)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          {/* Drawer layer: always mounted; width reveal + cross-fade (0.5.1). */}
+          <div className="dsh-qr-list" ref={listRef} onScroll={onListScroll} aria-hidden={!hover}>
+            {allQuestions.map(q => (
+              <button
+                key={q.key}
+                type="button"
+                className="dsh-qr-item"
+                // One slot per question: row i sits at the exact Y of tick i.
+                style={{ height: slotPx + 'px' }}
+                tabIndex={hover ? 0 : -1}
+                onClick={() => { onJump(q.key) }}
+              >
+                <span className="dsh-qr-text">{q.text}</span>
+                <span className="dsh-qr-time">{formatTime(q.time)}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
