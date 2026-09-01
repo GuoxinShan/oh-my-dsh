@@ -199,8 +199,8 @@ export function startInjection(deps: InjectionDeps): () => void {
       if (row === null || row.children.length < 2) continue
       if (sectionOf(input) === null) continue
       input.setAttribute('data-mii-mark', '1')
-      // The stock row is a fixed 4-column grid; this fifth child needs a fifth
-      // column or the trash wraps onto an implicit second grid row.
+      // The stock row is a fixed 4-column grid; the class switches it to flex
+      // so any number of injected buttons fits (see styles.ts).
       row.classList.add('mii-grid')
       const btn = document.createElement('button')
       btn.type = 'button'
