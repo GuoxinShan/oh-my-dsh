@@ -61,16 +61,16 @@ if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePa
   throw new Error(`desktop requires dsh-web-search-toggle 0.1.3, found ${webSearchTogglePackage.name}@${webSearchTogglePackage.version}`)
 }
 const modelImageInputPackage = JSON.parse(readFileSync(resolve(modelImageInputDir, 'package.json'), 'utf8'))
-if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPackage.version !== '0.1.0') {
-  throw new Error(`desktop requires dsh-model-image-input 0.1.0, found ${modelImageInputPackage.name}@${modelImageInputPackage.version}`)
+if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPackage.version !== '0.1.1') {
+  throw new Error(`desktop requires dsh-model-image-input 0.1.1, found ${modelImageInputPackage.name}@${modelImageInputPackage.version}`)
 }
 const sendWhileRunningPackage = JSON.parse(readFileSync(resolve(sendWhileRunningDir, 'package.json'), 'utf8'))
 if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.1') {
   throw new Error(`desktop requires dsh-send-while-running 0.1.1, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
 }
 const modelEffortsEditorPackage = JSON.parse(readFileSync(resolve(modelEffortsEditorDir, 'package.json'), 'utf8'))
-if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffortsEditorPackage.version !== '0.1.0') {
-  throw new Error(`desktop requires dsh-model-efforts-editor 0.1.0, found ${modelEffortsEditorPackage.name}@${modelEffortsEditorPackage.version}`)
+if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffortsEditorPackage.version !== '0.1.1') {
+  throw new Error(`desktop requires dsh-model-efforts-editor 0.1.1, found ${modelEffortsEditorPackage.name}@${modelEffortsEditorPackage.version}`)
 }
 const questionRailPackage = JSON.parse(readFileSync(resolve(questionRailDir, 'package.json'), 'utf8'))
 if (questionRailPackage.name !== 'dsh-question-rail' || questionRailPackage.version !== '0.5.1') {
