@@ -3,9 +3,9 @@ import { test } from 'node:test'
 import { apply } from '../src/index.ts'
 import { apply as clientApply, inject } from '../src/client/index.ts'
 import {
-  MAX_FILL_PAGES, MIN_QUESTIONS, RAIL_MAX_HEIGHT, RAIL_MAX_QUESTIONS,
-  collectQuestions, countQuestions, fillDecision, questionText,
-  railGeometry, railVisible, sameRailGeometry, type ChatNodeLike,
+  MIN_QUESTIONS, RAIL_MAX_HEIGHT, RAIL_MAX_QUESTIONS,
+  collectQuestions, questionText,
+  railGeometry, railVisible, sameRailGeometry, shouldPanelPage, type ChatNodeLike,
 } from '../src/client/facts.ts'
 import { installQuestionRailCss, questionRailCss, type InstalledStyle } from '../src/client/stylesheet.ts'
 
@@ -129,25 +129,9 @@ test('stylesheet keeps the overflow guard that clips the expanded card', () => {
   assert.match(css, /overscroll-behavior: contain/)
 })
 
-test('fillDecision pages only until the rail has RAIL_MAX_QUESTIONS, never draining history', () => {
-  assert.equal(fillDecision({ openState: 'loading', hasMore: true }, 0, 0), 'wait-open')
-  assert.equal(fillDecision({ openState: 'cold', hasMore: true }, 0, 0), 'wait-open')
-  // A mid-loop loss of 'open' (resync) stops instead of waiting forever.
-  assert.equal(fillDecision({ openState: 'loading', hasMore: true }, 3, 2), 'stop')
-  // Sparse window: keep paging while the rail is short and history remains.
-  assert.equal(fillDecision({ openState: 'open', hasMore: true }, 3, 0), 'load')
-  // Full rail: stop even though older history exists (native lazy rhythm).
-  assert.equal(fillDecision({ openState: 'open', hasMore: true }, RAIL_MAX_QUESTIONS, 0), 'stop')
-  assert.equal(fillDecision({ openState: 'open', hasMore: false }, 3, 0), 'stop')
-  assert.equal(fillDecision({ openState: 'open', hasMore: true }, 3, MAX_FILL_PAGES), 'stop')
-})
-
-test('countQuestions counts only user/steering nodes in the window', () => {
-  assert.equal(countQuestions(sessionOf([
-    node('user', 'u1', [], 1),
-    node('assistant', 'a1', [], 2),
-    node('steering', 's1', [], 3),
-  ])), 2)
-  assert.equal(countQuestions(undefined), 0)
-  assert.equal(countQuestions({}), 0)
+test('shouldPanelPage only fires for an open window with older history and no page in flight', () => {
+  assert.equal(shouldPanelPage({ openState: 'open', hasMore: true }, false), true)
+  assert.equal(shouldPanelPage({ openState: 'open', hasMore: false }, false), false)
+  assert.equal(shouldPanelPage({ openState: 'loading', hasMore: true }, false), false)
+  assert.equal(shouldPanelPage({ openState: 'open', hasMore: true }, true), false)
 })

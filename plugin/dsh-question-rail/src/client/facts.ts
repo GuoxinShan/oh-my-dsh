@@ -178,53 +178,32 @@ export function sameRailGeometry(a: RailGeometry | null, b: RailGeometry | null)
   return a.left === b.left && a.top === b.top && a.height === b.height
 }
 
-/** Structural slice of the session snapshot the fill decision reads. */
+/** Structural slice of the session snapshot the panel-paging decision reads. */
 export interface RailSessionSnapshot {
   readonly openState?: unknown
   readonly hasMore?: unknown
 }
 
 /** Structural slice of the outward session face (ISession verb + snapshot
- *  source) the rail's background fill loop and click-to-jump path consume. */
+ *  source) the rail's panel paging and click-to-jump path consume. */
 export interface RailSessionFace {
   getSnapshot(): RailSessionSnapshot & SessionLike
   loadOlder(): Promise<void>
 }
 
-/** Count the user's own messages currently inside the window. */
-export function countQuestions(session: SessionLike | null | undefined): number {
-  const nodes = session?.chat?.nodes
-  if (nodes === undefined || typeof nodes.values !== 'function') return 0
-  let count = 0
-  for (const node of nodes.values()) {
-    if (node !== null && typeof node === 'object'
-      && (node.kind === 'user' || node.kind === 'steering')) count += 1
-  }
-  return count
-}
-
-/** What the background fill loop should do on this tick. */
-export type FillAction = 'wait-open' | 'load' | 'stop'
-
 /**
- * Decide the fill loop's next move. The rail shows the most recent
- * RAIL_MAX_QUESTIONS questions; the transcript keeps its native lazy rhythm,
- * so the loop only pages history when the CURRENT window holds fewer
- * questions than the rail wants (a sparse tail window). 'wait-open' covers
- * the race where the rail mounts before the session window finished opening.
+ * Whether scrolling the expanded panel to its top edge should pull one
+ * older page. Panel paging is user-driven only — the mount path never pages
+ * (0.4.0 rolled back 0.2.0's full-history pull and 0.3.0's mount fill), so
+ * the transcript's native lazy rhythm stays untouched on open; only the
+ * reader's own scroll intent moves history into the shared window.
  * @param snapshot - the session's current snapshot slice.
- * @param questionCount - questions currently inside the window.
- * @param pagesLoaded - pages this loop has already pulled.
- * @returns the next action; 'stop' once the rail is full, history runs out,
- *   or the fill cap is hit.
+ * @param loading - a page is already in flight.
+ * @returns whether one loadOlder page should start now.
  */
-export function fillDecision(
+export function shouldPanelPage(
   snapshot: RailSessionSnapshot,
-  questionCount: number,
-  pagesLoaded: number,
-): FillAction {
-  if (snapshot.openState !== 'open') return pagesLoaded === 0 ? 'wait-open' : 'stop'
-  if (snapshot.hasMore !== true) return 'stop'
-  if (questionCount >= RAIL_MAX_QUESTIONS) return 'stop'
-  return pagesLoaded >= MAX_FILL_PAGES ? 'stop' : 'load'
+  loading: boolean,
+): boolean {
+  return !loading && snapshot.openState === 'open' && snapshot.hasMore === true
 }

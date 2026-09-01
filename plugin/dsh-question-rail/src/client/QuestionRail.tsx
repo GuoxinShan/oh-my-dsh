@@ -10,8 +10,8 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { QuestionRailKey } from './locales.ts'
 import {
-  MAX_FILL_PAGES, RAIL_MAX_QUESTIONS, collectQuestions, countQuestions, fillDecision,
-  railGeometry, railVisible, sameRailGeometry,
+  MAX_FILL_PAGES, RAIL_MAX_QUESTIONS, collectQuestions,
+  railGeometry, railVisible, sameRailGeometry, shouldPanelPage,
   type RailGeometry, type RailQuestion, type RailSessionFace, type SessionLike,
 } from './facts.ts'
 
@@ -19,8 +19,8 @@ import {
 const MEASURE_INTERVAL_MS = 120
 /** Jump-highlight duration, matching the flash animation. */
 const FLASH_MS = 1600
-/** Retry cadence while the session window is still opening. */
-const WAIT_OPEN_MS = 250
+/** Panel-top scroll threshold that triggers one older page. */
+const PANEL_TOP_THRESHOLD_PX = 24
 
 /** Locale seat share (structural subset of the framework-injected t). */
 type RailTranslate = (key: QuestionRailKey, params?: Record<string, unknown>) => string
@@ -87,42 +87,16 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
   const [geometry, setGeometry] = useState<RailGeometry | null>(null)
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const loadingOlderRef = useRef(false)
+  const pendingPanelAdjust = useRef(0)
 
-  // Chronological questions inside the current window; the rail shows only
-  // the most recent RAIL_MAX_QUESTIONS (user direction 0.3.0: recent-10
-  // window, native lazy rhythm kept).
+  // Chronological questions inside the current window. The collapsed rail
+  // shows only the most recent RAIL_MAX_QUESTIONS ticks (user direction
+  // 0.3.0); the expanded panel lists every question currently in the window
+  // and pages older history on scroll-to-top (0.4.0).
   const allQuestions: readonly RailQuestion[] = collectQuestions(session, key => t === undefined ? '[图片或附件]' : t(key))
-  const questions = allQuestions.slice(-RAIL_MAX_QUESTIONS)
+  const ticks = allQuestions.slice(-RAIL_MAX_QUESTIONS)
   const visible = railVisible(allQuestions.length)
-
-  // Bounded background fill (0.3.0): the transcript keeps its native lazy
-  // paging; the rail only pulls older pages while the CURRENT window holds
-  // fewer questions than the rail wants (sparse tail page), never draining
-  // history. Each landed page re-renders the dock share, so the latest-10
-  // window fills in progressively; stock prepend anchoring keeps the
-  // reader's scroll position stable.
-  useEffect(() => {
-    if (timers === undefined || resolveFace === undefined || sessionId === undefined) return undefined
-    let cancelled = false
-    let pages = 0
-    const run = async () => {
-      const face = resolveFace(sessionId)
-      if (face === undefined) return
-      while (!cancelled) {
-        const snapshot = face.getSnapshot()
-        const action = fillDecision(snapshot, countQuestions(snapshot), pages)
-        if (action === 'stop') return
-        if (action === 'wait-open') {
-          await new Promise<void>(resume => { timers.timeout(resume, WAIT_OPEN_MS) })
-          continue
-        }
-        await face.loadOlder()
-        pages += 1
-      }
-    }
-    void run()
-    return () => { cancelled = true }
-  }, [timers, resolveFace, sessionId])
 
   useEffect(() => {
     if (timers === undefined) return undefined
@@ -136,13 +110,39 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
     }
     remeasure()
     return timers.interval(remeasure, MEASURE_INTERVAL_MS)
-  }, [timers, questions.length])
+  }, [timers, allQuestions.length])
 
   // Open with the latest question in view; the user reads the list bottom-up.
   useEffect(() => {
     const list = listRef.current
     if (hover && list !== null) list.scrollTop = list.scrollHeight
   }, [hover])
+
+  // Panel paging (0.4.0): scrolling the expanded list to its top edge pulls
+  // one older page through the sanctioned SessionFace.loadOlder verb — user-
+  // driven only, the mount path never pages, so the transcript's native lazy
+  // rhythm stays untouched on open. The transcript's own prepend anchoring
+  // keeps its scroll position stable while shared pages land.
+  const onListScroll = () => {
+    const list = listRef.current
+    if (list === null || list.scrollTop > PANEL_TOP_THRESHOLD_PX || loadingOlderRef.current) return
+    if (resolveFace === undefined || sessionId === undefined) return
+    const face = resolveFace(sessionId)
+    if (face === undefined || !shouldPanelPage(face.getSnapshot(), loadingOlderRef.current)) return
+    loadingOlderRef.current = true
+    pendingPanelAdjust.current = list.scrollHeight
+    void face.loadOlder().finally(() => { loadingOlderRef.current = false })
+  }
+
+  // After an older page lands, push the panel's scrollTop down by the added
+  // content height so the reader's row stays put (items prepend above).
+  useEffect(() => {
+    const list = listRef.current
+    if (list !== null && pendingPanelAdjust.current > 0) {
+      list.scrollTop += list.scrollHeight - pendingPanelAdjust.current
+      pendingPanelAdjust.current = 0
+    }
+  }, [allQuestions.length])
 
   const jump = async (key: string) => {
     const body = findScrollBody()
@@ -182,11 +182,11 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
           onMouseLeave={() => { setHover(false) }}
         >
           <div className="dsh-qr-track">
-            {questions.map((q, i) => (
+            {ticks.map((q, i) => (
               <div
                 key={q.key}
                 className="dsh-qr-tick"
-                style={{ top: (((i + 0.5) / questions.length) * 100) + '%' }}
+                style={{ top: (((i + 0.5) / ticks.length) * 100) + '%' }}
                 onClick={() => { onJump(q.key) }}
               />
             ))}
@@ -194,11 +194,11 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
           {hover ? (
             <div className="dsh-qr-panel">
               <div className="dsh-qr-header">
-                {t === undefined ? '我的问题（' + questions.length + '）' : t('panel.header', { count: questions.length })}
+                {t === undefined ? '我的问题（' + allQuestions.length + '）' : t('panel.header', { count: allQuestions.length })}
               </div>
               <div className="dsh-qr-sep" />
-              <div className="dsh-qr-list" ref={listRef}>
-                {questions.map(q => (
+              <div className="dsh-qr-list" ref={listRef} onScroll={onListScroll}>
+                {allQuestions.map(q => (
                   <button
                     key={q.key}
                     type="button"

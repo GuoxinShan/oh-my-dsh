@@ -95,3 +95,14 @@
 
 `autoLoadDecision`/`autoLoadCapped`/`MAX_AUTO_LOAD_PAGES` 与 capped 标题后缀
 随之移除；`SessionFace.loadOlder()` 仍是唯一（且充分的）分页入口。
+
+## 0.4.0：侧边恒 10 刻度 + 面板用户驱动分页
+
+**最终形态（用户定稿）**：收起态刻度尺恒为**最近 10 条**提问（0.3.0 不变）；
+悬停展开的面板升级为**完整列表**——在列表内往上滑到顶部即按需 `loadOlder()`
+补载更早的问题，直到历史全部就位；滚动位置按补入内容高度自动补偿不跳。
+**挂载路径零分页**：0.3.0 的「窗口不足 10 条就后台填充」一并回滚——正文
+原生懒加载完全不被插件主动触碰，历史只在用户滑动面板时进入共享窗口
+（正文视口由 stock prepend 锚定保底，loadOlder 的共享性决定无法绕开窗口，
+属可接受的共谋路径）。`fillDecision`/`countQuestions` 移除，新增纯函数
+`shouldPanelPage`；点击即达的 ensure-loaded 路径保留（补页竞态下先补再跳）。
