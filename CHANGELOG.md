@@ -4,6 +4,13 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.27] - 2026-09-02
+
+### Fixed
+
+- 修复 rc.23 – rc.26 全部无法启动的问题，rc.27 是 Thread 进包后第一个能正常启动的版本。两层根因：rc.23/24 是 `dsh-thread` host 产物外置 `zod` import、桌面解包姿态解析不到（rc.25 内联修复）；rc.25/26 是 thread 仍调用 0.1.2 runtime 已删除的 `settingsNamespace()`（`dsh-thread` 0.2.0-rc.4 改为 `register` 直接收命名空间字符串）。⚠️ rc.23 – rc.26 界面起不来、无法应用内更新，请从 Releases 手动下载本版覆盖安装。
+- 发布链新增 packaged 冒烟门（#34）：发货同款 tarball 解压、按壳同款链接 runtime 依赖、逐个 import host 入口、空 home `plugin add` 后 `--dump-config`——「CI 源码树绿、解压产物对着钉死 runtime 起不来」这一类事故在发布前即拦截。
+
 ## [0.3.0-rc.26] - 2026-09-02
 
 ### Added

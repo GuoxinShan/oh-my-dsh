@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,7 @@ import {
   defaultTarballName,
   hashKeyForTarball,
   listShippedPluginSpecs,
+  packEntriesFor,
   runtimeLinkPlan,
   shippedPluginsManifest,
 } from './shipped-plugins.mjs'
@@ -25,6 +27,18 @@ test('derives the historical tarball and hash keys', () => {
   assert.equal(hashKeyForTarball('compaction-hierarchical.tar.gz'), 'compactionHierarchicalTarball')
   assert.equal(hashKeyForTarball('web-search-toggle.tar.gz'), 'webSearchToggleTarball')
   assert.equal(camelCaseStem('model-efforts-editor'), 'modelEffortsEditor')
+})
+
+test('pack entries carry lib even when specs are listed before the build', () => {
+  // Cold CI checkouts have no lib yet (gitignored); a conditional entry
+  // packed boot-dead tarballs. lib must ride unconditionally.
+  const dir = mkdtempSync(join(tmpdir(), 'shipped-plugins-'))
+  try {
+    writeFileSync(join(dir, 'package.json'), '{}\n')
+    assert.deepEqual(packEntriesFor(dir), ['package.json', 'lib'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('lists every ship:true plugin once, including thread', () => {

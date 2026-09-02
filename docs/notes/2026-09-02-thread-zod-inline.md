@@ -74,3 +74,22 @@ workflow 里给 thread `pnpm install`）只解决「能不能构建」，不改�
   只能手动下载 rc.25 / 打 zod 软链 / 装回 rc.22。作者本机以
   `~/.dsh-desktop/plugins/dsh-thread/node_modules/zod -> runtime 树 .pnpm/zod@4.5.4`
   软链临时解锁（rc.25 的新 threadTarball hash 会整目录重解压，软链随之消亡）。
+
+## 后续（同日第二层）：rc.25/rc.26 仍无法启动
+
+zod 修完后 boot 继续死在**下一层**：`dsh-thread/gateway` 值导入
+`settingsNamespace()`，而 runtime `v0.1.2-alpha.3+zw.2` 的 `dsh-settings` 已删除该
+导出（`SettingsProvider.register` 直接收命名空间字符串）。rc.19 升 0.1.2 时对齐了
+wst / mcp-settings / reasoning-efforts，thread 当时不在 desktop-owned 清单、漏扫；
+rc.23 进包后 zod 先炸、把这一层盖住了——两层是叠加的。CI 只在「已 install 的源码树」
+里 typecheck（devDeps 钉 0.1.1-rc.2，还有该导出），永远拦不住。
+
+- 修复：`dsh-thread` 0.2.0-rc.4，`register` 直接收字符串（PR #34，GuoxinShan）。
+- 防回归：PR #34 落地 packaged 冒烟门（`dsh.desktop.ship` 发货清单 +
+  `scripts/smoke-packaged-profile.mjs`，prepare/CI 强制跑）——发货同款 tarball 解压、
+  按壳同款链接 runtime 依赖、逐个 import host 入口、空 home `plugin add` +
+  `--dump-config`。首跑即抓到门自身的一个时序 bug（`packEntriesFor` 在 CI 冷
+  checkout 上早于 build 判定 `lib` 不存在，打出的 tar 不带 lib），已修为 `lib`
+  无条件随包。决策记录见 `docs/notes/2026-09-02-packaged-profile-smoke.md`。
+- 结论：rc.23 – rc.26 四版全部无法启动，`0.3.0-rc.27` 是 Thread 进包后首个可启动
+  版本；四版用户均需手动下载 rc.27 覆盖安装。

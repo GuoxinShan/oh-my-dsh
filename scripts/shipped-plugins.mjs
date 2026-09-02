@@ -10,7 +10,7 @@
  * @module shipped-plugins
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, rmdirSync, statSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, rmdirSync, statSync, symlinkSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -62,13 +62,16 @@ export function defaultEnvName(name) {
 
 /**
  * Files the desktop tarball must carry. Matches the historical prepare
- * include list: manifest + patch + lib + optional README / preset snippet.
+ * include list: manifest + lib + patch + optional README / preset snippet.
+ * `lib` is unconditional: specs are listed before builds run (a cold CI
+ * checkout has no lib yet — gitignored), and a tar packed without lib is
+ * exactly the artifact that cannot boot on the desktop extraction path.
  * @param {string} pluginDir
  * @returns {string[]}
  */
 export function packEntriesFor(pluginDir) {
-  const entries = ['package.json']
-  for (const name of ['cordis.patch.yml', 'preset-snippet.yml', 'README.md', 'lib']) {
+  const entries = ['package.json', 'lib']
+  for (const name of ['cordis.patch.yml', 'preset-snippet.yml', 'README.md']) {
     if (existsSync(join(pluginDir, name))) entries.push(name)
   }
   return entries
@@ -118,6 +121,10 @@ export function listShippedPluginSpecs(repoRoot) {
   const specs = []
   for (const name of readdirSync(pluginRoot).sort()) {
     const dir = join(pluginRoot, name)
+    // The plugin:setup harness anchor (plugin/deepseek-harness -> checkout)
+    // is a symlink whose package name never matches its directory; it is
+    // dev tooling, not a plugin package (same skip as plugins:check).
+    if (lstatSync(dir).isSymbolicLink()) continue
     const manifest = join(dir, 'package.json')
     if (!existsSync(manifest)) continue
     const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
