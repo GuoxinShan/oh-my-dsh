@@ -23,6 +23,13 @@
         "@deepseek-ai/dsh-client-runtime"
       ],
       "platform": "web"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "send-while-running.tar.gz",
+      "dest": "plugins/dsh-send-while-running",
+      "env": "DSH_DESKTOP_SEND_WHILE_RUNNING_PLUGIN",
+      "pin": "0.1.1"
     }
   },
   "scripts": {

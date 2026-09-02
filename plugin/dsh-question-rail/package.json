@@ -23,6 +23,13 @@
         "@deepseek-ai/dsh-client-runtime"
       ],
       "platform": "web"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "question-rail.tar.gz",
+      "dest": "plugins/dsh-question-rail",
+      "env": "DSH_DESKTOP_QUESTION_RAIL_PLUGIN",
+      "pin": "0.6.0"
     }
   },
   "scripts": {

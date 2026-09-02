@@ -23,6 +23,13 @@
         "@deepseek-ai/dsh-client-runtime"
       ],
       "platform": "web"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "model-efforts-editor.tar.gz",
+      "dest": "plugins/dsh-model-efforts-editor",
+      "env": "DSH_DESKTOP_MODEL_EFFORTS_EDITOR_PLUGIN",
+      "pin": "0.1.1"
     }
   },
   "scripts": {

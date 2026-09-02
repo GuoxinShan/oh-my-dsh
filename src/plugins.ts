@@ -1,30 +1,25 @@
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import {
-  BRIDGE_PACKAGE,
-  COMPACTION_PACKAGE,
-  COMPACTION_RUNTIME_PEERS,
-  MODEL_EFFORTS_EDITOR_PACKAGE,
-  MODEL_IMAGE_INPUT_PACKAGE,
-  QUESTION_RAIL_PACKAGE,
-  SEND_WHILE_RUNNING_PACKAGE,
-  THREAD_PACKAGE,
-  THREAD_RUNTIME_PEERS,
-  WEB_SEARCH_TOGGLE_PACKAGE,
-  WEB_SEARCH_TOGGLE_RUNTIME_PEERS,
-} from './constants.ts'
 import { extractHashedPackage, readRevisionManifest } from './extract.ts'
 import { repoRoot, resourceDir, shellRoot } from './paths.ts'
 import type { Runtime } from './runtime.ts'
+import { linkPluginRuntimeDeps, listShippedPluginSpecs } from '../scripts/shipped-plugins.mjs'
 
 export interface PluginRef {
   package: string
   dir: string
 }
 
-function envPlugin(name: string, envName: string): string | undefined {
+export interface ShippedPluginRef {
+  package: string
+  tarball: string
+  destRel: string
+  env: string
+  hashKey: string
+}
+
+function envPlugin(label: string, envName: string): string | undefined {
   const fromEnv = process.env[envName]
   if (!fromEnv) return undefined
   if (!fs.existsSync(path.join(fromEnv, 'package.json'))) {
@@ -66,125 +61,61 @@ function findPlugin(
   throw new Error(`${label} package not found at ${dev} (set ${envName})`)
 }
 
+function isShippedPluginRef(value: unknown): value is ShippedPluginRef {
+  if (typeof value !== 'object' || value === null) return false
+  const row = value as Record<string, unknown>
+  return typeof row.package === 'string'
+    && typeof row.tarball === 'string'
+    && typeof row.destRel === 'string'
+    && typeof row.env === 'string'
+    && typeof row.hashKey === 'string'
+}
+
+function packagedShippedPlugins(packaged: boolean): ShippedPluginRef[] {
+  const resources = resourceDir(packaged)
+  if (resources === undefined) {
+    throw new Error('dsh-desktop: packaged shell has no resource directory')
+  }
+  const manifest = readRevisionManifest(resources)
+  const rows = manifest?.shippedPlugins
+  if (!Array.isArray(rows) || rows.length === 0 || !rows.every(isShippedPluginRef)) {
+    throw new Error('dsh-desktop: runtime-revision.json is missing a shippedPlugins array')
+  }
+  return rows
+}
+
+function specToRef(spec: ShippedPluginRef): ShippedPluginRef {
+  return {
+    package: spec.package,
+    tarball: spec.tarball,
+    destRel: spec.destRel,
+    env: spec.env,
+    hashKey: spec.hashKey,
+  }
+}
+
+export function shippedPluginRefs(packaged: boolean): ShippedPluginRef[] {
+  if (packaged) return packagedShippedPlugins(packaged)
+  return listShippedPluginSpecs(repoRoot()).map(specToRef)
+}
+
 export function findDesktopPlugins(packaged: boolean): PluginRef[] {
-  return [
-    {
-      package: BRIDGE_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_BRIDGE', 'bridge.tar.gz', 'bridgeTarball', 'bridge', 'plugin/dsh-desktop-bridge', BRIDGE_PACKAGE),
-    },
-    {
-      package: COMPACTION_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_COMPACTION_PLUGIN', 'compaction-hierarchical.tar.gz', 'compactionHierarchicalTarball', `plugins/${COMPACTION_PACKAGE}`, 'plugin/dsh-compaction-hierarchical', COMPACTION_PACKAGE),
-    },
-    {
-      package: WEB_SEARCH_TOGGLE_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_WEB_SEARCH_TOGGLE_PLUGIN', 'web-search-toggle.tar.gz', 'webSearchToggleTarball', `plugins/${WEB_SEARCH_TOGGLE_PACKAGE}`, 'plugin/dsh-web-search-toggle', WEB_SEARCH_TOGGLE_PACKAGE),
-    },
-    {
-      package: MODEL_IMAGE_INPUT_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_MODEL_IMAGE_INPUT_PLUGIN', 'model-image-input.tar.gz', 'modelImageInputTarball', `plugins/${MODEL_IMAGE_INPUT_PACKAGE}`, 'plugin/dsh-model-image-input', MODEL_IMAGE_INPUT_PACKAGE),
-    },
-    {
-      package: SEND_WHILE_RUNNING_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_SEND_WHILE_RUNNING_PLUGIN', 'send-while-running.tar.gz', 'sendWhileRunningTarball', `plugins/${SEND_WHILE_RUNNING_PACKAGE}`, 'plugin/dsh-send-while-running', SEND_WHILE_RUNNING_PACKAGE),
-    },
-    {
-      package: MODEL_EFFORTS_EDITOR_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_MODEL_EFFORTS_EDITOR_PLUGIN', 'model-efforts-editor.tar.gz', 'modelEffortsEditorTarball', `plugins/${MODEL_EFFORTS_EDITOR_PACKAGE}`, 'plugin/dsh-model-efforts-editor', MODEL_EFFORTS_EDITOR_PACKAGE),
-    },
-    {
-      package: QUESTION_RAIL_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_QUESTION_RAIL_PLUGIN', 'question-rail.tar.gz', 'questionRailTarball', `plugins/${QUESTION_RAIL_PACKAGE}`, 'plugin/dsh-question-rail', QUESTION_RAIL_PACKAGE),
-    },
-    {
-      package: THREAD_PACKAGE,
-      dir: findPlugin(packaged, 'DSH_DESKTOP_THREAD_PLUGIN', 'thread.tar.gz', 'threadTarball', `plugins/${THREAD_PACKAGE}`, 'plugin/dsh-thread', THREAD_PACKAGE),
-    },
-  ]
-}
-
-function resolveRuntimePackage(runtime: Runtime, packageName: string): string | undefined {
-  const hoisted = path.join(runtime.cwd, 'node_modules', packageName)
-  if (fs.existsSync(hoisted) && fs.statSync(hoisted).isDirectory()) return hoisted
-  const encoded = packageName.replaceAll('/', '+')
-  const prefix = `${encoded}@`
-  const pnpmDir = path.join(runtime.cwd, 'node_modules/.pnpm')
-  if (!fs.existsSync(pnpmDir)) return undefined
-  const matches = fs.readdirSync(pnpmDir)
-    .filter((name) => name.startsWith(prefix))
-    .map((name) => path.join(pnpmDir, name, 'node_modules', packageName))
-    .filter((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isDirectory())
-    .sort()
-  return matches[0]
-}
-
-function linkDir(target: string, link: string): void {
-  fs.mkdirSync(path.dirname(link), { recursive: true })
-  if (process.platform === 'win32') {
-    try {
-      fs.symlinkSync(target, link, 'dir')
-      return
-    } catch {
-      const status = spawnSync('cmd', ['/C', 'mklink', '/J', link, target], { windowsHide: true })
-      if (status.status !== 0) {
-        throw new Error(`mklink /J ${link} -> ${target} exited ${String(status.status)}`)
-      }
-    }
-    return
-  }
-  fs.symlinkSync(target, link)
-}
-
-function removeDirLink(link: string): void {
-  try {
-    fs.rmSync(link, { force: true })
-  } catch {
-    fs.rmdirSync(link)
-  }
-}
-
-function ensureRuntimePackageLink(plugin: string, runtime: Runtime, packageName: string): void {
-  const targetRel = resolveRuntimePackage(runtime, packageName)
-  if (targetRel === undefined) {
-    console.warn(`dsh-desktop: skip runtime peer ${packageName} (absent from ${runtime.cwd})`)
-    return
-  }
-  const target = fs.realpathSync.native(targetRel)
-  const link = path.join(plugin, 'node_modules', packageName)
-  try {
-    const existing = fs.readlinkSync(link)
-    const existingAbs = path.isAbsolute(existing) ? existing : path.join(path.dirname(link), existing)
-    try {
-      if (fs.realpathSync.native(existingAbs) === target) return
-    } catch {
-      // replace
-    }
-    removeDirLink(link)
-  } catch {
-    if (fs.existsSync(link)) return
-  }
-  linkDir(target, link)
+  return shippedPluginRefs(packaged).map((spec) => ({
+    package: spec.package,
+    dir: findPlugin(
+      packaged,
+      spec.env,
+      spec.tarball,
+      spec.hashKey,
+      spec.destRel,
+      `plugin/${spec.package}`,
+      spec.package,
+    ),
+  }))
 }
 
 export function ensurePluginRuntimeLinks(plugins: PluginRef[], runtime: Runtime): void {
   for (const plugin of plugins) {
-    if (plugin.package === BRIDGE_PACKAGE) {
-      try {
-        ensureRuntimePackageLink(plugin.dir, runtime, '@deepseek-ai/cordis')
-      } catch (error) {
-        console.error(`dsh-desktop: bridge cordis link failed: ${String(error)}`)
-      }
-    }
-    if (!fs.existsSync(path.join(plugin.dir, '.ok'))) continue
-    const peers = plugin.package === COMPACTION_PACKAGE
-      ? COMPACTION_RUNTIME_PEERS
-      : plugin.package === WEB_SEARCH_TOGGLE_PACKAGE
-        ? WEB_SEARCH_TOGGLE_RUNTIME_PEERS
-        : plugin.package === THREAD_PACKAGE
-          ? THREAD_RUNTIME_PEERS
-          : []
-    for (const peer of peers) {
-      ensureRuntimePackageLink(plugin.dir, runtime, peer)
-    }
+    linkPluginRuntimeDeps(plugin.dir, runtime.cwd)
   }
 }

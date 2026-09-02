@@ -26,6 +26,13 @@
         "@deepseek-ai/dsh-client-connection"
       ],
       "platform": "web"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "model-image-input.tar.gz",
+      "dest": "plugins/dsh-model-image-input",
+      "env": "DSH_DESKTOP_MODEL_IMAGE_INPUT_PLUGIN",
+      "pin": "0.1.1"
     }
   },
   "scripts": {

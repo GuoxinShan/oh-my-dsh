@@ -38,6 +38,13 @@
         "@deepseek-ai/dsh-client-ui-slots"
       ],
       "platform": "web"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "web-search-toggle.tar.gz",
+      "dest": "plugins/dsh-web-search-toggle",
+      "env": "DSH_DESKTOP_WEB_SEARCH_TOGGLE_PLUGIN",
+      "pin": "0.1.4"
     }
   },
   "scripts": {
