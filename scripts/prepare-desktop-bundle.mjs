@@ -80,8 +80,8 @@ if (questionRailPackage.name !== 'dsh-question-rail' || questionRailPackage.vers
   throw new Error(`desktop requires dsh-question-rail 0.5.1, found ${questionRailPackage.name}@${questionRailPackage.version}`)
 }
 const threadPackage = JSON.parse(readFileSync(resolve(threadDir, 'package.json'), 'utf8'))
-if (threadPackage.name !== 'dsh-thread' || threadPackage.version !== '0.2.0-rc.2') {
-  throw new Error(`desktop requires dsh-thread 0.2.0-rc.2, found ${threadPackage.name}@${threadPackage.version}`)
+if (threadPackage.name !== 'dsh-thread' || threadPackage.version !== '0.2.0-rc.3') {
+  throw new Error(`desktop requires dsh-thread 0.2.0-rc.3, found ${threadPackage.name}@${threadPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {

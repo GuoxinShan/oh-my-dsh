@@ -32,6 +32,14 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
+    // zod rides inside the host libs: consumers (git installs, assembled
+    // runtimes, and the desktop tarball extraction — no node_modules, only
+    // the THREAD_RUNTIME_PEERS symlinks) cannot resolve a bare zod import,
+    // and the typert registry duck-types codecs (parse()) rather than
+    // checking zod instance identity — a bundled copy validates fine.
+    deps: {
+      onlyBundle: ['zod'],
+    },
     outputOptions: {
       chunkFileNames: '[name].js',
     },

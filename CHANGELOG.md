@@ -4,6 +4,12 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.25] - 2026-09-02
+
+### Fixed
+
+- 修复 rc.23 / rc.24 无法启动：`dsh-thread` host 产物外置的 `zod` import 在桌面解包姿态（无 node_modules、仅链接八个 harness peer）解析不到，loader 两个 entry 全挂、web profile boot 中止、sidecar 起不来。`dsh-thread` 0.2.0-rc.3 起 zod 内联进 host bundle（web-search-toggle 同款姿势）。⚠️ 已装 rc.23/rc.24 的机器界面起不来、无法应用内更新，请从 Releases 手动下载本版安装。
+
 ## [0.3.0-rc.24] - 2026-09-02
 
 ### Added
