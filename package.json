@@ -12,6 +12,7 @@
     "desktop:build:signed": "pnpm run desktop:build",
     "desktop:test": "node --import tsx --test src/*.test.ts",
     "desktop:typecheck": "tsc --noEmit -p src/tsconfig.json",
+    "desktop:smoke": "node scripts/smoke-packaged-profile.mjs",
     "plugin:setup": "node scripts/setup-plugins.mjs",
     "plugin:new": "node scripts/new-plugin.mjs",
     "plugin:check": "cd plugin/dsh-desktop-bridge && pnpm run typecheck && pnpm run test && pnpm run build",

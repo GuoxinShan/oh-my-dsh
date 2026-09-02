@@ -40,6 +40,13 @@
         "@deepseek-ai/dsh-client-ui-tool"
       ],
       "platform": "web"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "thread.tar.gz",
+      "dest": "plugins/dsh-thread",
+      "env": "DSH_DESKTOP_THREAD_PLUGIN",
+      "pin": "0.2.0-rc.3"
     }
   },
   "scripts": {

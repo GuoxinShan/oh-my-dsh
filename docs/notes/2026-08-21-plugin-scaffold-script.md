@@ -29,7 +29,7 @@ node scripts/new-plugin.mjs <dsh-name> [--face host|client|dual]
 - **不代写 roster 行与决策记录**：AGENTS.md 成员清单和 `docs/notes/` 需要人类/agent 的散文判断，脚本只在收尾 checklist 里提示（含决策记录的日期文件名）。
 - **不跑 `pnpm install`**：保持脚手架零副作用、可离线；下一步命令由收尾清单给出（install → typecheck → build → test）。
 - **不生成 vitest/jsdom 链**：模板只带 node:test；需要 DOM 组件测试时按 branding/web-search-toggle 的先例自行加（`vitest.config.ts` + jsdom devDeps），避免给 host-only 插件塞无用依赖。
-- **不碰 prepare-desktop-bundle / Tauri resources**：桌面分发链是显式契约（AGENTS.md「发版」），必须人工同 PR 更新，脚手架不得给出"已接好"的错觉。
+- **随 `.app` 发货只标 `dsh.desktop.ship`**：`--ship` 写上该字段即可进入 prepare / 解压 / `plugin add` / packaged dump-config 门。不要改 workflow。AGENTS.md roster 行和 `docs/notes/` 仍要人写。
 
 ## 防御
 

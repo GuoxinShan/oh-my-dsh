@@ -88,14 +88,8 @@ jobs:
         id: plugin-libs
         uses: actions/cache@v4
         with:
-          path: |
-            plugin/dsh-desktop-bridge/lib
-            plugin/dsh-compaction-hierarchical/lib
-            plugin/dsh-web-search-toggle/lib
-            plugin/dsh-model-image-input/lib
-            plugin/dsh-send-while-running/lib
-            plugin/dsh-model-efforts-editor/lib
-          key: plugin-libs-${{ runner.os }}-${{ hashFiles('plugin/dsh-desktop-bridge/src/**', 'plugin/dsh-desktop-bridge/package.json', 'plugin/dsh-desktop-bridge/tsdown.config.ts', 'plugin/dsh-compaction-hierarchical/src/**', 'plugin/dsh-compaction-hierarchical/package.json', 'plugin/dsh-compaction-hierarchical/tsdown.config.ts', 'plugin/dsh-web-search-toggle/src/**', 'plugin/dsh-web-search-toggle/package.json', 'plugin/dsh-web-search-toggle/tsdown.config.ts', 'plugin/dsh-model-image-input/src/**', 'plugin/dsh-model-image-input/package.json', 'plugin/dsh-model-image-input/tsdown.config.ts', 'plugin/dsh-send-while-running/src/**', 'plugin/dsh-send-while-running/package.json', 'plugin/dsh-send-while-running/tsdown.config.ts', 'plugin/dsh-model-efforts-editor/src/**', 'plugin/dsh-model-efforts-editor/package.json', 'plugin/dsh-model-efforts-editor/tsdown.config.ts') }}
+          path: plugin/**/lib
+          key: plugin-libs-${{ runner.os }}-${{ hashFiles('plugin/**/src/**', 'plugin/**/package.json', 'plugin/**/tsdown.config.ts') }}
 
       - name: Import signing certificate
         env:
@@ -122,22 +116,15 @@ jobs:
           set -euo pipefail
           pnpm install
           pids=()
-          pnpm --dir plugin/dsh-desktop-bridge install &
-          pids+=($!)
-          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-model-efforts-editor install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-question-rail install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-thread install --frozen-lockfile &
-          pids+=($!)
+          while read -r dir; do
+            extra=()
+            case "$dir" in
+              */dsh-desktop-bridge) extra+=(--no-frozen-lockfile) ;;
+              *) extra+=(--frozen-lockfile) ;;
+            esac
+            pnpm --dir "$dir" install "${extra[@]}" &
+            pids+=($!)
+          done < <(node scripts/shipped-plugins.mjs --print dir)
           ec=0
           for pid in "${pids[@]}"; do
             wait "$pid" || ec=1
@@ -258,14 +245,8 @@ jobs:
         id: plugin-libs
         uses: actions/cache@v4
         with:
-          path: |
-            plugin/dsh-desktop-bridge/lib
-            plugin/dsh-compaction-hierarchical/lib
-            plugin/dsh-web-search-toggle/lib
-            plugin/dsh-model-image-input/lib
-            plugin/dsh-send-while-running/lib
-            plugin/dsh-model-efforts-editor/lib
-          key: plugin-libs-${{ runner.os }}-${{ hashFiles('plugin/dsh-desktop-bridge/src/**', 'plugin/dsh-desktop-bridge/package.json', 'plugin/dsh-desktop-bridge/tsdown.config.ts', 'plugin/dsh-compaction-hierarchical/src/**', 'plugin/dsh-compaction-hierarchical/package.json', 'plugin/dsh-compaction-hierarchical/tsdown.config.ts', 'plugin/dsh-web-search-toggle/src/**', 'plugin/dsh-web-search-toggle/package.json', 'plugin/dsh-web-search-toggle/tsdown.config.ts', 'plugin/dsh-model-image-input/src/**', 'plugin/dsh-model-image-input/package.json', 'plugin/dsh-model-image-input/tsdown.config.ts', 'plugin/dsh-send-while-running/src/**', 'plugin/dsh-send-while-running/package.json', 'plugin/dsh-send-while-running/tsdown.config.ts', 'plugin/dsh-model-efforts-editor/src/**', 'plugin/dsh-model-efforts-editor/package.json', 'plugin/dsh-model-efforts-editor/tsdown.config.ts') }}
+          path: plugin/**/lib
+          key: plugin-libs-${{ runner.os }}-${{ hashFiles('plugin/**/src/**', 'plugin/**/package.json', 'plugin/**/tsdown.config.ts') }}
 
       - name: Prepare desktop plugin deps
         shell: bash
@@ -273,22 +254,15 @@ jobs:
           set -euo pipefail
           pnpm install
           pids=()
-          pnpm --dir plugin/dsh-desktop-bridge install &
-          pids+=($!)
-          pnpm --dir plugin/dsh-compaction-hierarchical install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-web-search-toggle install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-model-image-input install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-send-while-running install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-model-efforts-editor install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-question-rail install --frozen-lockfile &
-          pids+=($!)
-          pnpm --dir plugin/dsh-thread install --frozen-lockfile &
-          pids+=($!)
+          while read -r dir; do
+            extra=()
+            case "$dir" in
+              */dsh-desktop-bridge) extra+=(--no-frozen-lockfile) ;;
+              *) extra+=(--frozen-lockfile) ;;
+            esac
+            pnpm --dir "$dir" install "${extra[@]}" &
+            pids+=($!)
+          done < <(node scripts/shipped-plugins.mjs --print dir)
           ec=0
           for pid in "${pids[@]}"; do
             wait "$pid" || ec=1

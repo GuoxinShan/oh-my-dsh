@@ -9,7 +9,7 @@ jobs:
   plugin:
     name: Desktop-owned plugins (typecheck + tests + build)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       # Upstream-line discipline: typecheck against the SAME baseline the
@@ -42,37 +42,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: |
             harness/pnpm-lock.yaml
-            plugin/dsh-desktop-bridge/pnpm-lock.yaml
-            plugin/dsh-compaction-hierarchical/pnpm-lock.yaml
-            plugin/dsh-web-search-toggle/pnpm-lock.yaml
+            plugin/**/pnpm-lock.yaml
       - name: Install harness
         working-directory: harness
         run: pnpm install --frozen-lockfile
       - name: Build harness (lib/types the plugin typechecks against)
         working-directory: harness
         run: pnpm run build
-      - name: Bridge setup + checks
-        working-directory: plugin/dsh-desktop-bridge
-        run: |
-          pnpm install --no-frozen-lockfile
-          DSH_CHECKOUT="$GITHUB_WORKSPACE/harness" pnpm run setup
-          pnpm run typecheck
-          pnpm run test
-          pnpm run build
-      - name: Hierarchical compaction checks
-        working-directory: plugin/dsh-compaction-hierarchical
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run typecheck
-          pnpm run test
-          pnpm run build
-      - name: Web Search toggle checks
-        working-directory: plugin/dsh-web-search-toggle
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run typecheck
-          pnpm run test
-          pnpm run build
+      - name: Check every shipped plugin
+        env:
+          DSH_CHECKOUT: ${{ github.workspace }}/harness
+        run: node scripts/check-shipped-plugins.mjs
 
   shell:
     name: Electron shell (typecheck + tests)
@@ -92,5 +72,43 @@ jobs:
         run: pnpm desktop:typecheck
       - name: Test Electron shell
         run: pnpm desktop:test
+      - name: Test shipped-plugin roster
+        run: node --test scripts/shipped-plugins.test.mjs
       - name: Test release-notes extractor
         run: node --test scripts/release-notes.test.mjs
+
+  packaged-smoke:
+    name: Packaged profile smoke (extract + import + dump-config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            plugin/**/pnpm-lock.yaml
+      - name: Cache runtime assembly
+        uses: actions/cache@v4
+        with:
+          path: |
+            runtime/src
+            runtime/build
+            runtime/tarballs
+          key: runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-${{ hashFiles('scripts/prepare-runtime.mjs') }}
+          restore-keys: |
+            runtime-${{ runner.os }}-${{ hashFiles('runtime/revision.json') }}-
+      - name: Install workspace and shipped plugins
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          node scripts/shipped-plugins.mjs --print dir | while read -r dir; do
+            pnpm --dir "$dir" install --frozen-lockfile || pnpm --dir "$dir" install --no-frozen-lockfile
+          done
+      - name: Assemble runtime
+        run: node scripts/prepare-runtime.mjs
+      - name: Packaged dump-config smoke
+        run: pnpm run desktop:smoke

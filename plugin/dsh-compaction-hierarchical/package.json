@@ -14,6 +14,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "desktop": {
+      "ship": true,
+      "tarball": "compaction-hierarchical.tar.gz",
+      "dest": "plugins/dsh-compaction-hierarchical",
+      "env": "DSH_DESKTOP_COMPACTION_PLUGIN"
     }
   },
   "scripts": {

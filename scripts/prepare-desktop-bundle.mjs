@@ -34,55 +34,18 @@ import { createReadStream, existsSync, readFileSync, mkdirSync, writeFileSync, s
 import { resolve, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pnpm } from './cli-bins.mjs'
+import { listShippedPluginSpecs, shippedPluginsManifest } from './shipped-plugins.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const revision = JSON.parse(readFileSync(resolve(repoRoot, 'runtime/revision.json'), 'utf8'))
 const runtimeDir = resolve(repoRoot, 'runtime/build', revision.sha)
-const bridgeDir = resolve(repoRoot, 'plugin/dsh-desktop-bridge')
-const compactionDir = resolve(repoRoot, 'plugin/dsh-compaction-hierarchical')
-const webSearchToggleDir = resolve(repoRoot, 'plugin/dsh-web-search-toggle')
-const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
-const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
-const modelEffortsEditorDir = resolve(repoRoot, 'plugin/dsh-model-efforts-editor')
-const questionRailDir = resolve(repoRoot, 'plugin/dsh-question-rail')
-const threadDir = resolve(repoRoot, 'plugin/dsh-thread')
+const shipped = listShippedPluginSpecs(repoRoot)
 const resourcesDir = resolve(repoRoot, 'src/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
 const runtimeShaMarker = resolve(resourcesDir, 'runtime.tar.gz.sha')
-const bridgeTar = resolve(resourcesDir, 'bridge.tar.gz')
-const compactionTar = resolve(resourcesDir, 'compaction-hierarchical.tar.gz')
-const webSearchToggleTar = resolve(resourcesDir, 'web-search-toggle.tar.gz')
-const modelImageInputTar = resolve(resourcesDir, 'model-image-input.tar.gz')
-const sendWhileRunningTar = resolve(resourcesDir, 'send-while-running.tar.gz')
-const modelEffortsEditorTar = resolve(resourcesDir, 'model-efforts-editor.tar.gz')
-const questionRailTar = resolve(resourcesDir, 'question-rail.tar.gz')
-const threadTar = resolve(resourcesDir, 'thread.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
-const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
-if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.4') {
-  throw new Error(`desktop requires dsh-web-search-toggle 0.1.4, found ${webSearchTogglePackage.name}@${webSearchTogglePackage.version}`)
-}
-const modelImageInputPackage = JSON.parse(readFileSync(resolve(modelImageInputDir, 'package.json'), 'utf8'))
-if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPackage.version !== '0.1.1') {
-  throw new Error(`desktop requires dsh-model-image-input 0.1.1, found ${modelImageInputPackage.name}@${modelImageInputPackage.version}`)
-}
-const sendWhileRunningPackage = JSON.parse(readFileSync(resolve(sendWhileRunningDir, 'package.json'), 'utf8'))
-if (sendWhileRunningPackage.name !== 'dsh-send-while-running' || sendWhileRunningPackage.version !== '0.1.1') {
-  throw new Error(`desktop requires dsh-send-while-running 0.1.1, found ${sendWhileRunningPackage.name}@${sendWhileRunningPackage.version}`)
-}
-const modelEffortsEditorPackage = JSON.parse(readFileSync(resolve(modelEffortsEditorDir, 'package.json'), 'utf8'))
-if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffortsEditorPackage.version !== '0.1.1') {
-  throw new Error(`desktop requires dsh-model-efforts-editor 0.1.1, found ${modelEffortsEditorPackage.name}@${modelEffortsEditorPackage.version}`)
-}
-const questionRailPackage = JSON.parse(readFileSync(resolve(questionRailDir, 'package.json'), 'utf8'))
-if (questionRailPackage.name !== 'dsh-question-rail' || questionRailPackage.version !== '0.6.0') {
-  throw new Error(`desktop requires dsh-question-rail 0.6.0, found ${questionRailPackage.name}@${questionRailPackage.version}`)
-}
-const threadPackage = JSON.parse(readFileSync(resolve(threadDir, 'package.json'), 'utf8'))
-if (threadPackage.name !== 'dsh-thread' || threadPackage.version !== '0.2.0-rc.3') {
-  throw new Error(`desktop requires dsh-thread 0.2.0-rc.3, found ${threadPackage.name}@${threadPackage.version}`)
-}
+const pluginTar = (tarball) => resolve(resourcesDir, tarball)
 
 function run(cmd, args, opts = {}) {
   const shell = opts.shell ?? (process.platform === 'win32' && /\.cmd$/i.test(String(cmd)))
@@ -121,7 +84,7 @@ function sha256(path) {
   })
 }
 
-const desktopPluginDirs = [bridgeDir, compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir, questionRailDir, threadDir]
+const desktopPluginDirs = shipped.map((spec) => spec.dir)
 const runtimeSrc = resolve(repoRoot, 'runtime/src')
 /** `build` = release path (CI already typechecked/tested). Default `verify` stays local-complete. */
 const prepareMode = process.env.DSH_DESKTOP_PREPARE_MODE === 'build' ? 'build' : 'verify'
@@ -165,15 +128,20 @@ if (prepareMode === 'build') {
   // second prepare-runtime in the workflow.
   assembleRuntime()
   const checkout = process.env.DSH_CHECKOUT || runtimeSrc
-  run(pnpm, ['run', 'setup'], { cwd: bridgeDir, env: { ...process.env, DSH_CHECKOUT: checkout } })
+  const bridge = shipped.find((spec) => spec.package === 'dsh-desktop-bridge')
+  if (bridge === undefined) {
+    throw new Error('prepare-desktop-bundle: dsh-desktop-bridge must declare dsh.desktop.ship')
+  }
+  run(pnpm, ['run', 'setup'], { cwd: bridge.dir, env: { ...process.env, DSH_CHECKOUT: checkout } })
   console.log('prepare-desktop-bundle: building desktop plugins (skip typecheck/test)...')
   await buildDesktopPlugins()
 } else {
   console.log('prepare-desktop-bundle: verifying desktop plugins...')
   run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-  for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir, questionRailDir, threadDir]) {
+  for (const spec of shipped) {
+    if (spec.package === 'dsh-desktop-bridge') continue
     for (const script of ['typecheck', 'test', 'build']) {
-      run(pnpm, ['run', script], { cwd: pluginDir })
+      run(pnpm, ['run', script], { cwd: spec.dir })
     }
   }
   assembleRuntime()
@@ -275,58 +243,14 @@ if (existsSync(runtimeTar) && existsSync(runtimeShaMarker) && readFileSync(runti
 console.log(`prepare-desktop-bundle: runtime.tar.gz ${mb(runtimeTar)} MB`)
 
 // 4. Plugin tarballs: tiny, rebuilt every time to track the lib/ just built.
-tarCreate(bridgeTar, bridgeDir, ['package.json', 'cordis.patch.yml', 'lib'])
-console.log(`prepare-desktop-bundle: bridge.tar.gz ${mb(bridgeTar)} MB`)
-tarCreate(compactionTar, compactionDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'preset-snippet.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: compaction-hierarchical.tar.gz ${mb(compactionTar)} MB`)
-tarCreate(webSearchToggleTar, webSearchToggleDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: web-search-toggle.tar.gz ${mb(webSearchToggleTar)} MB`)
-tarCreate(modelImageInputTar, modelImageInputDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: model-image-input.tar.gz ${mb(modelImageInputTar)} MB`)
-tarCreate(sendWhileRunningTar, sendWhileRunningDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: send-while-running.tar.gz ${mb(sendWhileRunningTar)} MB`)
-tarCreate(modelEffortsEditorTar, modelEffortsEditorDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: model-efforts-editor.tar.gz ${mb(modelEffortsEditorTar)} MB`)
-tarCreate(questionRailTar, questionRailDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: question-rail.tar.gz ${mb(questionRailTar)} MB`)
-tarCreate(threadTar, threadDir, [
-  'package.json',
-  'cordis.patch.yml',
-  'README.md',
-  'lib',
-])
-console.log(`prepare-desktop-bundle: thread.tar.gz ${mb(threadTar)} MB`)
+const pluginHashes = {}
+for (const spec of shipped) {
+  const tar = pluginTar(spec.tarball)
+  tarCreate(tar, spec.dir, spec.packEntries)
+  pluginHashes[spec.hashKey] = await sha256(tar)
+  pluginHashes[spec.versionKey] = spec.version
+  console.log(`prepare-desktop-bundle: ${spec.tarball} ${mb(tar)} MB`)
+}
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
 // plus content hashes of every tarball. Each extraction .ok marker stores its
@@ -335,20 +259,13 @@ const manifest = {
   ...revision,
   runtimeArtifact: `runtime-${revision.sha}-${process.platform}-${process.arch}.tar.gz`,
   runtimeTarball: await sha256(runtimeTar),
-  bridgeTarball: await sha256(bridgeTar),
-  compactionHierarchicalTarball: await sha256(compactionTar),
-  webSearchToggleVersion: webSearchTogglePackage.version,
-  webSearchToggleTarball: await sha256(webSearchToggleTar),
-  modelImageInputVersion: modelImageInputPackage.version,
-  modelImageInputTarball: await sha256(modelImageInputTar),
-  sendWhileRunningVersion: sendWhileRunningPackage.version,
-  sendWhileRunningTarball: await sha256(sendWhileRunningTar),
-  modelEffortsEditorVersion: modelEffortsEditorPackage.version,
-  modelEffortsEditorTarball: await sha256(modelEffortsEditorTar),
-  questionRailVersion: questionRailPackage.version,
-  questionRailTarball: await sha256(questionRailTar),
-  threadVersion: threadPackage.version,
-  threadTarball: await sha256(threadTar),
+  shippedPlugins: shippedPluginsManifest(shipped),
+  ...pluginHashes,
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)
+
+if (process.env.DSH_DESKTOP_SKIP_SMOKE !== '1') {
+  console.log('prepare-desktop-bundle: packaged profile smoke...')
+  run('node', [resolve(repoRoot, 'scripts/smoke-packaged-profile.mjs')], { cwd: repoRoot })
+}

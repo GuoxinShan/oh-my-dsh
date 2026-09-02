@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-agent-presets'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-title'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -104,7 +104,7 @@ export class ThreadGateway extends TypertRemoteService {
     // (headless compositions) the feature stays on.
     const settings = this.ctx.get('settings')
     if (settings !== undefined) {
-      const scope = settings.register(settingsNamespace(THREAD_SETTINGS_NAMESPACE), ThreadSettingsSchema)
+      const scope = settings.register(THREAD_SETTINGS_NAMESPACE as SettingsNamespace, ThreadSettingsSchema)
       this.enabled = scope.get().enabled
       this.ctx.effect(() => scope.watch(next => { this.setEnabled(next.enabled) }), 'dsh-thread: settings watch')
     }

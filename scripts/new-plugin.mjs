@@ -5,7 +5,7 @@
  * Usage:
  *   node scripts/new-plugin.mjs <dsh-name> [--face host|client|dual]
  *                               [--id <rowId>] [--description <text>]
- *                               [--preset-owned]
+ *                               [--preset-owned] [--ship]
  *   pnpm run plugin:new -- <dsh-name> --face dual
  *
  * Faces (each distilled from a shipped plugin in this repo):
@@ -80,6 +80,7 @@ function usage() {
     '  --description <text>       package.json description (default: TODO placeholder)',
     '  --preset-owned             host face only: empty install-only patch +',
     '                             preset-snippet.yml (dsh-fs-observation-log shape)',
+    '  --ship                     mark dsh.desktop.ship so prepare/CI/install follow',
     '  -h, --help                 show this help',
   ].join('\n')
 }
@@ -87,7 +88,7 @@ function usage() {
 // ---------------------------------------------------------------- args ----
 const args = process.argv.slice(2)
 const positional = []
-const opts = { face: 'host', presetOwned: false }
+const opts = { face: 'host', presetOwned: false, ship: false }
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i]
@@ -95,6 +96,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === '--id') opts.rowId = args[++i]
   else if (a === '--description' || a === '-d') opts.description = args[++i]
   else if (a === '--preset-owned') opts.presetOwned = true
+  else if (a === '--ship') opts.ship = true
   else if (a === '-h' || a === '--help') {
     console.log(usage())
     process.exit(0)
@@ -505,15 +507,18 @@ function packageJson() {
           './src/*': './src/*',
           './package.json': './package.json',
         },
-    dsh: hasClient
-      ? {
-          bundle: { patch: './cordis.patch.yml' },
-          client: {
-            inject: ['@deepseek-ai/dsh-client-runtime'],
-            platform: 'web',
-          },
-        }
-      : { bundle: { patch: './cordis.patch.yml' } },
+    dsh: {
+      bundle: { patch: './cordis.patch.yml' },
+      ...(hasClient
+        ? {
+            client: {
+              inject: ['@deepseek-ai/dsh-client-runtime'],
+              platform: 'web',
+            },
+          }
+        : {}),
+      ...(opts.ship ? { desktop: { ship: true } } : {}),
+    },
     scripts: {
       typecheck: 'tsc --noEmit',
       build: 'tsdown',
@@ -620,5 +625,5 @@ next steps:
   3. implement: host logic in src/index.ts${opts.face !== 'host' ? ', browser half in src/client/index.ts' : ''}
   4. decision record: docs/notes/${today}-${rowId}.md (non-trivial changes must carry one)
   5. add a roster line under "插件 monorepo 规范" in the root AGENTS.md
-  6. release via the <name>-v<semver> tag; desktop-bundled plugins additionally
-     need the prepare/Tauri/shell chain updated (see AGENTS.md "发版")`)
+  6. to ship inside the .app: rerun with --ship, or set dsh.desktop.ship
+     (prepare / CI / dump-config smoke follow that field; do not edit ci.yml)`)
