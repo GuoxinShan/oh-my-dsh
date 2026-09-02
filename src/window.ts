@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { app, BrowserWindow } from 'electron'
 import { PRODUCT_NAME } from './constants.ts'
+import { redactLaunchUrl, withE2eQuery } from './urls.ts'
 import { watchE2eExit } from './e2e.ts'
 import { focusMainWindow, getMainWindow, setMainWindow } from './ipc.ts'
 import { shouldRetainBackground } from './keep-alive.ts'
@@ -33,7 +34,7 @@ export async function openMainWindow(url: string, e2e: boolean): Promise<void> {
   lastUrl = url
   lastE2e = e2e
   const preload = preloadScript()
-  const loadUrl = e2e ? `${url}/?e2e=1` : url
+  const loadUrl = e2e ? withE2eQuery(url) : url
   const window = new BrowserWindow({
     title: PRODUCT_NAME,
     width: 1400,
@@ -65,7 +66,7 @@ export async function openMainWindow(url: string, e2e: boolean): Promise<void> {
     })
     watchE2eExit()
   }
-  console.log(`dsh-desktop: window built, loading ${loadUrl}`)
+  console.log(`dsh-desktop: window built, loading ${redactLaunchUrl(loadUrl)}`)
   await window.loadURL(loadUrl)
 }
 

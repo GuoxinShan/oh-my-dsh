@@ -4,6 +4,13 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.19] - 2026-09-02
+
+### Changed
+
+- Runtime 升到 `v0.1.2-alpha.3+zw.1`。0.1.2 起 `dsh web` 的 index 要一次性 `?token=` 兑换 cookie，壳改为解析 sidecar 打印的回环 URL，不再探 `GET /`。
+- `dsh-web-search-toggle` 0.1.4，以及 mcp-settings / reasoning-efforts：对齐 0.1.2 删除的 `settingsNamespace()` / `installSettingsSection`。
+
 ## [0.3.0-rc.18] - 2026-09-01
 
 ### Fixed

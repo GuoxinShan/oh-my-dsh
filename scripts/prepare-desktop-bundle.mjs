@@ -57,8 +57,8 @@ const modelEffortsEditorTar = resolve(resourcesDir, 'model-efforts-editor.tar.gz
 const questionRailTar = resolve(resourcesDir, 'question-rail.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
-if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.3') {
-  throw new Error(`desktop requires dsh-web-search-toggle 0.1.3, found ${webSearchTogglePackage.name}@${webSearchTogglePackage.version}`)
+if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.4') {
+  throw new Error(`desktop requires dsh-web-search-toggle 0.1.4, found ${webSearchTogglePackage.name}@${webSearchTogglePackage.version}`)
 }
 const modelImageInputPackage = JSON.parse(readFileSync(resolve(modelImageInputDir, 'package.json'), 'utf8'))
 if (modelImageInputPackage.name !== 'dsh-model-image-input' || modelImageInputPackage.version !== '0.1.1') {

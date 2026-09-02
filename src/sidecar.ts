@@ -21,6 +21,20 @@ export interface SidecarEntry {
 
 let sidecar: ChildProcess | undefined
 let registryFile: string | undefined
+let sidecarTranscript = ''
+
+/**
+ * The readiness line `dsh web` prints after Loader settlement. The first
+ * loopback URL is the process launch token Electron must load; a LAN twin
+ * may follow in the same line and is ignored.
+ * @param text - sidecar stdout/stderr accumulated so far
+ * @param port - the loopback port this shell assigned
+ * @returns the loopback launch URL, or undefined until the line appears
+ */
+export function parseWebLaunchUrl(text: string, port: number): string | undefined {
+  const pattern = new RegExp(`dsh web: (http://127\\.0\\.0\\.1:${String(port)}/\\?token=[^\\s)]+)`)
+  return pattern.exec(text)?.[1]
+}
 
 export function sweepDecision(shellAlive: boolean, sidecarAlive: boolean): SweepDecision {
   if (shellAlive && sidecarAlive) return 'keep'
@@ -250,7 +264,7 @@ export function planSidecarSpawn(
 
 export function spawnSidecar(runtime: Runtime, home: string, port: number, profile = 'web'): string {
   const logPath = sidecarLogPath(home)
-  const log = fs.openSync(logPath, 'a')
+  sidecarTranscript = ''
   const env = sidecarEnv(runtime, { DSH_HOME: home })
   const plan = planSidecarSpawn(runtime, port, process.platform, profile)
   const child = spawn(
@@ -262,11 +276,19 @@ export function spawnSidecar(runtime: Runtime, home: string, port: number, profi
       detached: plan.detached,
       // Windows: taskkill /T is the tree-kill stand-in for a Job Object
       // (CREATE_BREAKAWAY_JOB is not a first-class Node spawn option).
-      stdio: ['ignore', log, log],
+      // Pipes (not a file fd) so the parent sees the `dsh web:` line as it
+      // is written; a file-backed stdout is fully buffered and would hide it.
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },
   )
-  fs.closeSync(log)
+  const append = (chunk: Buffer): void => {
+    const text = chunk.toString('utf8')
+    sidecarTranscript += text
+    fs.appendFileSync(logPath, text)
+  }
+  child.stdout?.on('data', append)
+  child.stderr?.on('data', append)
   if (child.pid === undefined) throw new Error('spawn sidecar: no pid')
   const sidecarLstart = psLstart(child.pid)
   const shellLstart = psLstart(process.pid)
@@ -300,23 +322,23 @@ export function initSidecarRegistry(): void {
   }
 }
 
-export async function waitReady(port: number): Promise<boolean> {
+/**
+ * Wait until `dsh web` prints its authenticated loopback URL. Bare `GET /`
+ * is 401 until that token is exchanged, so an HTTP 2xx probe never succeeds.
+ * @param port - the loopback port this shell assigned
+ * @returns the launch URL, or undefined if the sidecar dies or the budget expires
+ */
+export async function waitReady(port: number): Promise<string | undefined> {
   const started = Date.now()
-  let consecutive = 0
   while (Date.now() - started < PROBE_BUDGET_MS) {
-    // A sidecar that already exited will never answer — fail fast instead of
-    // burning the whole probe budget behind a dead window.
-    if (sidecar !== undefined && (sidecar.exitCode !== null || sidecar.signalCode !== null)) return false
-    if (await probeReady(port)) {
-      consecutive += 1
-      // Two answers in a row so a crashing boot cannot look ready.
-      if (consecutive >= 2) return true
-    } else {
-      consecutive = 0
-    }
+    // A sidecar that already exited will never print the line — fail fast
+    // instead of burning the whole probe budget behind a dead window.
+    if (sidecar !== undefined && (sidecar.exitCode !== null || sidecar.signalCode !== null)) return undefined
+    const launchUrl = parseWebLaunchUrl(sidecarTranscript, port)
+    if (launchUrl !== undefined) return launchUrl
     await new Promise((resolve) => setTimeout(resolve, PROBE_INTERVAL_MS))
   }
-  return false
+  return undefined
 }
 
 /** Why the current sidecar died, for failure dialogs; null while it runs. */
@@ -325,25 +347,4 @@ export function currentSidecarExit(): string | null {
   if (sidecar.exitCode !== null) return `exit code ${String(sidecar.exitCode)}`
   if (sidecar.signalCode !== null) return `signal ${sidecar.signalCode}`
   return null
-}
-
-async function probeReady(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host: '127.0.0.1', port })
-    const finish = (ok: boolean) => {
-      socket.removeAllListeners()
-      socket.destroy()
-      resolve(ok)
-    }
-    socket.setTimeout(2000)
-    socket.on('connect', () => {
-      socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`)
-    })
-    socket.on('data', (chunk) => {
-      const text = chunk.toString('utf8')
-      finish(text.startsWith('HTTP/1.1 2') || text.startsWith('HTTP/1.0 2'))
-    })
-    socket.on('timeout', () => finish(false))
-    socket.on('error', () => finish(false))
-  })
 }

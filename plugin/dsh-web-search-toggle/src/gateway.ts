@@ -16,7 +16,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef, } from '@deepseek-ai/dsh-credentials'
-import { settingsNamespace, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -32,7 +32,7 @@ import type { WebSearchToggleSnapshot } from './toggle-types.ts'
 const DEFAULT_KEY_REF = 'DEEPSEEK_API_KEY'
 
 /** The settings namespace carrying the search provider's section. */
-const WEB_SEARCH_NS: SettingsNamespace = settingsNamespace('web-search-deepseek')
+const WEB_SEARCH_NS = 'web-search-deepseek' as SettingsNamespace
 
 /**
  * Resolve the home patch file path exactly like the harness's `homePatchPath`:

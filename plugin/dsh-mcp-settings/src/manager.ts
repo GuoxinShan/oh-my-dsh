@@ -16,17 +16,21 @@ import { Service } from '@deepseek-ai/cordis'
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { deepEqualJson, installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
 import type { ReconnectConfig } from '@deepseek-ai/dsh-mcp-client'
 import type { McpClientStatus, McpServerEntry, McpSettings, McpServerStatus } from './manager-types.ts'
 
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
 export type { McpServerEntry, McpSettings, McpServerStatus } from './manager-types.ts'
 export type { StdioMcpServerEntry, HttpMcpServerEntry } from './manager-types.ts'
 
 /** Settings namespace owned by this service. */
-export const MCP_SETTINGS_NAMESPACE = settingsNamespace('mcp')
+export const MCP_SETTINGS_NAMESPACE = 'mcp' as SettingsNamespace
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -191,7 +195,7 @@ export class McpManagerService extends Service {
   private readonly credentialInvalidations = new Set<string>()
   /** Set synchronously when this service starts unloading. */
   private disposing = false
-  /** Reads the resolved settings section; installSettingsSection initializes it synchronously. */
+  /** Reads the resolved settings section; installSection initializes it synchronously. */
   private readSettings!: () => McpSettings
 
   constructor(ctx: Context, config: McpSettings = EMPTY_SETTINGS) {
@@ -229,11 +233,11 @@ export class McpManagerService extends Service {
     // established connections are untouched.
     ctx.inject(['credentials'], () => { this.enqueueResync() })
 
-    installSettingsSection(ctx, MCP_SETTINGS_NAMESPACE, Config, config, {
-      // The helper injects the settings service and already guards onChange
-      // against an unloading consumer; every resync re-reads the scope.
-      setSource: (read) => { this.readSettings = read },
-      onChange: () => {  this.enqueueResync() },
+    ctx.inject(['settings'], (settingsCtx) => {
+      settingsCtx.settings.installSection(ctx, MCP_SETTINGS_NAMESPACE, Config, config, {
+        setSource: (read) => { this.readSettings = read },
+        onChange: () => { this.enqueueResync() },
+      })
     })
 
     // Child fibers ride this service's fiber as effects; mark disposal before
@@ -309,7 +313,7 @@ export class McpManagerService extends Service {
         && !credentialInvalidations.has(serverName)
         && previousEntry !== undefined
         && managed?.fiber !== undefined
-        && deepEqualJson(previousEntry, entry)
+        && sameJson(previousEntry, entry)
 
       if (unchanged) {
         nextRuntime.set(serverName, managed)

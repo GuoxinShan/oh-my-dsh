@@ -390,18 +390,18 @@ export async function bootSequence(packaged: boolean, electronPath: string): Pro
   configureSurfaceSwitch({ runtime, plugins, home, root })
 
   const port = await freePort()
-  const url = `http://127.0.0.1:${String(port)}`
   const sidecarLog = spawnSidecar(runtime, home, port, surface)
-  if (!(await waitReady(port))) {
+  const launchUrl = await waitReady(port)
+  if (launchUrl === undefined) {
     const exitInfo = currentSidecarExit()
     killSidecar()
     throw new Error(
       exitInfo !== null
-        ? `harness sidecar for profile ${surface} exited before answering ${url} (${exitInfo}; see ${sidecarLog})`
-        : `harness server at ${url} did not answer GET / within 120s (see ${sidecarLog})`,
+        ? `harness sidecar for profile ${surface} exited before printing a dsh web launch URL (${exitInfo}; see ${sidecarLog})`
+        : `harness server on 127.0.0.1:${String(port)} did not print a dsh web launch URL within 120s (see ${sidecarLog})`,
     )
   }
   const e2e = process.env.DSH_DESKTOP_E2E_PROBE === '1'
-  await openMainWindow(url, e2e)
+  await openMainWindow(launchUrl, e2e)
   return 'started'
 }

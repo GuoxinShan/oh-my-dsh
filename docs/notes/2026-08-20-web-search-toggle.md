@@ -21,7 +21,7 @@
 1. **`[]` + 块 = YAML 双文档解析错误**：harness 新建的 home patch 就是 `[]\n`，天真 append 会产出 loader 拒收的文件（"Unexpected seq-item-ind at node end"）。`appendBlock` 在列表为空（只剩注释）时先摘掉 `[]` 行再拼块；re-enable 后回落到 harness 原生 `[]\n` 形态。单测用真实 `yaml` 包断言产物可解析。
 2. **tsdown 0.22 的 `external` 与 `deps.neverBundle` 互斥**（"`external` is deprecated. Cannot be used with `deps.neverBundle`"）——client 构建只写 `deps`（mcp-settings 的配置就是对的）。
 3. `@Remote` 标准装饰器与 `erasableSyntaxOnly` 冲突：tsconfig 去掉该 flag，tsdown 用 mcp-settings 的 `standardDecoratorPlugin` 预转译。
-4. `SettingsNamespace` 是 branded type，`settings.get(ns)` 需 `settingsNamespace()` 构造。
+4. `SettingsNamespace` 是 branded type。0.1.2 起不再导出 `settingsNamespace()`，用 `'web-search-deepseek' as SettingsNamespace`（0.1.4）。
 5. typert Remote 的 HTTP 不可 curl 直达（unary 路由是固定白名单，Remote 走流式通道）——端到端验证用文件级 + host 存活性判定。
 
 ## 验证

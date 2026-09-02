@@ -1,6 +1,6 @@
 {
   "name": "dsh-web-search-toggle",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "A General-settings toggle for native web_search: hides it across Agent Preset scopes, guards stale calls, and reports the DeepSeek search credential state",
   "type": "module",
   "main": "lib/index.js",

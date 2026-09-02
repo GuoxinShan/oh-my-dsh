@@ -28,7 +28,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace, type SettingsPathOp } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace, SettingsPathOp } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/cordis-plugin-timer'
 import { buildFillOps, collectCandidates, isPlainObject, validateConfig } from './rules.ts'
@@ -39,7 +39,7 @@ export const name = 'dsh-reasoning-efforts'
 export const inject = ['settings', 'llm', 'timer']
 
 /** The settings namespace llm-pi-ai's provider profiles live in. */
-const NS = settingsNamespace('llm-pi-ai')
+const NS = 'llm-pi-ai' as SettingsNamespace
 
 /** Startup retries while the namespace has not registered yet. */
 const STARTUP_ATTEMPTS = 10

@@ -245,7 +245,11 @@ export function selectAssembledRuntimeDir(buildRoot: string, pinnedSha: string):
 function sourceRuntime(electronPath: string): Runtime {
   const checkout = findCheckout()
   const inElectron = typeof process.versions.electron === 'string' && process.versions.electron.length > 0
-  if (inElectron) {
+  // Source `dsh web` under Electron-as-Node has printed the launch URL
+  // without `?token=` (the same checkout under host Node prints it). The
+  // window cannot exchange a cookie without that query, so source fallback
+  // uses host Node unless the caller explicitly asks for one-node.
+  if (inElectron && process.env.DSH_ELECTRON_ONE_NODE === '1') {
     const dockGuard = ensureDarwinDockGuard(shellRoot())
     const node = ensureSidecarNodeApp(electronPath, shellRoot())
     const shim = ensureNodeShim(node, shellRoot(), dockGuard)

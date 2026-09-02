@@ -16,13 +16,13 @@ import {
   selectAssembledRuntimeDir,
   sidecarEnv,
 } from './runtime.ts'
-import { flattenPidTree, killSidecar, planSidecarSpawn, spawnSidecar, sweepDecision, waitReady } from './sidecar.ts'
+import { flattenPidTree, killSidecar, parseWebLaunchUrl, planSidecarSpawn, spawnSidecar, sweepDecision, waitReady } from './sidecar.ts'
 import {
   claimUpdateCheck,
   resetUpdateStatusForTests,
   updateStatusSnapshot,
 } from './updater-state.ts'
-import { allowedExternalUrl } from './urls.ts'
+import { allowedExternalUrl, redactLaunchUrl, withE2eQuery } from './urls.ts'
 
 describe('sidecarEnv', () => {
   it('does not leak ELECTRON_RUN_AS_NODE onto a two-node sidecar', () => {
@@ -187,6 +187,20 @@ describe('composeProcessPath', () => {
   })
 })
 
+describe('launch token URL', () => {
+  it('redacts a launch token and keeps e2e on the same query', () => {
+    const launch = 'http://127.0.0.1:43111/?token=abc-DEF_0123456789'
+    assert.equal(redactLaunchUrl(launch), 'http://127.0.0.1:43111/?token=<redacted>')
+    assert.equal(withE2eQuery(launch), 'http://127.0.0.1:43111/?token=abc-DEF_0123456789&e2e=1')
+  })
+
+  it('takes the loopback token URL and ignores a LAN twin', () => {
+    const token = 'A'.repeat(43)
+    const text = `boot\ndsh web: http://127.0.0.1:43111/?token=${token} (LAN: http://10.0.0.2:43111/?token=${token})\n`
+    assert.equal(parseWebLaunchUrl(text, 43111), `http://127.0.0.1:43111/?token=${token}`)
+  })
+})
+
 describe('shouldRetainBackground', () => {
   it('hides the macOS window instead of quitting, except on Cmd+Q', () => {
     assert.equal(shouldRetainBackground('darwin', false), true)
@@ -255,7 +269,7 @@ describe('waitReady', () => {
       spawnSidecar(runtime, home, 1, 'web')
       const started = Date.now()
       const ok = await waitReady(1)
-      assert.equal(ok, false)
+      assert.equal(ok, undefined)
       // Fast-fail, not the 120s probe budget.
       assert.ok(Date.now() - started < 30_000, `took ${String(Date.now() - started)}ms`)
     } finally {

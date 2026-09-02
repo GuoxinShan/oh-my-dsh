@@ -29,7 +29,7 @@
 - **`ctx.timeout` 需要 `inject: ['timer']`**：host 侧 timer 是 `@deepseek-ai/cordis-plugin-timer` 服务（vendor/timer），mixin 到 ctx；类型 augment 靠 `import type {} from '@deepseek-ai/cordis-plugin-timer'`（devDep link 到 `dsh/vendor/timer`）。
 - **测试脚手架的 YAML 1.1 陷阱**：用 PyYAML `safe_dump` round-trip 含 `off:` 空值键的 settings 会把 `off` 变 `false`（YAML 1.1 bool），`false:` 不是合法档位 → llm-pi-ai section 校验拒绝 → namespace 不注册 → 填充静默失败。诊断手法：`console.error` 打点各退出分支。**scratch 验证脚本要么用 dsh 自己的 yaml，要么避免 round-trip。**
 - **`--patch` 不是 `dsh web` 的选项**；临时挂载行写 profile 的 `cordis.patch.yml`（用户 patch 层，bundle 层之上）。bundle 层（包内 `cordis.patch.yml`）经 `plugin add` 自动进组合，用户层再写同 id 行会 **duplicate entry id** 拒绝整个树。
-- `SettingsNamespace` 是 branded type，需要 `settingsNamespace('llm-pi-ai')` 构造。
+- `SettingsNamespace` 是 branded type。0.1.2 起不再导出 `settingsNamespace()`，用 `'llm-pi-ai' as SettingsNamespace`。
 
 ## 验证
 
