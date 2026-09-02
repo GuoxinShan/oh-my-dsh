@@ -4,6 +4,18 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.24] - 2026-09-02
+
+### Added
+
+- Thread 交接进入安装包（desktop-owned 七包 → 八包）：`dsh-thread` 0.2.0-rc.2 随壳首启幂等装入 web Profile。显式跨会话 Handoff——agent 在阶段边界起草携带结论/产物/待办的 Thread 草稿，经你在 Thread 面板确认后在同一工作区开新会话续接；「设置 → 通用 → Thread」总开关（默认开）统一门控工具与看板 UI。
+- 交接卡片状态持久化：创建成功后按钮从「在 Thread 中继续」变为「打开 Thread 会话」（点击跳转并自动展开 Thread 看板），刷新后状态不丢、不再误建重复会话；失败态给「重试」。
+- Thread 设置开关对齐 Web Search 词汇：32×18 原生语义开关、双语文案、300ms pending 延迟消除切换闪烁。
+
+### Fixed
+
+- 运行面切换确认框的插件计数文案（"六个包"已是第二次滞后）改为不提数字。
+
 ## [0.3.0-rc.21] - 2026-09-02
 
 ### Fixed
