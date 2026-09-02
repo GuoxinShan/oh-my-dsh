@@ -92,6 +92,7 @@ bash scripts/notarize-mac-artifacts.sh release/*.dmg release/*.zip
 | 每次热更都下整包 | 看 `~/.dsh-desktop/logs/updater.log` 是否 `Unable to locate previous update.zip`（DMG 第一次是预期）。清过 `~/Library/Caches/oh-my-dsh-updater/` 也会再整包。国内慢先设 `HTTPS_PROXY`，不要指望换 updater 超时 |
 | 热更后 sidecar 起不来 / missing runtime.tar.gz | 确认该 Release 有 `runtime-<sha>-*.tar.gz`，且 `~/.dsh-desktop/runtime/<sha>/.ok` 与 revision 哈希一致或能从 GitHub 补拉 |
 | DMG 安装页退化成默认布局 | `bash scripts/verify-dmg-layout.sh <dmg>` |
+| 平台产物已传 draft 但 Release 还是草稿 | `desktop-publish` 需要 mac/win 双 `success`；`actions/cache` 的 **post 收尾步**偶发 OOM / 拖满超时把 job 染红（rc.27 实案：mac post cache 崩溃、win post cache 卡到 120min 取消），构建/公证/上传其实全成。核对 draft 附件齐（dmg / zip / exe / 双 yml / 双平台 runtime tar），然后站在对应 tag 的 checkout 上本地补跑 publish 三步：`node scripts/release-notes.mjs <ver> > dist/release-notes.md`、`node scripts/tauri-cutover-latest-json.mjs <ver> dist/latest.json`、`gh release upload v<ver> dist/latest.json --clobber && gh release edit v<ver> --draft=false --latest --notes-file dist/release-notes.md`。不要整条 rerun——重烧 40 分钟还可能撞附件 clobber |
 
 ## 5. 开源注意事项
 
