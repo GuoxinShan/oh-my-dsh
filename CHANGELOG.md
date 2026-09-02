@@ -4,6 +4,12 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.20] - 2026-09-02
+
+### Fixed
+
+- prepare-runtime 的 fork 名单对齐 0.1.2 发布面：卸已删除的 `dsh-host-apiproxy`，改钉已发布的 `dsh-api-session-controller`。rc.19 因此装不出 runtime。
+
 ## [0.3.0-rc.19] - 2026-09-02
 
 ### Changed

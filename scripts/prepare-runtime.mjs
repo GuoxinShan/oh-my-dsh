@@ -24,7 +24,7 @@ import { execNpm, execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 9
+const SCRIPT_REV = 10
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 function electronAbiToken() {
   try {
@@ -109,13 +109,14 @@ const skipped = []
 // here on 2026-08-20. `dsh-tool-cordis` joined on 2026-08-21 to close its
 // generated catalog drift. `dsh-compaction-basic` joins in zw.2 on 2026-08-22:
 // the stock Provider now owns the bounded hierarchy fallback used by every
-// shipped preset.
+// shipped preset. 0.1.2 deletes ApiProxy; `dsh-host-apiproxy` leaves and
+// `dsh-api-session-controller` joins (effort memory lives there).
 const FORK_MODIFIED = new Set([
   '@deepseek-ai/dsh-agent-default-model',
+  '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-client-modules',
   '@deepseek-ai/dsh-client-ui-model-selection',
   '@deepseek-ai/dsh-compaction-basic',
-  '@deepseek-ai/dsh-host-apiproxy',
   '@deepseek-ai/dsh-host-frontend-static',
   '@deepseek-ai/dsh-mcp-client',
   '@deepseek-ai/dsh-session-persistence',
