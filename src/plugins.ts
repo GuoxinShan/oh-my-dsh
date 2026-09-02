@@ -10,6 +10,8 @@ import {
   MODEL_IMAGE_INPUT_PACKAGE,
   QUESTION_RAIL_PACKAGE,
   SEND_WHILE_RUNNING_PACKAGE,
+  THREAD_PACKAGE,
+  THREAD_RUNTIME_PEERS,
   WEB_SEARCH_TOGGLE_PACKAGE,
   WEB_SEARCH_TOGGLE_RUNTIME_PEERS,
 } from './constants.ts'
@@ -94,6 +96,10 @@ export function findDesktopPlugins(packaged: boolean): PluginRef[] {
       package: QUESTION_RAIL_PACKAGE,
       dir: findPlugin(packaged, 'DSH_DESKTOP_QUESTION_RAIL_PLUGIN', 'question-rail.tar.gz', 'questionRailTarball', `plugins/${QUESTION_RAIL_PACKAGE}`, 'plugin/dsh-question-rail', QUESTION_RAIL_PACKAGE),
     },
+    {
+      package: THREAD_PACKAGE,
+      dir: findPlugin(packaged, 'DSH_DESKTOP_THREAD_PLUGIN', 'thread.tar.gz', 'threadTarball', `plugins/${THREAD_PACKAGE}`, 'plugin/dsh-thread', THREAD_PACKAGE),
+    },
   ]
 }
 
@@ -174,7 +180,9 @@ export function ensurePluginRuntimeLinks(plugins: PluginRef[], runtime: Runtime)
       ? COMPACTION_RUNTIME_PEERS
       : plugin.package === WEB_SEARCH_TOGGLE_PACKAGE
         ? WEB_SEARCH_TOGGLE_RUNTIME_PEERS
-        : []
+        : plugin.package === THREAD_PACKAGE
+          ? THREAD_RUNTIME_PEERS
+          : []
     for (const peer of peers) {
       ensureRuntimePackageLink(plugin.dir, runtime, peer)
     }

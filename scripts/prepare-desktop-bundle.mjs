@@ -22,6 +22,7 @@
  *   src/resources/send-while-running.tar.gz (client-only plugin package)
  *   src/resources/model-efforts-editor.tar.gz (client-only plugin package)
  *   src/resources/question-rail.tar.gz (client-only plugin package)
+ *   src/resources/thread.tar.gz          (host + client plugin package)
  *   src/resources/runtime-revision.json   (runtime + plugin hashes/versions)
  *
  * `src/resources/` is gitignored — regenerated per build via
@@ -44,6 +45,7 @@ const modelImageInputDir = resolve(repoRoot, 'plugin/dsh-model-image-input')
 const sendWhileRunningDir = resolve(repoRoot, 'plugin/dsh-send-while-running')
 const modelEffortsEditorDir = resolve(repoRoot, 'plugin/dsh-model-efforts-editor')
 const questionRailDir = resolve(repoRoot, 'plugin/dsh-question-rail')
+const threadDir = resolve(repoRoot, 'plugin/dsh-thread')
 const resourcesDir = resolve(repoRoot, 'src/resources')
 
 const runtimeTar = resolve(resourcesDir, 'runtime.tar.gz')
@@ -55,6 +57,7 @@ const modelImageInputTar = resolve(resourcesDir, 'model-image-input.tar.gz')
 const sendWhileRunningTar = resolve(resourcesDir, 'send-while-running.tar.gz')
 const modelEffortsEditorTar = resolve(resourcesDir, 'model-efforts-editor.tar.gz')
 const questionRailTar = resolve(resourcesDir, 'question-rail.tar.gz')
+const threadTar = resolve(resourcesDir, 'thread.tar.gz')
 const revisionCopy = resolve(resourcesDir, 'runtime-revision.json')
 const webSearchTogglePackage = JSON.parse(readFileSync(resolve(webSearchToggleDir, 'package.json'), 'utf8'))
 if (webSearchTogglePackage.name !== 'dsh-web-search-toggle' || webSearchTogglePackage.version !== '0.1.4') {
@@ -75,6 +78,10 @@ if (modelEffortsEditorPackage.name !== 'dsh-model-efforts-editor' || modelEffort
 const questionRailPackage = JSON.parse(readFileSync(resolve(questionRailDir, 'package.json'), 'utf8'))
 if (questionRailPackage.name !== 'dsh-question-rail' || questionRailPackage.version !== '0.5.1') {
   throw new Error(`desktop requires dsh-question-rail 0.5.1, found ${questionRailPackage.name}@${questionRailPackage.version}`)
+}
+const threadPackage = JSON.parse(readFileSync(resolve(threadDir, 'package.json'), 'utf8'))
+if (threadPackage.name !== 'dsh-thread' || threadPackage.version !== '0.2.0-rc.2') {
+  throw new Error(`desktop requires dsh-thread 0.2.0-rc.2, found ${threadPackage.name}@${threadPackage.version}`)
 }
 
 function run(cmd, args, opts = {}) {
@@ -114,7 +121,7 @@ function sha256(path) {
   })
 }
 
-const desktopPluginDirs = [bridgeDir, compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir, questionRailDir]
+const desktopPluginDirs = [bridgeDir, compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir, questionRailDir, threadDir]
 const runtimeSrc = resolve(repoRoot, 'runtime/src')
 /** `build` = release path (CI already typechecked/tested). Default `verify` stays local-complete. */
 const prepareMode = process.env.DSH_DESKTOP_PREPARE_MODE === 'build' ? 'build' : 'verify'
@@ -164,7 +171,7 @@ if (prepareMode === 'build') {
 } else {
   console.log('prepare-desktop-bundle: verifying desktop plugins...')
   run(pnpm, ['run', 'plugin:check'], { cwd: repoRoot })
-  for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir, questionRailDir]) {
+  for (const pluginDir of [compactionDir, webSearchToggleDir, modelImageInputDir, sendWhileRunningDir, modelEffortsEditorDir, questionRailDir, threadDir]) {
     for (const script of ['typecheck', 'test', 'build']) {
       run(pnpm, ['run', script], { cwd: pluginDir })
     }
@@ -313,6 +320,13 @@ tarCreate(questionRailTar, questionRailDir, [
   'lib',
 ])
 console.log(`prepare-desktop-bundle: question-rail.tar.gz ${mb(questionRailTar)} MB`)
+tarCreate(threadTar, threadDir, [
+  'package.json',
+  'cordis.patch.yml',
+  'README.md',
+  'lib',
+])
+console.log(`prepare-desktop-bundle: thread.tar.gz ${mb(threadTar)} MB`)
 
 // 5. Revision manifest: the sha the shell names its extraction dir after,
 // plus content hashes of every tarball. Each extraction .ok marker stores its
@@ -333,6 +347,8 @@ const manifest = {
   modelEffortsEditorTarball: await sha256(modelEffortsEditorTar),
   questionRailVersion: questionRailPackage.version,
   questionRailTarball: await sha256(questionRailTar),
+  threadVersion: threadPackage.version,
+  threadTarball: await sha256(threadTar),
 }
 writeFileSync(revisionCopy, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`prepare-desktop-bundle: revision ${revision.ref} (${revision.sha.slice(0, 12)}) -> ${resourcesDir}`)

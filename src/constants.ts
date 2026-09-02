@@ -11,6 +11,7 @@ export const MODEL_IMAGE_INPUT_PACKAGE = 'dsh-model-image-input'
 export const SEND_WHILE_RUNNING_PACKAGE = 'dsh-send-while-running'
 export const MODEL_EFFORTS_EDITOR_PACKAGE = 'dsh-model-efforts-editor'
 export const QUESTION_RAIL_PACKAGE = 'dsh-question-rail'
+export const THREAD_PACKAGE = 'dsh-thread'
 
 export const COMPACTION_RUNTIME_PEERS = [
   '@deepseek-ai/cordis',
@@ -33,6 +34,23 @@ export const WEB_SEARCH_TOGGLE_RUNTIME_PEERS = [
   '@deepseek-ai/dsh-tools',
   '@deepseek-ai/dsh-typert-protocol',
   '@deepseek-ai/dsh-typert-registry',
+] as const
+
+/**
+ * dsh-thread host bundle's external harness imports (the client bundle is
+ * pure). Every entry is a runtime VALUE import in lib/; type-only imports
+ * are erased at build and need no link. Module identity is load-bearing for
+ * cordis (Service registry) and typert-protocol (@Remote markers).
+ */
+export const THREAD_RUNTIME_PEERS = [
+  '@deepseek-ai/cordis',
+  '@deepseek-ai/schemastery',
+  '@deepseek-ai/dsh-llm',
+  '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-settings',
+  '@deepseek-ai/dsh-storage-domain',
+  '@deepseek-ai/dsh-tools',
+  '@deepseek-ai/dsh-typert-protocol',
 ] as const
 
 export const MISSING_RESTORE_SOURCE = '[missing-web-profile]'
