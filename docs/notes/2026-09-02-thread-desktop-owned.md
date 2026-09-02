@@ -20,3 +20,7 @@ Thread 交接（`plugin/dsh-thread`，0.2.0-rc.2）从"按需 `plugin add`"升�
 ## 回滚
 
 从 `findDesktopPlugins` 去掉 thread 项并发新桌面版即可；已装入 profile 的 dsh-thread 由用户侧 settings 开关（`dsh-thread.enabled`）或 `dsh plugin remove` 卸载，壳不再触碰。
+
+## 追加：v0.3.0-rc.22 发版失败复盘
+
+首个 rc.22 流水线失败：Windows 构建报 `'tsdown' is not recognized`——`.github/workflows/release.yml` 的 `Prepare desktop plugin deps` 步骤里按包 install 清单漏了 dsh-thread，CI 上该包 devDeps 从未安装。**这是「新增桌面依赖插件」除 prepare / 壳安装链 / AGENTS.md 清单外的第四个联动点：release workflow 的逐包 install 清单**（macOS/Windows 两处对称）。已在 rc.23 补上。
