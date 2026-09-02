@@ -24,16 +24,20 @@ let registryFile: string | undefined
 let sidecarTranscript = ''
 
 /**
- * The readiness line `dsh web` prints after Loader settlement. The first
- * loopback URL is the process launch token Electron must load; a LAN twin
- * may follow in the same line and is ignored.
+ * The readiness line `dsh web` prints after Loader settlement. A loopback
+ * `?token=` URL wins when present; a bare loopback URL is accepted for
+ * older sidecars that do not print a token. A LAN twin on the same line
+ * is ignored.
  * @param text - sidecar stdout/stderr accumulated so far
  * @param port - the loopback port this shell assigned
  * @returns the loopback launch URL, or undefined until the line appears
  */
 export function parseWebLaunchUrl(text: string, port: number): string | undefined {
-  const pattern = new RegExp(`dsh web: (http://127\\.0\\.0\\.1:${String(port)}/\\?token=[^\\s)]+)`)
-  return pattern.exec(text)?.[1]
+  const token = new RegExp(`dsh web: (http://127\\.0\\.0\\.1:${String(port)}/\\?token=[^\\s)]+)`)
+  const tokenMatch = token.exec(text)?.[1]
+  if (tokenMatch !== undefined) return tokenMatch
+  const bare = new RegExp(`dsh web: (http://127\\.0\\.0\\.1:${String(port)})(?:[\\s)]|$)`)
+  return bare.exec(text)?.[1]
 }
 
 export function sweepDecision(shellAlive: boolean, sidecarAlive: boolean): SweepDecision {

@@ -18,7 +18,7 @@ picker 可以落到任何路径，所以校验必须硬：① 必须是 `$DSH_HO
 
 ## 切换流（`src/surface-switch.ts`）
 
-确认框 → 首次切换先对目标 profile 跑**与 boot 完全相同的六包 shadow-CAS 事务**（`runDesktopPluginInstall` 泛化出 profile 参数；journal 仍是 home 级单飞，profile-repair 恢复从事故 journal 的 `realProfile` 反推目标 profile，无 journal 时扫所有 profile 的 marker）→ 准备期间旧 sidecar 不停、会话可用，**但事务是主进程同步 `spawnSync`，窗口与桌面集成会暂停响应**（确认框文案如实说明；M2 改进项：把事务挪进子进程）→ kill → `--profile <name>` respawn（`web` 子命令只是 `--profile web` 的别名，统一走 flag 形态）→ waitReady → 窗口 `loadURL`。
+确认框 → 首次切换先对目标 profile 跑**与 boot 完全相同的六包 shadow-CAS 事务**（`runDesktopPluginInstall` 泛化出 profile 参数；journal 仍是 home 级单飞，profile-repair 恢复从事故 journal 的 `realProfile` 反推目标 profile，无 journal 时扫所有 profile 的 marker）→ 准备期间旧 sidecar 不停、会话可用，**但事务是主进程同步 `spawnSync`，窗口与桌面集成会暂停响应**（确认框文案如实说明；M2 改进项：把事务挪进子进程）→ kill → `--profile <name>` respawn（`web` 子命令只是 `--profile web` 的别名，统一走 flag 形态）→ waitReady → 窗口 `loadURL(waitReady 返回的 token URL)`。0.1.2 起裸 `http://127.0.0.1:<port>` 是 401（`authentication required`），不能再自己拼端口。
 
 **状态落盘时机是安全关键**：活动面只在新 sidecar 就绪**之后**写。未就绪 → respawn 旧运行面 + loadURL 回退 + 原生报错；进程此时崩溃，下次启动仍是旧运行面。boot 时活动运行面被终端删/改坏 → 原生提示并回退 web。六包（含 bridge）进每个被切到的运行面，保证新面上右键入口还在、切得回来。
 

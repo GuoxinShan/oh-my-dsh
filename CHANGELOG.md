@@ -4,6 +4,15 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.21] - 2026-09-02
+
+### Fixed
+
+- 切运行面不再 `loadURL` 裸端口：窗口加载 sidecar 打印的 `?token=` URL，避免 0.1.2 的 `authentication required`。
+- 旧 sidecar 只打印不带 token 的 `dsh web:` 行时仍能就绪；有 token 行时优先 token。
+- runtime 里已经不存在的插件 peer（0.1.2 删掉的 `dsh-client-runtime`）跳过，不再整进程扔。
+- Runtime 升到 `v0.1.2-alpha.3+zw.2`：`dsh-client-modules` 认出 `@crazx` 换 scope 再发布，HTML 能预加载 `client.js`。未改动的 fork 包按 zw 层向下找已发布版本。
+
 ## [0.3.0-rc.20] - 2026-09-02
 
 ### Fixed

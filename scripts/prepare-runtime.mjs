@@ -24,7 +24,7 @@ import { execNpm, execPnpm } from './cli-bins.mjs'
 
 // Bump when the ASSEMBLY changes (deps, layout) so the SHA-keyed caches
 // invalidate themselves instead of shipping a stale tree.
-const SCRIPT_REV = 10
+const SCRIPT_REV = 11
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 function electronAbiToken() {
   try {
@@ -133,28 +133,35 @@ if (zwMatch === null) {
   process.exit(1)
 }
 const forkBaseVersion = zwMatch[1].slice(1)
-const forkNpmVersion = `${forkBaseVersion}.zw.${zwMatch[2]}`
+const wantedZw = Number(zwMatch[2])
+function resolveForkNpmVersion(forkName) {
+  for (let n = wantedZw; n >= 1; n--) {
+    const ver = `${forkBaseVersion}.zw.${n}`
+    try {
+      execNpm(['view', `${forkName}@${ver}`, 'version'], { stdio: 'pipe' })
+      return ver
+    } catch (err) {
+      if (err && (err.code === 'ENOENT' || err.code === 'EINVAL')) {
+        console.error(`prepare-runtime: could not run npm view (${err.code}: ${err.message.split('\n')[0]}) — npm must be on PATH`)
+        process.exit(1)
+      }
+    }
+  }
+  console.error(`prepare-runtime: fork npm release not on the registry: ${forkName}@${forkBaseVersion}.zw.{${String(wantedZw)}..1}`)
+  console.error('  publish it in the fork repo (tag v*+zw.* -> npm release workflow), then re-run')
+  process.exit(1)
+}
+const forkNpmOf = {}
 for (const name of FORK_MODIFIED) {
   const forkName = `${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`
-  // Fail loud before a long install: a missing npm release means the tag was
-  // pushed without the fork's npm-release workflow finishing (or failing).
-  try {
-    execNpm(['view', `${forkName}@${forkNpmVersion}`, 'version'], { stdio: 'pipe' })
-  } catch (err) {
-    // Spawn failures (npm absent from PATH, Windows .cmd EINVAL) are NOT a
-    // missing release — report the real error instead of a fake registry 404
-    // (the v0.2.0-rc.8 Windows job burned a round-trip on exactly that).
-    if (err && (err.code === 'ENOENT' || err.code === 'EINVAL')) {
-      console.error(`prepare-runtime: could not run npm view (${err.code}: ${err.message.split('\n')[0]}) — npm must be on PATH`)
-    } else {
-      console.error(`prepare-runtime: fork npm release not on the registry: ${forkName}@${forkNpmVersion}`)
-      console.error('  publish it in the fork repo (tag v*+zw.* -> npm release workflow), then re-run')
-    }
-    process.exit(1)
-  }
-  overrides[name] = `npm:${forkName}@${forkNpmVersion}`
+  const ver = resolveForkNpmVersion(forkName)
+  forkNpmOf[name] = ver
+  overrides[name] = `npm:${forkName}@${ver}`
 }
-console.log(`prepare-runtime: fork-modified set -> npm ${FORK_NPM_SCOPE}/* @ ${forkNpmVersion}`)
+console.log(`prepare-runtime: fork-modified set -> npm ${FORK_NPM_SCOPE}/*`)
+for (const name of FORK_MODIFIED) {
+  console.log(`  ${name} -> ${forkNpmOf[name]}`)
+}
 
 // Pin EVERY @deepseek-ai/* package to the fork's baseline version. The fork
 // tree is one upstream line; letting unmodified packages float on their
@@ -195,7 +202,7 @@ for (const pkg of packages) {
     if (deps === undefined) continue
     for (const name of Object.keys(deps)) {
       if (!FORK_MODIFIED.has(name)) continue
-      deps[name] = `npm:${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}@${forkNpmVersion}`
+      deps[name] = `npm:${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}@${forkNpmOf[name]}`
       rewrote = true
     }
   }
@@ -203,7 +210,7 @@ for (const pkg of packages) {
     for (const name of Object.keys(manifest.peerDependencies)) {
       if (!FORK_MODIFIED.has(name)) continue
       delete manifest.peerDependencies[name]
-      manifest.peerDependencies[`${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`] = forkNpmVersion
+      manifest.peerDependencies[`${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`] = forkNpmOf[name]
       rewrote = true
     }
   }
@@ -269,7 +276,7 @@ for (const [name, spec] of Object.entries(finalOverrides)) {
 const forkDirectDeps = {}
 for (const name of FORK_MODIFIED) {
   const forkName = `${FORK_NPM_SCOPE}/${name.slice('@deepseek-ai/'.length)}`
-  forkDirectDeps[name] = `npm:${forkName}@${forkNpmVersion}`
+  forkDirectDeps[name] = `npm:${forkName}@${forkNpmOf[name]}`
 }
 // EVERY packed tarball rides as a direct dependency too. Overrides reach only
 // ordinary dependency edges: host packages expose their seams as
@@ -293,7 +300,7 @@ writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
   dependencies: {
     ...forkDirectDeps,
     ...tarballDirectDeps,
-    '@deepseek-ai/dsh': `npm:${FORK_NPM_SCOPE}/dsh@${forkNpmVersion}`,
+    '@deepseek-ai/dsh': `npm:${FORK_NPM_SCOPE}/dsh@${forkNpmOf['@deepseek-ai/dsh']}`,
     tsx: '^4.19.2',
   },
 }, null, 2) + '\n')

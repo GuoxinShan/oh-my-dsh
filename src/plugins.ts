@@ -140,7 +140,8 @@ function removeDirLink(link: string): void {
 function ensureRuntimePackageLink(plugin: string, runtime: Runtime, packageName: string): void {
   const targetRel = resolveRuntimePackage(runtime, packageName)
   if (targetRel === undefined) {
-    throw new Error(`no ${packageName} package under ${runtime.cwd}`)
+    console.warn(`dsh-desktop: skip runtime peer ${packageName} (absent from ${runtime.cwd})`)
+    return
   }
   const target = fs.realpathSync.native(targetRel)
   const link = path.join(plugin, 'node_modules', packageName)

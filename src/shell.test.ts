@@ -199,6 +199,16 @@ describe('launch token URL', () => {
     const text = `boot\ndsh web: http://127.0.0.1:43111/?token=${token} (LAN: http://10.0.0.2:43111/?token=${token})\n`
     assert.equal(parseWebLaunchUrl(text, 43111), `http://127.0.0.1:43111/?token=${token}`)
   })
+
+  it('accepts a bare loopback URL when the sidecar prints no token', () => {
+    assert.equal(parseWebLaunchUrl('dsh web: http://127.0.0.1:43111\n', 43111), 'http://127.0.0.1:43111')
+  })
+
+  it('prefers the token URL when both forms appear', () => {
+    const token = 'A'.repeat(43)
+    const text = `dsh web: http://127.0.0.1:43111\ndsh web: http://127.0.0.1:43111/?token=${token}\n`
+    assert.equal(parseWebLaunchUrl(text, 43111), `http://127.0.0.1:43111/?token=${token}`)
+  })
 })
 
 describe('shouldRetainBackground', () => {

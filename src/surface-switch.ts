@@ -150,11 +150,12 @@ async function runSurfaceSwitchFlow(): Promise<void> {
     const port = await freePort()
     killSidecar()
     spawnSidecar(runtime, home, port, verdict.name)
-    if (await waitReady(port)) {
+    const launchUrl = await waitReady(port)
+    if (launchUrl !== undefined) {
       saveActiveSurface(root, home, verdict.name)
       console.log(`dsh-desktop: switched surface ${previous} -> ${verdict.name} on port ${String(port)}`)
       setE2eVerdict('ok')
-      await reloadMainWindow(`http://127.0.0.1:${String(port)}`)
+      await reloadMainWindow(launchUrl)
       return
     }
     // Rollback: the state file never moved, so the next boot is unaffected.
@@ -163,8 +164,8 @@ async function runSurfaceSwitchFlow(): Promise<void> {
     const backPort = await freePort()
     spawnSidecar(runtime, home, backPort, previous)
     const restored = await waitReady(backPort)
-    if (restored) {
-      await reloadMainWindow(`http://127.0.0.1:${String(backPort)}`)
+    if (restored !== undefined) {
+      await reloadMainWindow(restored)
     }
     const cause = exitInfo !== null
       ? `新运行面的后台进程一启动就退出了（${exitInfo}）`
