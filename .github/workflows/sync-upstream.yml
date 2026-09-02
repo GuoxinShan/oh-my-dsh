@@ -1,0 +1,48 @@
+name: Sync upstream
+
+# Keep this fork's main in lockstep with aka-danielZhang/oh-my-dsh.
+# Event-driven only (no cron): workflow_dispatch, or repository_dispatch
+# type upstream-sync (fired by an external listener when upstream main
+# moves). Fast-forward / merge only — never --force. Already-up-to-date
+# is success; a diverged main (merge conflict) fails instead of overwriting.
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [upstream-sync]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync main from aka-danielZhang/oh-my-dsh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Sync fork from upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          output="$(gh repo sync "${{ github.repository }}" --branch main 2>&1)"
+          status=$?
+          printf '%s\n' "$output"
+
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+
+          # Some gh / API versions still exit non-zero when already current.
+          if printf '%s' "$output" | grep -qiE 'already up[- ]to[- ]date'; then
+            echo "Already up to date with upstream; treating as success."
+            exit 0
+          fi
+
+          if printf '%s' "$output" | grep -qiE 'conflict|cannot be updated|not a fast.forward|diverged'; then
+            echo "::error::Fork main has diverged from aka-danielZhang/oh-my-dsh and cannot be fast-forwarded or merged. This workflow never force-pushes. Resolve the conflict on main, then re-run."
+            exit 1
+          fi
+
+          echo "::error::Failed to sync ${{ github.repository }} from upstream aka-danielZhang/oh-my-dsh."
+          exit "$status"
