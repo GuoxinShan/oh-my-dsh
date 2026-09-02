@@ -213,3 +213,41 @@ export function shouldPanelPage(
 ): boolean {
   return !loading && snapshot.openState === 'open' && snapshot.hasMore === true
 }
+
+/** Scroll-spy: which question the reader is currently at. Rows are in DOM
+ *  (chronological) order; the active one is the LAST whose top sits above
+ *  the reference line — i.e. the question the reader just scrolled into. */
+export function computeActiveKey(
+  rows: readonly { readonly key: string; readonly top: number }[],
+  refTop: number,
+): string | null {
+  let first: string | null = null
+  let active: string | null = null
+  for (const row of rows) {
+    if (first === null) first = row.key
+    if (row.top <= refTop) active = row.key
+  }
+  return active ?? first
+}
+
+/**
+ * Which slice of the question list the collapsed rail displays. Default is
+ * the most recent `max`; when the reader scrolls to an older question, the
+ * window slides to center the active one so its highlight is always on the
+ * rail (0.6.0 scroll-spy).
+ * @param total - questions currently in the window.
+ * @param activeIndex - index of the active question, or -1 when none.
+ * @param max - rail slot budget (RAIL_MAX_QUESTIONS).
+ * @returns the slice [start, start + count) of the question list to render.
+ */
+export function windowTicks(
+  total: number,
+  activeIndex: number,
+  max: number,
+): { readonly start: number; readonly count: number } {
+  const count = Math.min(total, max)
+  if (count <= 0) return { start: 0, count: 0 }
+  if (activeIndex < 0 || activeIndex >= total - count) return { start: total - count, count }
+  const start = Math.max(0, Math.min(activeIndex - Math.floor(count / 2), total - count))
+  return { start, count }
+}

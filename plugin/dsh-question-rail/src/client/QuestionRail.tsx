@@ -10,8 +10,8 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { QuestionRailKey } from './locales.ts'
 import {
-  MAX_FILL_PAGES, RAIL_MAX_QUESTIONS, collectQuestions,
-  railGeometry, railVisible, sameRailGeometry, shouldPanelPage,
+  MAX_FILL_PAGES, RAIL_MAX_QUESTIONS, collectQuestions, computeActiveKey,
+  railGeometry, railVisible, sameRailGeometry, shouldPanelPage, windowTicks,
   type RailGeometry, type RailQuestion, type RailSessionFace, type SessionLike,
 } from './facts.ts'
 
@@ -21,6 +21,10 @@ const MEASURE_INTERVAL_MS = 120
 const FLASH_MS = 1600
 /** Panel-top scroll threshold that triggers one older page. */
 const PANEL_TOP_THRESHOLD_PX = 24
+/** Scroll-spy throttle cadence. */
+const SPY_THROTTLE_MS = 100
+/** Reference line for "the question I'm at": this far down the scroll body. */
+const ACTIVE_REF_RATIO = 0.35
 
 /** Locale seat share (structural subset of the framework-injected t). */
 type RailTranslate = (key: QuestionRailKey, params?: Record<string, unknown>) => string
@@ -29,6 +33,7 @@ type RailTranslate = (key: QuestionRailKey, params?: Record<string, unknown>) =>
 export interface RailTimers {
   readonly interval: (callback: () => void, delay: number) => () => void
   readonly timeout: (callback: () => void, delay: number) => () => void
+  readonly throttle: (callback: () => void, delay: number) => (() => void) & { dispose(): void }
 }
 
 /** Resolve the current session's outward face (history paging verb) from the
@@ -85,23 +90,42 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
   const { session, sessionId, timers, resolveFace, t } = props
   const [hover, setHover] = useState(false)
   const [geometry, setGeometry] = useState<RailGeometry | null>(null)
+  const [activeKey, setActiveKey] = useState<string | null>(null)
   const anchorRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
   const loadingOlderRef = useRef(false)
   const pendingPanelAdjust = useRef(0)
 
-  // Chronological questions inside the current window. The collapsed rail
-  // shows only the most recent RAIL_MAX_QUESTIONS ticks (user direction
-  // 0.3.0); the expanded panel lists every question currently in the window
-  // and pages older history on scroll-to-top (0.4.0).
+  // Chronological questions inside the current window.
   const allQuestions: readonly RailQuestion[] = collectQuestions(session, key => t === undefined ? '[图片或附件]' : t(key))
-  const ticks = allQuestions.slice(-RAIL_MAX_QUESTIONS)
   const visible = railVisible(allQuestions.length)
+
+  // Scroll-spy (0.6.0): the tick of the question the reader is at lights up
+  // in brand color; when the reader scrolls to an older question outside the
+  // recent window, the window slides to keep the active tick on the rail.
+  const activeIndex = activeKey === null ? -1 : allQuestions.findIndex(q => q.key === activeKey)
+  const window_ = windowTicks(allQuestions.length, activeIndex, RAIL_MAX_QUESTIONS)
+  const ticks = allQuestions.slice(window_.start, window_.start + window_.count)
   const ticksRef = useRef(ticks.length)
   ticksRef.current = ticks.length
 
   useEffect(() => {
     if (timers === undefined) return undefined
+    let listened: HTMLElement | null = null
+    const computeActive = () => {
+      const body = findScrollBody()
+      if (body === null) return
+      const bodyRect = body.getBoundingClientRect()
+      const refTop = bodyRect.top + bodyRect.height * ACTIVE_REF_RATIO
+      const rows: { key: string; top: number }[] = []
+      for (const row of body.querySelectorAll<HTMLElement>('[data-chat-anchor-key][data-chat-flow-kind="user"], [data-chat-anchor-key][data-chat-flow-kind="steering"]')) {
+        const key = row.dataset.chatAnchorKey
+        if (key !== undefined) rows.push({ key, top: row.getBoundingClientRect().top })
+      }
+      const next = computeActiveKey(rows, refTop)
+      setActiveKey(prev => (prev === next ? prev : next))
+    }
+    const throttledSpy = timers.throttle(computeActive, SPY_THROTTLE_MS)
     const remeasure = () => {
       const anchor = anchorRef.current
       const body = findScrollBody()
@@ -109,9 +133,20 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
         ? null
         : railGeometry(body.getBoundingClientRect(), anchor.getBoundingClientRect(), Math.max(ticksRef.current, 1))
       setGeometry(prev => (sameRailGeometry(prev, next) ? prev : next))
+      if (body !== listened) {
+        if (listened !== null) listened.removeEventListener('scroll', throttledSpy)
+        listened = body
+        if (listened !== null) listened.addEventListener('scroll', throttledSpy)
+        computeActive()
+      }
     }
     remeasure()
-    return timers.interval(remeasure, MEASURE_INTERVAL_MS)
+    const disposeInterval = timers.interval(remeasure, MEASURE_INTERVAL_MS)
+    return () => {
+      disposeInterval()
+      throttledSpy.dispose()
+      if (listened !== null) listened.removeEventListener('scroll', throttledSpy)
+    }
   }, [timers, allQuestions.length])
 
   // The drawer list stays mounted across hovers (cross-fade, persistent
@@ -121,7 +156,13 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
     const list = listRef.current
     if (hover && list !== null && !didInitScrollRef.current) {
       didInitScrollRef.current = true
-      list.scrollTop = list.scrollHeight
+      // Open on the active question (centered) when the reader is mid-log;
+      // at the floor this degenerates to the latest questions.
+      if (activeIndex >= 0) {
+        list.scrollTop = activeIndex * slotPxRef.current - list.clientHeight / 2 + slotPxRef.current / 2
+      } else {
+        list.scrollTop = list.scrollHeight
+      }
     }
   }, [hover])
 
@@ -178,6 +219,8 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
 
   const ariaLabel = t === undefined ? '我的问题刻度尺' : t('rail.ariaLabel')
   const slotPx = geometry === null ? 0 : geometry.height / Math.max(ticks.length, 1)
+  const slotPxRef = useRef(slotPx)
+  slotPxRef.current = slotPx
   return (
     <div className="dsh-qr-anchor" ref={anchorRef}>
       {!visible || geometry === null ? null : (
@@ -193,7 +236,7 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
             {ticks.map((q, i) => (
               <div
                 key={q.key}
-                className="dsh-qr-tick"
+                className={'dsh-qr-tick' + (q.key === activeKey ? ' dsh-qr-tick-active' : '')}
                 // Same grid as the rows below: tick i center === row i center.
                 style={{ top: ((i + 0.5) * slotPx) + 'px' }}
                 onClick={() => { onJump(q.key) }}
@@ -206,7 +249,7 @@ export function QuestionRailDock(props: QuestionRailProps): ReactElement {
               <button
                 key={q.key}
                 type="button"
-                className="dsh-qr-item"
+                className={'dsh-qr-item' + (q.key === activeKey ? ' dsh-qr-item-active' : '')}
                 // One slot per question: row i sits at the exact Y of tick i.
                 style={{ height: slotPx + 'px' }}
                 tabIndex={hover ? 0 : -1}

@@ -4,7 +4,7 @@ import { apply } from '../src/index.ts'
 import { apply as clientApply, inject } from '../src/client/index.ts'
 import {
   MIN_QUESTIONS, RAIL_MAX_HEIGHT, RAIL_MAX_QUESTIONS,
-  collectQuestions, questionText,
+  collectQuestions, computeActiveKey, questionText, windowTicks,
   railGeometry, railVisible, sameRailGeometry, shouldPanelPage, type ChatNodeLike,
 } from '../src/client/facts.ts'
 import { installQuestionRailCss, questionRailCss, type InstalledStyle } from '../src/client/stylesheet.ts'
@@ -138,4 +138,25 @@ test('shouldPanelPage only fires for an open window with older history and no pa
   assert.equal(shouldPanelPage({ openState: 'open', hasMore: false }, false), false)
   assert.equal(shouldPanelPage({ openState: 'loading', hasMore: true }, false), false)
   assert.equal(shouldPanelPage({ openState: 'open', hasMore: true }, true), false)
+})
+
+test('computeActiveKey picks the last row above the reference line', () => {
+  const rows = [
+    { key: 'a', top: -50 },
+    { key: 'b', top: 10 },
+    { key: 'c', top: 300 },
+  ]
+  assert.equal(computeActiveKey(rows, 100), 'b')
+  assert.equal(computeActiveKey(rows, -100), 'a') // none above the line: first wins
+  assert.equal(computeActiveKey(rows, 500), 'c')
+  assert.equal(computeActiveKey([], 0), null)
+})
+
+test('windowTicks shows the latest by default and slides to keep the active tick on the rail', () => {
+  assert.deepEqual(windowTicks(30, -1, 10), { start: 20, count: 10 })
+  assert.deepEqual(windowTicks(30, 25, 10), { start: 20, count: 10 }) // active already in the latest window
+  assert.deepEqual(windowTicks(30, 8, 10), { start: 3, count: 10 }) // slides to center the active question
+  assert.deepEqual(windowTicks(30, 0, 10), { start: 0, count: 10 }) // clamps at the top
+  assert.deepEqual(windowTicks(7, 3, 10), { start: 0, count: 7 }) // fewer than the budget
+  assert.deepEqual(windowTicks(0, -1, 10), { start: 0, count: 0 })
 })

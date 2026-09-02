@@ -36,6 +36,7 @@ declare module '@deepseek-ai/cordis' {
      *  without importing the runner. */
     interval(callback: () => void, delay: number): () => void
     timeout(callback: () => void, delay: number): () => void
+    throttle(callback: () => void, delay: number): (() => void) & { dispose(): void }
   }
 }
 
@@ -59,6 +60,7 @@ export function apply(ctx: ClientContext): void {
   const timers: RailTimers = {
     interval: (callback, delay) => (ctx as Context).interval(callback, delay),
     timeout: (callback, delay) => (ctx as Context).timeout(callback, delay),
+    throttle: (callback, delay) => (ctx as Context).throttle(callback, delay),
   }
   const resolveFace: ResolveSessionFace = sessionId => ctx.sessions.binding(sessionId as SessionId)?.session
   /** Registration-stable component closure binding the fiber's timers and
