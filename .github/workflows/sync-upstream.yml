@@ -1,14 +1,15 @@
 name: Sync upstream
 
 # Keep this fork's main in lockstep with aka-danielZhang/oh-my-dsh.
-# Fast-forward / merge only — never --force. Already-up-to-date is success;
-# a diverged main (merge conflict) fails the job instead of overwriting.
+# Event-driven only (no cron): workflow_dispatch, or repository_dispatch
+# type upstream-sync (fired by an external listener when upstream main
+# moves). Fast-forward / merge only — never --force. Already-up-to-date
+# is success; a diverged main (merge conflict) fails instead of overwriting.
 
 on:
   workflow_dispatch:
-  schedule:
-    # Weekdays every 2h 00:00–12:00 UTC = Hong Kong 08:00–20:00.
-    - cron: '0 0,2,4,6,8,10,12 * * 1-5'
+  repository_dispatch:
+    types: [upstream-sync]
 
 permissions:
   contents: write
