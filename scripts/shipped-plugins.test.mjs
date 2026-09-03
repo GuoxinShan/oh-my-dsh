@@ -49,7 +49,6 @@ test('lists every ship:true plugin once, including thread', () => {
     'dsh-desktop-bridge',
     'dsh-model-efforts-editor',
     'dsh-model-image-input',
-    'dsh-question-rail',
     'dsh-send-while-running',
     'dsh-thread',
     'dsh-web-search-toggle',
