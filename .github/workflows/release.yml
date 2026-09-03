@@ -88,7 +88,10 @@ jobs:
         id: plugin-libs
         uses: actions/cache@v4
         with:
-          path: plugin/**/lib
+          # Single-level glob: `**` recurses into every plugin's
+          # node_modules/.pnpm tree (thousands of lib dirs) and the post-save
+          # tar OOMs the runner (rc.28 first attempt).
+          path: plugin/*/lib
           key: plugin-libs-${{ runner.os }}-${{ hashFiles('plugin/**/src/**', 'plugin/**/package.json', 'plugin/**/tsdown.config.ts') }}
 
       - name: Import signing certificate
@@ -245,7 +248,10 @@ jobs:
         id: plugin-libs
         uses: actions/cache@v4
         with:
-          path: plugin/**/lib
+          # Single-level glob: `**` recurses into every plugin's
+          # node_modules/.pnpm tree (thousands of lib dirs) and the post-save
+          # tar OOMs the runner (rc.28 first attempt).
+          path: plugin/*/lib
           key: plugin-libs-${{ runner.os }}-${{ hashFiles('plugin/**/src/**', 'plugin/**/package.json', 'plugin/**/tsdown.config.ts') }}
 
       - name: Prepare desktop plugin deps
