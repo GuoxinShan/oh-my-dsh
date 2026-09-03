@@ -107,6 +107,7 @@ autoInstallPeers: false
 `
 
 function ensureProfileScaffold(profile: string): void {
+  fs.mkdirSync(profile, { recursive: true })
   const patch = path.join(profile, 'cordis.patch.yml')
   if (!fs.existsSync(patch)) fs.writeFileSync(patch, PROFILE_PATCH_TEMPLATE)
   const workspace = path.join(profile, 'pnpm-workspace.yaml')

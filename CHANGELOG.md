@@ -4,6 +4,12 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.29] - 2026-09-03
+
+### Fixed
+
+- 修复从未创建过 Web Profile 的用户首次启动失败：Desktop 现在会先在事务 shadow home 中创建 `profiles/web`，再补 Profile scaffold 和安装随包插件，不再因写入不存在的 `cordis.patch.yml` 父目录而报 `ENOENT`。失败仍在 sidecar 启动前完整回滚，真实 DSH Home 不会留下半成品。
+
 ## [0.3.0-rc.28] - 2026-09-02
 
 ### Removed
