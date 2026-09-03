@@ -1,8 +1,12 @@
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import type { ClientContext, ISessions } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-gateway/client'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from '@deepseek-ai/dsh-api-session-controller/remote'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
 import { Button, IconBranchOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -20,7 +24,7 @@ import { createThreadPanelVisibility } from './panel-visibility.ts'
 import { THREAD_SETTINGS_ROW_CSS, ThreadSettingsRow } from './settings-row.tsx'
 import { THREAD_SIDEBAR_CSS, ThreadSidebarView } from './sidebar-view.tsx'
 
-export const inject = ['slots', 'locale', 'connection', 'sessions', 'remote', 'settingsScope']
+export const inject = ['slots', 'locale', 'sessions', 'remote', 'settingsScope']
 
 /** Dictionary namespace owned by this plugin. */
 const LOCALE_NS = 'dsh-thread'
@@ -334,16 +338,19 @@ function ThreadCapsuleOverlay(props: ThreadOverlayProps): React.ReactElement | n
   )
 }
 
-export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
+export async function apply(ctx: Context): Promise<() => Promise<void>> {
   const disposeRemote = ctx.get('remote.thread') === undefined
     ? await ctx.remote.$mount(TYPERT_REMOTE)
     : async (): Promise<void> => {}
   const gateway = ctx.get('remote.thread')
-  const connection = ctx.get('connection') as ConnectionHandle | undefined
+  // Harness 0.1.2 removed `connection.api`; Session create/rename now live on
+  // the typed `session` Remote namespace (the outward `ctx.sessions.create`
+  // face still cannot carry agentPreset, which the Thread contract requires).
+  const sessionRemote = ctx.remote.session
   const clientSessions = ctx.get('sessions') as ISessions | undefined
-  if (gateway === undefined || connection === undefined || clientSessions === undefined) {
+  if (gateway === undefined || sessionRemote === undefined || clientSessions === undefined) {
     await disposeRemote()
-    throw new Error('dsh-thread: Thread Remote or Client connection did not mount')
+    throw new Error('dsh-thread: Thread Remote, session Remote, or Client sessions did not mount')
   }
 
   const panelVisibility = createThreadPanelVisibility()
@@ -365,7 +372,7 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
       if (!begun.value.ok) throw new Error(begun.value.error)
       if (begun.value.link.state === 'active') return begun.value.link
 
-      const created = await connection.api.sessions.create({
+      const created = await sessionRemote.create({
         sessionId: plan.createPlan.sessionId as SessionId,
         agentPreset: plan.createPlan.agentPreset,
         ...(plan.createPlan.workspaceId === undefined
@@ -373,16 +380,16 @@ export async function apply(ctx: ClientContext): Promise<() => Promise<void>> {
           : { workspaceId: plan.createPlan.workspaceId as never }),
         ...(plan.createPlan.cwd === undefined ? {} : { cwd: plan.createPlan.cwd }),
       })
-      if (!created.result.ok) throw new Error(`${created.result.error.code}: ${created.result.error.message}`)
+      if (!created.ok) throw new Error(`${created.error.code}: ${created.error.message}`)
 
       if (plan.titlePlan !== undefined) {
         let renamed = false
         try {
-          const rename = await connection.api.sessions.rename({
+          const rename = await sessionRemote.rename({
             sessionId: plan.titlePlan.sessionId as SessionId,
             title: plan.titlePlan.title,
           })
-          renamed = rename.result.ok
+          renamed = rename.ok
         } finally {
           const recorded = await gateway.recordTitle({ linkId: plan.linkId, ok: renamed })
           if (!recorded.ok) throw remoteError(recorded)
