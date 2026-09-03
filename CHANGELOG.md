@@ -4,6 +4,12 @@ Oh My DSH 桌面端的面向用户变更。插件各自有包内 CHANGELOG 的�
 
 ## [Unreleased]
 
+## [0.3.0-rc.28] - 2026-09-02
+
+### Removed
+
+- 移除「问题刻度尺」插件（dsh-question-rail）：上游 harness 0.1.2-alpha.3 起在 ui-chat 原生内置了 Turn 导航轨道（滚动视口右缘、阅读线跟随高亮、悬停问题预览、点击跳转），功能完全覆盖本插件。已装用户如需手动清理，可执行 `dsh plugin --profile web remove dsh-question-rail`。
+
 ## [0.3.0-rc.27] - 2026-09-02
 
 ### Fixed
